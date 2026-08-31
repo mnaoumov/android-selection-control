@@ -32,6 +32,20 @@ and now for the gesture spike; nothing under it is app code.
  wide range of applications", with a declaration-and-disclosure lane for apps that are not
  `isAccessibilityTool`. See `the gesture spike's notes` for the policy read and the precedent.
 
+## The intended product (decided 2026-08-30)
+
+An **always-on selection pad** — cursor buttons that extend the selection the way a desktop keyboard does
+(`Shift+Right`, `Ctrl+Shift+Right`, `Ctrl+Shift+PageDown`, `Ctrl+Shift+End`, and the Left / PageUp / Home
+mirrors). It is a **closed loop**: each press reads the current selection, moves it one step, reads again.
+
+**The pad is an accessibility overlay, NOT an `InputMethodService`** — an IME only appears when an editable
+field has focus, so it could never show over a browser page. Use `attachAccessibilityOverlayToDisplay`
+(API 34), which needs no `SYSTEM_ALERT_WINDOW`, so the zero-permission property survives.
+
+The open risk is **granularity without reading text**: character steps are servo-able off the announced
+offsets, but word / page / document-end steps need either the target app's own snapping or the text itself.
+Answer that before designing any UI — see `the gesture spike's notes`.
+
 ## Why an AccessibilityService and not a keyboard
 
 An `InputMethodService` reaches its target through `InputConnection`, which exists **only** where an
