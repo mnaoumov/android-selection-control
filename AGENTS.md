@@ -9,17 +9,33 @@ plan lives here — this file is build/run mechanics only.
 
 ## Status
 
-**Feasibility spike only.** The app does not exist yet. `spike/` is a throwaway diagnostic that answers
-the first spike's risk 1 — whether Chrome exposes page text as accessibility nodes that honour
-`ACTION_SET_SELECTION` and the movement-granularity actions. Nothing under `spike/` is app code, and
-none of it is meant to survive into one.
+**Feasibility spike only — and it came back NO-GO.** The app does not exist. `spike/` is a throwaway
+diagnostic that answered the first spike's risk 1; nothing under it is app code.
 
-## Why an AccessibilityService and not a keyboard
+Measured 2026-08-30 on a OnePlus 15 (Android 16, Chrome 151): **Chrome page text does not support
+`ACTION_SET_SELECTION`.** Page nodes report `sel=false edit=false` and advertise only the granularity
+actions; `performAction(ACTION_SET_SELECTION)` returns `false`; granularity-with-extend returns `true`
+but moves no selection. Only editable nodes work. Full evidence and the controls that make the negative
+trustworthy are in `the first spike's notes` — read that before proposing anything built on these actions.
+
+## Why an AccessibilityService and not a keyboard — and why that reasoning turned out incomplete
 
 An `InputMethodService` reaches its target through `InputConnection`, which exists **only** where an
 editable field has focus. A browser page has none, so no IME is ever invoked there — which is why every
 existing solution (Gboard's editing pad, SwiftKey, CleverKeys, Hacker's Keyboard) stops at the same
-boundary. `AccessibilityService` is the only remaining mechanism.
+boundary.
+
+The spike showed `AccessibilityService`'s *selection actions* stop at that **same** boundary: they drive
+a real selection only where an editable text buffer exists. The route reaches more apps, not more kinds
+of text. What is still untested, and what the finding points at, is `dispatchGesture` — synthesising the
+long-press-and-drag that drives the app's own selection UI, which needs no selection action at all.
+
+## Gotcha that will mislead you if you do not know it
+
+**`getActionList` lies.** Native read-only `TextView`s in `com.android.settings` advertise
+`ACTION_SET_SELECTION`, and `performAction` on them **returns `true`** — while producing no selection at
+all (`textSelectionStart/End` stays `-1..-1`, nothing on screen). Never treat an advertised action, or a
+`true` return, as evidence that anything happened. Only a screenshot is evidence.
 
 ## The no-INTERNET property
 
