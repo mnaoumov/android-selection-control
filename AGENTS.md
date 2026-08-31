@@ -3,9 +3,13 @@
 Android app giving **cursor and selection control where no keyboard can reach** — text that is
 selectable by touch but *not* editable: a web page in a browser, a read-only view.
 
-Tracked centrally as **the first spike**. Read that file first; it
-holds the scope, the survey of what already exists, and the risk order. Nothing about this project's
-plan lives here — this file is build/run mechanics only.
+Tracked centrally as **the first spike**, **closed 2026-08-30** — a private tracker. Read
+that file first; it holds the scope, the survey of what already exists, the risk order, and the spike
+result that closed it. Nothing about this project's plan lives here — this file is build/run mechanics
+only.
+
+The task closed because its premise was falsified, **not** because the goal was met — see Status below.
+Any successor work needs a new `T<n>-this project`.
 
 ## Status
 
