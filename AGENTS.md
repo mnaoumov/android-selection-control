@@ -123,10 +123,34 @@ Node indices are depth-first positions, and every command **re-walks the tree** 
 node references, so an index from `dump` stays valid for the commands that follow it (as long as the
 screen has not changed).
 
+#### Gesture commands (the gesture spike)
+
+`dispatchGesture` synthesises touch, which needs no selection action at all — it drives the target
+app's *own* selection UI. Coordinates are **physical screen pixels** (`adb shell wm size`; the
+OnePlus 15 is 1272x2772).
+
+| Command | Meaning |
+|---|---|
+| `tap <x> <y>` | A ~60 ms touch |
+| `long <x> <y> [ms]` | A touch held in place, default 700 ms (the platform long-press timeout is 500 ms) |
+| `drag <x1> <y1> <x2> <y2> [ms]` | Touch down, move, lift — for moving a selection handle that already exists |
+| `pressdrag <x1> <y1> <x2> <y2> [holdMs] [dragMs] [settleMs]` | Long-press then drag **without lifting** — the gesture a user makes to select a phrase |
+| `nodetap <i>` / `nodelong <i> [ms]` | The same at the centre of node `<i>`'s `getBoundsInScreen`, so coordinates come from the tree instead of guesswork |
+| `sel` | Every node reporting a selection range (`textSelectionStart/End`) or `isTextSelectable` |
+| `events [n]` | The last `n` accessibility events — type, package, class, `from`/`to`/`count`, scroll — from a 300-entry ring buffer filled by `onAccessibilityEvent`. Deliberately records no text |
+
+`pressdrag` is **three chained dispatches**, not one gesture: `continueStroke` produces a stroke for
+the *next* gesture and keeps the pointer down between them, so the hold, the drag and the settle are
+fired one from the previous one's callback. Its parts are logged as `[1/3 hold]`, `[2/3 drag]`,
+`[3/3 settle]`; if the chain breaks, the missing part says where.
+
 ### Gotchas
 
 - **A `performAction` returning `true` is not proof of anything the user can see.** Always pair it with
  `adb -s $d exec-out screencap -p > shot.png`.
+- **The same holds for a gesture's `onCompleted`** — it means the strokes were played, not that the
+ target app did anything with them. `dispatchGesture` returning `true` means only "accepted for
+ dispatch". Screenshot, every time.
 - logcat truncates a single entry near 4 KB. The spike already emits one line per entry to dodge this —
  do not "tidy" that into one big log call.
 - The phone must be **unlocked**; a locked screen shows only a `com.android.systemui` window and every
