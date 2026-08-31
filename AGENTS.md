@@ -3,10 +3,11 @@
 Android app giving **cursor and selection control where no keyboard can reach** — text that is
 selectable by touch but *not* editable: a web page in a browser, a read-only view.
 
-Tracked centrally as **the gesture spike**, successor to the closed
-**The first spike**. Read those first; they hold the scope, the survey
-of what already exists, the risk order, and both spike results. Nothing about this project's plan lives
-here — this file is build/run mechanics only.
+Tracked centrally as **the pad build** — the app itself. Its two
+predecessors are closed: **the first spike** and **the gesture spike**, the NO-GO and GO
+spikes respectively. Read the pad build for what to build and the gesture spike for the measured mechanism; they hold the scope,
+the survey of what already exists, the risk order, and both spike results. Nothing about this project's
+plan lives here — this file is build/run mechanics only.
 
 ## Status
 
