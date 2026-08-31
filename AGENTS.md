@@ -20,8 +20,12 @@ and now for the gesture spike; nothing under it is app code.
  on the first try, and a synthesised drag moves the resulting handle. Handle positions come from
  `TYPE_VIEW_TEXT_SELECTION_CHANGED` (character offsets plus the event source's screen bounds) combined
  with the node tree — **no screenshot analysis required**. Measured 20/20 on the full loop.
-- **Risk 3 is now the biggest obstacle**: on OxygenOS 16 a sideloaded accessibility service simply has no
- enable toggle, and neither the UI nor adb's `appops` can lift the block. See `the gesture spike's notes`.
+- **Distribution is the open problem, and Play is the answer to both halves of it.** On OxygenOS 16 a
+ sideloaded accessibility service simply has no enable toggle, and neither the UI nor adb's `appops` can
+ lift the block; ECM keys on install provenance, so only a trusted install source clears it. Play policy
+ itself is not the obstacle the first spike assumed — it "permits the use of the AccessibilityService API across a
+ wide range of applications", with a declaration-and-disclosure lane for apps that are not
+ `isAccessibilityTool`. See `the gesture spike's notes` for the policy read and the precedent.
 
 ## Why an AccessibilityService and not a keyboard
 
