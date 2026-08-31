@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Path
 import android.graphics.Rect
+import android.graphics.RectF
 import android.os.Bundle
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
@@ -86,6 +87,16 @@ class SpikeAccessibilityService : AccessibilityService() {
       append(" count=").append(event.itemCount)
       append(" scrollX=").append(event.scrollX)
       append(" scrollY=").append(event.scrollY)
+      // Only for the selection events: with typeAllMask, resolving every event's source would be
+      // a tree lookup per event. The source's bounds are what ties an announced range to a node.
+      if (event.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED ||
+        event.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_TRAVERSED_AT_MOVEMENT_GRANULARITY
+      ) {
+        val source = event.source
+        val bounds = source?.let { s -> Rect().also { s.getBoundsInScreen(it) } }
+        append(" srcBounds=").append(bounds?.flattenToString() ?: "none")
+        append(" srcLen=").append(source?.text?.length ?: -1)
+      }
     }
     synchronized(events) {
       events += line
@@ -141,11 +152,12 @@ class SpikeAccessibilityService : AccessibilityService() {
       // The gesture spike — observation.
       "sel" -> selections()
       "events" -> events(parts.getOrNull(1)?.toInt() ?: 40)
+      "chars" -> chars(parts[1].toInt(), parts[2].toInt(), parts[3].toInt())
 
       else -> log(
         "unknown command '${parts[0]}' — try: " +
           "dump|node|focus|select|clear|gran|copy|windows|" +
-          "tap|long|drag|pressdrag|nodetap|nodelong|sel|events"
+          "tap|long|drag|pressdrag|nodetap|nodelong|sel|events|chars"
       )
     }
   }
@@ -349,6 +361,51 @@ class SpikeAccessibilityService : AccessibilityService() {
     hits.forEach { (index, pair) ->
       val (n, depth) = pair
       lines += describe(index, depth, n) + " selection=${n.textSelectionStart}..${n.textSelectionEnd}"
+    }
+    emit(lines)
+  }
+
+  /**
+   * Per-character screen rectangles for [length] characters of node [index] starting at [start],
+   * via refreshWithExtraData(EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY) — API 26, the mechanism
+   * TalkBack uses to find text on screen.
+   *
+   * This is the rung of the handle-location ladder that would make screenshot analysis unnecessary:
+   * TYPE_VIEW_TEXT_SELECTION_CHANGED already gives the selection's character offsets, and this
+   * turns offsets into pixels. It reads character GEOMETRY, never the characters themselves.
+   */
+  private fun chars(index: Int, start: Int, length: Int) {
+    val all = walk()
+    val target = all.getOrNull(index)
+    if (target == null) {
+      log("chars on node $index: out of range (tree has ${all.size})")
+      return
+    }
+    val (n, depth) = target
+    val args = Bundle().apply {
+      putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX, start)
+      putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_LENGTH, length)
+    }
+    val refreshed = n.refreshWithExtraData(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY, args)
+    val rects = n.extras.getParcelableArray(
+      AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY,
+      RectF::class.java,
+    )
+
+    val lines = mutableListOf(
+      "chars on node $index [$start, +$length) -> refreshWithExtraData returned $refreshed, " +
+        "rects=${rects?.size ?: "null"}",
+      "  node: " + describe(index, depth, n),
+    )
+    rects?.forEachIndexed { offset, rect ->
+      lines += "  [${start + offset}] $rect"
+    }
+    // The two anchors a selection's handles hang from: bottom-left of the first character and
+    // bottom-right of the last.
+    val first = rects?.firstOrNull { it != null && it.width() > 0 }
+    val last = rects?.lastOrNull { it != null && it.width() > 0 }
+    if (first != null && last != null) {
+      lines += "  START anchor = (${first.left}, ${first.bottom})   END anchor = (${last.right}, ${last.bottom})"
     }
     emit(lines)
   }
