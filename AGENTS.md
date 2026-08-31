@@ -20,6 +20,11 @@ and now for the gesture spike; nothing under it is app code.
  on the first try, and a synthesised drag moves the resulting handle. Handle positions come from
  `TYPE_VIEW_TEXT_SELECTION_CHANGED` (character offsets plus the event source's screen bounds) combined
  with the node tree — **no screenshot analysis required**. Measured 20/20 on the full loop.
+- **The gesture half generalises; the observation half does not.** The long-press selected text on all six
+ tested surfaces that have text selection (Chrome, Obsidian editing and reading, Keep, Docs, Gecko via
+ Tor). But **Google Docs fires no selection event at all** while reporting `textSelectionStart/End` on its
+ node — the exact opposite of Chrome — so both rungs must be implemented. Sheets selects *cells*, not
+ text. Full matrix in `the gesture spike's notes`.
 - **Distribution is the open problem, and Play is the answer to both halves of it.** On OxygenOS 16 a
  sideloaded accessibility service simply has no enable toggle, and neither the UI nor adb's `appops` can
  lift the block; ECM keys on install provenance, so only a trusted install source clears it. Play policy
@@ -59,6 +64,13 @@ of an `h1` whose bounds run 56..1218 but whose glyphs end at 547 hits empty spac
 Inline nodes hug their text; block nodes do not.
 
 **Long-pressing a link opens Chrome's link context menu**, not a selection.
+
+**`screencap` returns pure black on `FLAG_SECURE` apps** — Tor Browser is one. The "only a screenshot is
+evidence" rule cannot be honoured there, so corroborate with the selection event plus the floating
+action-mode window and say which evidence you actually have.
+
+**Handle geometry is per-app.** Chrome draws teardrops below the baseline; Google Keep draws circles at
+the selection's top-left and bottom-right. Do not hardcode one offset pair.
 
 ## The no-INTERNET property
 
