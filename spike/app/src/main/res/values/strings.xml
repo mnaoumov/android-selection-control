@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ASC Spike</string>
+    <string name="accessibility_service_description">Feasibility spike for the first spike. Probes whether text that is selectable but not editable — a web page in Chrome, a read-only view — exposes ACTION_SET_SELECTION and the movement-granularity actions. Throwaway diagnostic build.</string>
+</resources>
