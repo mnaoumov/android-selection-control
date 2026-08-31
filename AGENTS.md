@@ -105,7 +105,13 @@ adb -s $d install -r spike\app\build\outputs\apk\debug\app-debug.apk
 Enable the service. **The by-hand route does not exist on this ROM** (the gesture spike): a sideloaded service gets no
 master toggle under Settings → Accessibility → Downloaded apps, this OxygenOS build offers no "Allow
 restricted settings" affordance, and `adb shell appops set … ACCESS_RESTRICTED_SETTINGS allow` fails
-because uid 2000 lacks `MANAGE_APP_OPS_MODES`. So adb is the only working path:
+because uid 2000 lacks `MANAGE_APP_OPS_MODES`.
+
+The guard is **ECM**, which protects exactly one setting today
+(`AppOpsManager.OPSTR_BIND_ACCESSIBILITY_SERVICE`) and keys on install provenance: an `adb install` leaves
+`installerPackageName=null` / `initiatingPackageName=com.android.shell`, which ECM treats as sideloaded.
+Note the appop reads `default` for restricted and unrestricted apps alike — that is `ECM_STATE_IMPLICIT`,
+"infer from install source", so it is not a usable signal. So adb is the only working path:
 
 ```powershell
 $orig = (adb -s $d shell settings get secure enabled_accessibility_services).Trim # SAVE THIS
