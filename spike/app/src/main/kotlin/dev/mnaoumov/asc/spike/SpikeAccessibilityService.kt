@@ -1,23 +1,35 @@
 package dev.mnaoumov.asc.spike
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Path
 import android.graphics.Rect
+import android.graphics.RectF
 import android.os.Bundle
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
 /**
- * The first spike feasibility spike.
+ * Feasibility spikes: selection actions, then synthesised gestures.
  *
- * Answers one question: does Chrome expose page text as accessibility nodes that honour
+ * The first spike asked: does Chrome expose page text as accessibility nodes that honour
  * ACTION_SET_SELECTION and the movement-granularity actions? The framework clearly intends this
  * (AccessibilityNodeInfo.isTextSelectable exists precisely for selectable-but-not-editable text),
- * but intent is not implementation.
+ * but intent is not implementation. The answer was NO — page nodes report sel=false edit=false and
+ * performAction returns false. The selection actions stop at the same editable-text-buffer boundary
+ * InputConnection does.
+ *
+ * The gesture spike asks the successor question, which needs no selection action at all: can dispatchGesture
+ * synthesise the long-press-and-drag that drives Chrome's OWN selection UI, and can the resulting
+ * selection handles then be located and moved by exact pixel? The gesture commands below
+ * (tap/long/drag/pressdrag/nodetap/nodelong) and the observation commands (sel/events) exist for
+ * that. The first-spike commands are kept because they are the controls that make a gesture-spike negative
+ * trustworthy.
  *
  * Driven entirely over adb so the target app stays foregrounded:
  *
@@ -30,6 +42,9 @@ import android.view.accessibility.AccessibilityNodeInfo
  * diagnostic running on the owner's own device against a page he chose.
  */
 class SpikeAccessibilityService : AccessibilityService() {
+
+  /** Ring buffer filled by [onAccessibilityEvent], drained by the `events` command. */
+  private val events = mutableListOf<String>()
 
   private val receiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
@@ -54,7 +69,40 @@ class SpikeAccessibilityService : AccessibilityService() {
     return super.onUnbind(intent)
   }
 
-  override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
+  /**
+   * Records events into a ring buffer for the `events` command, rather than logging them live —
+   * with typeAllMask and notificationTimeout=100 the live stream drowns the command output.
+   *
+   * Deliberately records NO text: the question is whether Chrome ANNOUNCES a selection range, not
+   * what the text says. Indices are the whole signal.
+   */
+  override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+    if (event == null) return
+    val line = buildString {
+      append(AccessibilityEvent.eventTypeToString(event.eventType))
+      append(" pkg=").append(event.packageName)
+      append(" cls=").append(event.className?.toString()?.substringAfterLast('.'))
+      append(" from=").append(event.fromIndex)
+      append(" to=").append(event.toIndex)
+      append(" count=").append(event.itemCount)
+      append(" scrollX=").append(event.scrollX)
+      append(" scrollY=").append(event.scrollY)
+      // Only for the selection events: with typeAllMask, resolving every event's source would be
+      // a tree lookup per event. The source's bounds are what ties an announced range to a node.
+      if (event.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED ||
+        event.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_TRAVERSED_AT_MOVEMENT_GRANULARITY
+      ) {
+        val source = event.source
+        val bounds = source?.let { s -> Rect().also { s.getBoundsInScreen(it) } }
+        append(" srcBounds=").append(bounds?.flattenToString() ?: "none")
+        append(" srcLen=").append(source?.text?.length ?: -1)
+      }
+    }
+    synchronized(events) {
+      events += line
+      while (events.size > MAX_EVENTS) events.removeAt(0)
+    }
+  }
 
   override fun onInterrupt() = Unit
 
@@ -76,7 +124,41 @@ class SpikeAccessibilityService : AccessibilityService() {
       )
       "copy" -> copy(parts[1].toInt())
       "windows" -> windows()
-      else -> log("unknown command '${parts[0]}' — try: dump|node|focus|select|clear|gran|copy|windows")
+
+      // The gesture spike — gesture synthesis.
+      "tap" -> tap(parts[1].toFloat(), parts[2].toFloat())
+      "long" -> longPress(parts[1].toFloat(), parts[2].toFloat(), parts.getOrNull(3)?.toLong() ?: LONG_PRESS_MS)
+      "drag" -> drag(
+        x1 = parts[1].toFloat(),
+        y1 = parts[2].toFloat(),
+        x2 = parts[3].toFloat(),
+        y2 = parts[4].toFloat(),
+        dragMs = parts.getOrNull(5)?.toLong() ?: DRAG_MS,
+      )
+      "pressdrag" -> pressDrag(
+        x1 = parts[1].toFloat(),
+        y1 = parts[2].toFloat(),
+        x2 = parts[3].toFloat(),
+        y2 = parts[4].toFloat(),
+        holdMs = parts.getOrNull(5)?.toLong() ?: LONG_PRESS_MS,
+        dragMs = parts.getOrNull(6)?.toLong() ?: DRAG_MS,
+        settleMs = parts.getOrNull(7)?.toLong() ?: SETTLE_MS,
+      )
+      "nodetap" -> atNodeCentre(parts[1].toInt(), "nodetap") { x, y -> tap(x, y) }
+      "nodelong" -> atNodeCentre(parts[1].toInt(), "nodelong") { x, y ->
+        longPress(x, y, parts.getOrNull(2)?.toLong() ?: LONG_PRESS_MS)
+      }
+
+      // The gesture spike — observation.
+      "sel" -> selections()
+      "events" -> events(parts.getOrNull(1)?.toInt() ?: 40)
+      "chars" -> chars(parts[1].toInt(), parts[2].toInt(), parts[3].toInt())
+
+      else -> log(
+        "unknown command '${parts[0]}' — try: " +
+          "dump|node|focus|select|clear|gran|copy|windows|" +
+          "tap|long|drag|pressdrag|nodetap|nodelong|sel|events|chars"
+      )
     }
   }
 
@@ -186,7 +268,198 @@ class SpikeAccessibilityService : AccessibilityService() {
     emit(lines)
   }
 
+  // ------------------------------------------------------- the gesture spike: gestures
+
+  private fun tap(x: Float, y: Float) {
+    dispatchSingleStroke(point(x, y), TAP_MS, "tap ($x,$y)")
+  }
+
+  /**
+   * A zero-length path held down for [ms]. The framework documents a single moveTo() as "a touch
+   * that doesn't move", which is exactly a long-press; the platform long-press timeout is 500 ms,
+   * so [LONG_PRESS_MS] leaves margin.
+   */
+  private fun longPress(x: Float, y: Float, ms: Long) {
+    dispatchSingleStroke(point(x, y), ms, "long ($x,$y) ${ms}ms")
+  }
+
+  /** Touch down, move, lift — for dragging a selection handle that already exists. */
+  private fun drag(x1: Float, y1: Float, x2: Float, y2: Float, dragMs: Long) {
+    dispatchSingleStroke(line(x1, y1, x2, y2), dragMs, "drag ($x1,$y1)->($x2,$y2) ${dragMs}ms")
+  }
+
+  /**
+   * Long-press then drag WITHOUT lifting — the gesture a user makes to select a phrase, and the one
+   * the reporter in obsidian-advanced-note-composer#266 says succeeds ~20% of the time by hand.
+   *
+   * A continued stroke cannot be a second stroke of the same GestureDescription: continueStroke()
+   * produces a stroke for the NEXT gesture, and the pointer stays down between the two. So this is
+   * three chained dispatches (hold, drag, settle), each fired from the previous callback, and the
+   * settle phase exists so the lift does not read as a flick.
+   */
+  private fun pressDrag(
+    x1: Float,
+    y1: Float,
+    x2: Float,
+    y2: Float,
+    holdMs: Long,
+    dragMs: Long,
+    settleMs: Long,
+  ) {
+    val what = "pressdrag ($x1,$y1)->($x2,$y2) hold=${holdMs} drag=${dragMs} settle=${settleMs}"
+    val hold = GestureDescription.StrokeDescription(point(x1, y1), 0, holdMs, true)
+
+    dispatchStroke(hold, "$what [1/3 hold]") {
+      // continueStroke's path must START where the previous stroke ended.
+      val move = hold.continueStroke(line(x1, y1, x2, y2), 0, dragMs, true)
+      dispatchStroke(move, "$what [2/3 drag]") {
+        val settle = move.continueStroke(point(x2, y2), 0, settleMs, false)
+        dispatchStroke(settle, "$what [3/3 settle]") { log("$what -> all three strokes completed") }
+      }
+    }
+  }
+
+  /**
+   * Runs a gesture at the centre of node [index]'s screen bounds, so coordinates come from the tree
+   * rather than from guesswork about where a word is.
+   */
+  private fun atNodeCentre(index: Int, what: String, action: (Float, Float) -> Unit) {
+    val all = walk()
+    val target = all.getOrNull(index)
+    if (target == null) {
+      log("$what on node $index: out of range (tree has ${all.size})")
+      return
+    }
+    val (n, depth) = target
+    val bounds = Rect().also { n.getBoundsInScreen(it) }
+    if (bounds.isEmpty) {
+      log("$what on node $index: bounds are empty ($bounds) — nothing to aim at")
+      return
+    }
+    log("$what on node $index at centre of $bounds: " + describe(index, depth, n))
+    action(bounds.exactCenterX(), bounds.exactCenterY())
+  }
+
+  // ---------------------------------------------------- the gesture spike: observation
+
+  /**
+   * Every node claiming a selection range. The first spike measured -1..-1 everywhere with no selection; the
+   * question now is whether a selection made by TOUCH shows up here — if it does, handle positions
+   * follow from bounds + offsets and no screenshot analysis is needed.
+   */
+  private fun selections() {
+    val all = walk()
+    val hits = all.withIndex().filter { (_, pair) ->
+      val n = pair.first
+      n.textSelectionStart != -1 || n.textSelectionEnd != -1 || n.isTextSelectable
+    }
+    if (hits.isEmpty()) {
+      log("sel: no node reports a selection range or isTextSelectable (tree has ${all.size})")
+      return
+    }
+    val lines = mutableListOf("sel: ${hits.size} of ${all.size} node(s) claim a selection or selectability")
+    hits.forEach { (index, pair) ->
+      val (n, depth) = pair
+      lines += describe(index, depth, n) + " selection=${n.textSelectionStart}..${n.textSelectionEnd}"
+    }
+    emit(lines)
+  }
+
+  /**
+   * Per-character screen rectangles for [length] characters of node [index] starting at [start],
+   * via refreshWithExtraData(EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY) — API 26, the mechanism
+   * TalkBack uses to find text on screen.
+   *
+   * This is the rung of the handle-location ladder that would make screenshot analysis unnecessary:
+   * TYPE_VIEW_TEXT_SELECTION_CHANGED already gives the selection's character offsets, and this
+   * turns offsets into pixels. It reads character GEOMETRY, never the characters themselves.
+   */
+  private fun chars(index: Int, start: Int, length: Int) {
+    val all = walk()
+    val target = all.getOrNull(index)
+    if (target == null) {
+      log("chars on node $index: out of range (tree has ${all.size})")
+      return
+    }
+    val (n, depth) = target
+    val args = Bundle().apply {
+      putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX, start)
+      putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_LENGTH, length)
+    }
+    val refreshed = n.refreshWithExtraData(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY, args)
+    val rects = n.extras.getParcelableArray(
+      AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY,
+      RectF::class.java,
+    )
+
+    val lines = mutableListOf(
+      "chars on node $index [$start, +$length) -> refreshWithExtraData returned $refreshed, " +
+        "rects=${rects?.size ?: "null"}",
+      "  node: " + describe(index, depth, n),
+    )
+    rects?.forEachIndexed { offset, rect ->
+      lines += "  [${start + offset}] $rect"
+    }
+    // The two anchors a selection's handles hang from: bottom-left of the first character and
+    // bottom-right of the last.
+    val first = rects?.firstOrNull { it != null && it.width() > 0 }
+    val last = rects?.lastOrNull { it != null && it.width() > 0 }
+    if (first != null && last != null) {
+      lines += "  START anchor = (${first.left}, ${first.bottom})   END anchor = (${last.right}, ${last.bottom})"
+    }
+    emit(lines)
+  }
+
+  /** The last [count] recorded accessibility events, oldest first. */
+  private fun events(count: Int) {
+    val snapshot = synchronized(events) { events.toList() }
+    if (snapshot.isEmpty()) {
+      log("events: nothing recorded")
+      return
+    }
+    emit(listOf("events: last ${minOf(count, snapshot.size)} of ${snapshot.size} recorded") + snapshot.takeLast(count))
+  }
+
   // ---------------------------------------------------------------- plumbing
+
+  private fun point(x: Float, y: Float): Path = Path().apply { moveTo(x, y) }
+
+  private fun line(x1: Float, y1: Float, x2: Float, y2: Float): Path =
+    Path().apply {
+      moveTo(x1, y1)
+      lineTo(x2, y2)
+    }
+
+  private fun dispatchSingleStroke(path: Path, durationMs: Long, what: String) {
+    dispatchStroke(GestureDescription.StrokeDescription(path, 0, durationMs), what) { }
+  }
+
+  /**
+   * The callback's onCompleted means "the strokes were played", NOT "the target app did anything".
+   * the first spike's rule stands: only a screenshot is evidence. [onCompleted] is used solely to chain the
+   * continued strokes of [pressDrag], which genuinely must not start before the previous one ends.
+   */
+  private fun dispatchStroke(
+    stroke: GestureDescription.StrokeDescription,
+    what: String,
+    onCompleted: () -> Unit,
+  ) {
+    val gesture = GestureDescription.Builder().addStroke(stroke).build()
+    val callback = object : GestureResultCallback() {
+      override fun onCompleted(gestureDescription: GestureDescription?) {
+        log("$what -> callback onCompleted (means dispatched, NOT that anything happened)")
+        runCatching { onCompleted() }
+          .onFailure { log("$what -> ERROR chaining next stroke: ${it::class.java.simpleName}: ${it.message}") }
+      }
+
+      override fun onCancelled(gestureDescription: GestureDescription?) {
+        log("$what -> callback onCancelled")
+      }
+    }
+    val accepted = dispatchGesture(gesture, callback, null)
+    log("$what -> dispatchGesture returned $accepted")
+  }
+
 
   private fun perform(index: Int, action: Int, args: Bundle?, what: String) {
     val all = walk()
@@ -296,6 +569,13 @@ class SpikeAccessibilityService : AccessibilityService() {
     const val MAX_DEPTH = 60
     const val CHUNK = 3000
     const val TEXT_PREVIEW = 80
+    const val MAX_EVENTS = 300
+
+    /** ViewConfiguration's tap timeout is 100 ms and its long-press timeout 500 ms; leave margin. */
+    const val TAP_MS = 60L
+    const val LONG_PRESS_MS = 700L
+    const val DRAG_MS = 600L
+    const val SETTLE_MS = 250L
 
     val NOTEWORTHY_ACTIONS = setOf(
       "SET_SELECTION",

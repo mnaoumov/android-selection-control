@@ -3,43 +3,88 @@
 Android app giving **cursor and selection control where no keyboard can reach** — text that is
 selectable by touch but *not* editable: a web page in a browser, a read-only view.
 
-Tracked centrally as **the first spike**, **closed 2026-08-30** — a private tracker. Read
-that file first; it holds the scope, the survey of what already exists, the risk order, and the spike
-result that closed it. Nothing about this project's plan lives here — this file is build/run mechanics
-only.
-
-The task closed because its premise was falsified, **not** because the goal was met — see Status below.
-Any successor work needs a new `T<n>-this project`.
+Tracked centrally as **the gesture spike**, successor to the closed
+**The first spike**. Read those first; they hold the scope, the survey
+of what already exists, the risk order, and both spike results. Nothing about this project's plan lives
+here — this file is build/run mechanics only.
 
 ## Status
 
-**Feasibility spike only — and it came back NO-GO.** The app does not exist. `spike/` is a throwaway
-diagnostic that answered the first spike's risk 1; nothing under it is app code.
+**Feasibility spikes only — the app does not exist.** `spike/` is a throwaway diagnostic, first for the first spike
+and now for the gesture spike; nothing under it is app code.
 
-Measured 2026-08-30 on a OnePlus 15 (Android 16, Chrome 151): **Chrome page text does not support
-`ACTION_SET_SELECTION`.** Page nodes report `sel=false edit=false` and advertise only the granularity
-actions; `performAction(ACTION_SET_SELECTION)` returns `false`; granularity-with-extend returns `true`
-but moves no selection. Only editable nodes work. Full evidence and the controls that make the negative
-trustworthy are in `the first spike's notes` — read that before proposing anything built on these actions.
+- **the first spike — NO-GO.** Chrome page text does not support `ACTION_SET_SELECTION`. Page nodes report
+ `sel=false edit=false`, `performAction` returns `false`, granularity-with-extend returns `true` and
+ moves nothing. Only editable nodes work.
+- **the gesture spike — GO.** `dispatchGesture` needs no selection action: a synthesised long-press selects page text
+ on the first try, and a synthesised drag moves the resulting handle. Handle positions come from
+ `TYPE_VIEW_TEXT_SELECTION_CHANGED` (character offsets plus the event source's screen bounds) combined
+ with the node tree — **no screenshot analysis required**. Measured 20/20 on the full loop.
+- **The gesture half generalises; the observation half does not.** The long-press selected text on all six
+ tested surfaces that have text selection (Chrome, Obsidian editing and reading, Keep, Docs, Gecko via
+ Tor). But **Google Docs fires no selection event at all** while reporting `textSelectionStart/End` on its
+ node — the exact opposite of Chrome — so both rungs must be implemented. Sheets selects *cells*, not
+ text. Full matrix in `the gesture spike's notes`.
+- **Distribution is the open problem, and Play is the answer to both halves of it.** On OxygenOS 16 a
+ sideloaded accessibility service simply has no enable toggle, and neither the UI nor adb's `appops` can
+ lift the block; ECM keys on install provenance, so only a trusted install source clears it. Play policy
+ itself is not the obstacle the first spike assumed — it "permits the use of the AccessibilityService API across a
+ wide range of applications", with a declaration-and-disclosure lane for apps that are not
+ `isAccessibilityTool`. See `the gesture spike's notes` for the policy read and the precedent.
 
-## Why an AccessibilityService and not a keyboard — and why that reasoning turned out incomplete
+## The intended product (decided 2026-08-30)
+
+An **always-on selection pad** — cursor buttons that extend the selection the way a desktop keyboard does
+(`Shift+Right`, `Ctrl+Shift+Right`, `Ctrl+Shift+PageDown`, `Ctrl+Shift+End`, and the Left / PageUp / Home
+mirrors). It is a **closed loop**: each press reads the current selection, moves it one step, reads again.
+
+**The pad is an accessibility overlay, NOT an `InputMethodService`** — an IME only appears when an editable
+field has focus, so it could never show over a browser page. Use `attachAccessibilityOverlayToDisplay`
+(API 34), which needs no `SYSTEM_ALERT_WINDOW`, so the zero-permission property survives.
+
+The open risk is **granularity without reading text**: character steps are servo-able off the announced
+offsets, but word / page / document-end steps need either the target app's own snapping or the text itself.
+Answer that before designing any UI — see `the gesture spike's notes`.
+
+## Why an AccessibilityService and not a keyboard
 
 An `InputMethodService` reaches its target through `InputConnection`, which exists **only** where an
 editable field has focus. A browser page has none, so no IME is ever invoked there — which is why every
 existing solution (Gboard's editing pad, SwiftKey, CleverKeys, Hacker's Keyboard) stops at the same
 boundary.
 
-The spike showed `AccessibilityService`'s *selection actions* stop at that **same** boundary: they drive
-a real selection only where an editable text buffer exists. The route reaches more apps, not more kinds
-of text. What is still untested, and what the finding points at, is `dispatchGesture` — synthesising the
-long-press-and-drag that drives the app's own selection UI, which needs no selection action at all.
+The first spike showed `AccessibilityService`'s *selection actions* stop at that **same** boundary. The gesture spike showed
+`dispatchGesture` does not: it drives the target app's own selection UI, so the reach becomes "anywhere
+the user can already select by touch" rather than "anywhere there is an editable buffer".
 
-## Gotcha that will mislead you if you do not know it
+## Gotchas that will mislead you if you do not know them
 
-**`getActionList` lies.** Native read-only `TextView`s in `com.android.settings` advertise
-`ACTION_SET_SELECTION`, and `performAction` on them **returns `true`** — while producing no selection at
-all (`textSelectionStart/End` stays `-1..-1`, nothing on screen). Never treat an advertised action, or a
-`true` return, as evidence that anything happened. Only a screenshot is evidence.
+**`getActionList` lies, and so does a `true` return.** Native read-only `TextView`s in
+`com.android.settings` advertise `ACTION_SET_SELECTION`, and `performAction` on them **returns `true`** —
+while producing no selection at all (`textSelectionStart/End` stays `-1..-1`, nothing on screen). Never
+treat an advertised action, or a `true` return, as evidence that anything happened.
+
+**`refreshWithExtraData(EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY)` lies the same way for page content.** It
+returns `true` with a correctly-sized array in which every `RectF` is just the whole node's bounds. The
+control: on Chrome's own editable omnibox it returns real per-character rects. Do not build on it for
+non-editable text.
+
+**A selection event is a change notification, not a state query.** `TYPE_VIEW_TEXT_SELECTION_CHANGED` only
+fires when the range CHANGES — re-selecting the same word is silent — and nothing lets you *ask* what is
+currently selected, because `textSelectionStart/End` stays `-1` on page nodes. Track it from the stream.
+
+**A block-level node's `getBoundsInScreen` is the block box, not the text box.** Long-pressing the centre
+of an `h1` whose bounds run 56..1218 but whose glyphs end at 547 hits empty space and selects nothing.
+Inline nodes hug their text; block nodes do not.
+
+**Long-pressing a link opens Chrome's link context menu**, not a selection.
+
+**`screencap` returns pure black on `FLAG_SECURE` apps** — Tor Browser is one. The "only a screenshot is
+evidence" rule cannot be honoured there, so corroborate with the selection event plus the floating
+action-mode window and say which evidence you actually have.
+
+**Handle geometry is per-app.** Chrome draws teardrops below the baseline; Google Keep draws circles at
+the selection's top-left and bottom-right. Do not hardcode one offset pair.
 
 ## The no-INTERNET property
 
@@ -87,8 +132,16 @@ $d = "<device-serial>" # adb devices -l
 adb -s $d install -r spike\app\build\outputs\apk\debug\app-debug.apk
 ```
 
-Enable the service — either by hand under Settings → Accessibility, or over adb (faster, and it does
-**not** exercise the restricted-settings block that a hand-enable would):
+Enable the service. **The by-hand route does not exist on this ROM** (the gesture spike): a sideloaded service gets no
+master toggle under Settings → Accessibility → Downloaded apps, this OxygenOS build offers no "Allow
+restricted settings" affordance, and `adb shell appops set … ACCESS_RESTRICTED_SETTINGS allow` fails
+because uid 2000 lacks `MANAGE_APP_OPS_MODES`.
+
+The guard is **ECM**, which protects exactly one setting today
+(`AppOpsManager.OPSTR_BIND_ACCESSIBILITY_SERVICE`) and keys on install provenance: an `adb install` leaves
+`installerPackageName=null` / `initiatingPackageName=com.android.shell`, which ECM treats as sideloaded.
+Note the appop reads `default` for restricted and unrestricted apps alike — that is `ECM_STATE_IMPLICIT`,
+"infer from install source", so it is not a usable signal. So adb is the only working path:
 
 ```powershell
 $orig = (adb -s $d shell settings get secure enabled_accessibility_services).Trim # SAVE THIS
@@ -104,9 +157,15 @@ accessibility services the owner actually relies on.
 
 ```powershell
 adb -s $d logcat -c
-adb -s $d shell am broadcast -a dev.mnaoumov.asc.spike.CMD --es cmd "<command>"
+adb -s $d shell am broadcast -a dev.mnaoumov.asc.spike.CMD --es cmd "'<command>'"
 adb -s $d logcat -s ASCSPIKE:I -d
 ```
+
+**The inner quotes are load-bearing for any multi-word command.** `adb shell` joins its arguments with
+spaces and hands the result to the device's shell, which splits them again — so `--es cmd "nodelong 63"`
+arrives as `cmd=nodelong` with `63` taken as `am`'s package argument, the broadcast goes to a package
+named `63`, and **nothing is logged at all**. The failure looks exactly like a dead service. Quote for the
+device shell as well, as above.
 
 | Command | Meaning |
 |---|---|
@@ -123,10 +182,34 @@ Node indices are depth-first positions, and every command **re-walks the tree** 
 node references, so an index from `dump` stays valid for the commands that follow it (as long as the
 screen has not changed).
 
+#### Gesture commands (the gesture spike)
+
+`dispatchGesture` synthesises touch, which needs no selection action at all — it drives the target
+app's *own* selection UI. Coordinates are **physical screen pixels** (`adb shell wm size`; the
+OnePlus 15 is 1272x2772).
+
+| Command | Meaning |
+|---|---|
+| `tap <x> <y>` | A ~60 ms touch |
+| `long <x> <y> [ms]` | A touch held in place, default 700 ms (the platform long-press timeout is 500 ms) |
+| `drag <x1> <y1> <x2> <y2> [ms]` | Touch down, move, lift — for moving a selection handle that already exists |
+| `pressdrag <x1> <y1> <x2> <y2> [holdMs] [dragMs] [settleMs]` | Long-press then drag **without lifting** — the gesture a user makes to select a phrase |
+| `nodetap <i>` / `nodelong <i> [ms]` | The same at the centre of node `<i>`'s `getBoundsInScreen`, so coordinates come from the tree instead of guesswork |
+| `sel` | Every node reporting a selection range (`textSelectionStart/End`) or `isTextSelectable` |
+| `events [n]` | The last `n` accessibility events — type, package, class, `from`/`to`/`count`, scroll — from a 300-entry ring buffer filled by `onAccessibilityEvent`. Deliberately records no text |
+
+`pressdrag` is **three chained dispatches**, not one gesture: `continueStroke` produces a stroke for
+the *next* gesture and keeps the pointer down between them, so the hold, the drag and the settle are
+fired one from the previous one's callback. Its parts are logged as `[1/3 hold]`, `[2/3 drag]`,
+`[3/3 settle]`; if the chain breaks, the missing part says where.
+
 ### Gotchas
 
 - **A `performAction` returning `true` is not proof of anything the user can see.** Always pair it with
  `adb -s $d exec-out screencap -p > shot.png`.
+- **The same holds for a gesture's `onCompleted`** — it means the strokes were played, not that the
+ target app did anything with them. `dispatchGesture` returning `true` means only "accepted for
+ dispatch". Screenshot, every time.
 - logcat truncates a single entry near 4 KB. The spike already emits one line per entry to dodge this —
  do not "tidy" that into one big log call.
 - The phone must be **unlocked**; a locked screen shows only a `com.android.systemui` window and every
