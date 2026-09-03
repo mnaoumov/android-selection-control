@@ -43,9 +43,11 @@ mirrors). It is a **closed loop**: each press reads the current selection, moves
 field has focus, so it could never show over a browser page. Use `attachAccessibilityOverlayToDisplay`
 (API 34), which needs no `SYSTEM_ALERT_WINDOW`, so the zero-permission property survives.
 
-The open risk is **granularity without reading text**: character steps are servo-able off the announced
-offsets, but word / page / document-end steps need either the target app's own snapping or the text itself.
-Answer that before designing any UI — see `the gesture spike's notes`.
+**The granularity risk is answered (2026-09-02) — see `the pad build's notes` for the measurement.** Chrome hands
+over both granularities for free, split by direction of travel: **growing** the selection moves it a whole
+word at a time, **shrinking** it moves one character at a time. Neither needs a character of text read. The
+open part is now handle *location* outside Chrome: Obsidian's block-width node bounds put the derived
+handle nowhere near the real one, and the loop cannot close there.
 
 ## Why an AccessibilityService and not a keyboard
 
@@ -73,6 +75,24 @@ non-editable text.
 **A selection event is a change notification, not a state query.** `TYPE_VIEW_TEXT_SELECTION_CHANGED` only
 fires when the range CHANGES — re-selecting the same word is silent — and nothing lets you *ask* what is
 currently selected, because `textSelectionStart/End` stays `-1` on page nodes. Track it from the stream.
+
+**`from`/`to` are ANCHOR and FOCUS, not min and max.** Drag the *start* handle below the anchor and they
+arrive reversed — `from=27 to=19`. Taking `from` as the left edge therefore derives the RIGHT handle's
+pixel, so each step grabs the wrong handle and the selection flips end over end; measured 2026-09-02 as six
+straight oscillating steps before the cause was visible. Normalise with `min`/`max` everywhere.
+
+**Long-pressing inside an existing selection does not re-select.** The range never changes, so no event
+fires, and anything waiting on the announcement is left with nothing to work from. Clear the selection with
+a tap somewhere neutral before a long-press that is meant to start over.
+
+**A drag that misses the handle is not a no-op — it is a tap on the page.** Lost-handle drags logged
+`TYPE_VIEW_CLICKED` and, once, followed a link and navigated the page out from under the run. An app must
+not dispatch a drag when it does not know where the handle is.
+
+**The announced offsets are LOCAL to the event's source node.** When a selection grows past a node's edge
+the source switches to the newly-covered node and the offsets restart from it — the run below stepped
+`…46, 47, 48` on a 48-character node and then reported `0..4` on the next one. There is no document-wide
+offset anywhere in this mechanism.
 
 **A block-level node's `getBoundsInScreen` is the block box, not the text box.** Long-pressing the centre
 of an `h1` whose bounds run 56..1218 but whose glyphs end at 547 hits empty space and selects nothing.

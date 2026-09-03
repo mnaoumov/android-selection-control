@@ -75,7 +75,19 @@ class SpikeAccessibilityService : AccessibilityService() {
     val atMs: Long,
   ) {
     fun describe(): String =
-      "from=$from to=$to srcLen=$srcLen srcBounds=${bounds?.flattenToString() ?: "none"} pkg=$pkg"
+      "from=$from to=$to (range ${low()}..${high()}) srcLen=$srcLen " +
+        "srcBounds=${bounds?.flattenToString() ?: "none"} pkg=$pkg"
+
+    /**
+     * The event's `from`/`to` are ANCHOR and FOCUS, not min and max — drag the start handle below
+     * the anchor and they arrive reversed (`from=27 to=19`). Measured 2026-09-02: taking `from` as
+     * the left edge grabs the RIGHT handle, so the selection flips end over end on every step,
+     * which is exactly what the first start-handle run did for six steps before the cause was
+     * visible. Every consumer must normalise.
+     */
+    fun low(): Int = minOf(from, to)
+
+    fun high(): Int = maxOf(from, to)
   }
 
   @Volatile
@@ -657,6 +669,13 @@ class SpikeAccessibilityService : AccessibilityService() {
    * Read the offset sequence, not the pixels: values landing INSIDE a word prove character
    * granularity; values that only ever sit on word boundaries, with several steps producing no
    * event in between, prove the app snaps.
+   *
+   * A step that announces nothing is RETRIED from the same handle at a longer reach — [dx], then
+   * 2·[dx], up to [SERVO_MAX_TRIES] — and the multiplier that finally moved it is logged. Two
+   * reasons. It turns "how far must the finger travel to advance the selection by one step" into a
+   * measured number, which is the constant the pad's buttons need; and it stops the loop repeating
+   * one identical failing drag forever, which is what the first run did 24 times before the cause
+   * (the target app had been switched away) was even visible.
    */
   private fun servo(edge: String, dx: Float, count: Int, settleMs: Long) {
     if (edge != EDGE_START && edge != EDGE_END) {
@@ -665,7 +684,7 @@ class SpikeAccessibilityService : AccessibilityService() {
     }
     val lines = mutableListOf("servo: edge=$edge dx=$dx count=$count settle=${settleMs}ms")
 
-    fun step(i: Int) {
+    fun attempt(i: Int, tries: Int) {
       if (i >= count) {
         emit(lines + "servo: done after $count step(s)")
         return
@@ -681,9 +700,10 @@ class SpikeAccessibilityService : AccessibilityService() {
         return
       }
       val (hx, hy) = handle
+      val reach = dx * (tries + 1)
       dispatchStroke(
-        stroke = GestureDescription.StrokeDescription(line(hx, hy, hx + dx, hy), 0, PROBE_DRAG_MS),
-        what = "servo step ${i + 1}/$count",
+        stroke = GestureDescription.StrokeDescription(line(hx, hy, hx + reach, hy), 0, PROBE_DRAG_MS),
+        what = "servo step ${i + 1}/$count try ${tries + 1}",
         verbose = false,
       ) { completed ->
         if (!completed) {
@@ -691,13 +711,26 @@ class SpikeAccessibilityService : AccessibilityService() {
           return@dispatchStroke
         }
         handler.postDelayed({
-          lines += "  step ${i + 1}: handle=($hx, $hy) -> ${hx + dx}  " + delta(snap, lastSelection)
-          step(i + 1)
+          val after = lastSelection
+          val moved = after != null && after.atMs != snap.atMs
+          when {
+            moved -> {
+              lines += "  step ${i + 1}: handle=($hx, $hy) reach=${reach}px (x${tries + 1})  " +
+                delta(snap, after)
+              attempt(i + 1, 0)
+            }
+            tries + 1 < SERVO_MAX_TRIES -> attempt(i, tries + 1)
+            else -> emit(
+              lines + ("  step ${i + 1}: NOTHING announced from ($hx, $hy) at any reach up to " +
+                "${dx * SERVO_MAX_TRIES}px — the handle is not there, or the target app is no " +
+                "longer in front (check topResumedActivity); stopping")
+            )
+          }
         }, settleMs)
       }
     }
 
-    step(0)
+    attempt(0, 0)
   }
 
   /**
@@ -740,7 +773,7 @@ class SpikeAccessibilityService : AccessibilityService() {
   private fun handlePixel(snap: SelectionSnapshot, edge: String): Pair<Float, Float>? {
     val bounds = snap.bounds ?: return null
     if (snap.srcLen <= 0 || bounds.isEmpty) return null
-    val offset = if (edge == EDGE_START) snap.from else snap.to
+    val offset = if (edge == EDGE_START) snap.low() else snap.high()
     val anchorX = bounds.left + (offset.toFloat() / snap.srcLen) * bounds.width()
     val x = if (edge == EDGE_START) anchorX - HANDLE_INSET else anchorX + HANDLE_INSET
     return x to (bounds.bottom + HANDLE_DROP)
@@ -755,12 +788,12 @@ class SpikeAccessibilityService : AccessibilityService() {
   private fun delta(before: SelectionSnapshot?, after: SelectionSnapshot?): String {
     if (after == null) return "no selection has EVER been announced"
     if (before != null && before.atMs == after.atMs) {
-      return "NO EVENT (range unchanged, still ${before.from}..${before.to})"
+      return "NO EVENT (range unchanged, still ${before.low()}..${before.high()})"
     }
     val movement = if (before == null) {
       "first announcement"
     } else {
-      "dFrom=${signed(after.from - before.from)} dTo=${signed(after.to - before.to)}"
+      "dLow=${signed(after.low() - before.low())} dHigh=${signed(after.high() - before.high())}"
     }
     return "${after.describe()}  [$movement]"
   }
@@ -942,6 +975,17 @@ class SpikeAccessibilityService : AccessibilityService() {
 
     /** The pad build. How long [dragHold] parks at the destination, waiting for an edge auto-scroll. */
     const val HOLD_MS = 2000L
+
+    /**
+     * The pad build. How far [servo] escalates a step that announces nothing, in multiples of its dx.
+     *
+     * 4 was not enough, and the reason turned out to be the finding itself: measured 2026-09-02,
+     * Chrome moves the selection end word by word, so the finger has to travel most of the NEXT
+     * word before anything happens. A 4-character word snapped at 48 px while a 10-character one
+     * had not moved at that reach. The cap therefore has to exceed the widest word on screen, not
+     * some multiple of a character.
+     */
+    const val SERVO_MAX_TRIES = 12
 
     /**
      * The pad build handle geometry, from the gesture spike's worked example: an end handle announced at to=15 of a
