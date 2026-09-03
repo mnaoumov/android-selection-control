@@ -100,6 +100,10 @@ on the page, and read as "gestures pass through the overlay" when the opposite i
 real bounds back from the `windows` command**, which reports the accessibility window list in screen
 pixels, rather than trusting what was asked for.
 
+**The accessibility window list lags a window move.** Query it in the same breath as
+`updateViewLayout` and it still reports the OLD bounds; a second later it is right. Anything that
+places a window and then reasons about where it landed has to re-read, not read once.
+
 **A probe that misses a handle DESTROYS the selection.** There is no way to ask whether a pixel holds
 a handle — only a drag moves one, and only a moved handle announces anything — so a search has to
 touch. A touch that lands on the page instead collapses the selection to a caret, which means a scan
