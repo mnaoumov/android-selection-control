@@ -8,18 +8,30 @@ import android.os.Handler
 /**
  * A synthetic finger that presses once, moves as often as asked, and lifts when told.
  *
- * **NOT WIRED IN. This is a half-finished mechanism kept for the next attempt, not a component the
- * pad uses.** It half worked, and the half that worked is the interesting part: with the pointer
- * already down, one press moved the selection exactly one character in **253 ms and a single
- * gesture** — against 700 ms to 2.3 s and two to seven gestures for the released path the pad
- * actually ships. That is the prize, and it is worth another run at.
+ * **NOT WIRED IN, and now for a measured reason rather than an unfinished one.** The chain itself
+ * works: a grab is accepted, sixty-odd links play in a row, the lift is clean and the next grab is
+ * accepted again. What does not work is the target app's side of it.
  *
- * What is not solved: the grab is unreliable. After the first release, every later grab was refused
- * in silence and twelve escalating drags moved nothing; a later build failed the same way from the
- * very first press. The suspicion is a pointer left down inside the framework — a lift that
- * continues a stroke some in-flight link has already continued leaves one, and nothing afterwards
- * can reach that handle — but that is a suspicion, not a measurement, and the next attempt should
- * start by proving or disproving it rather than by writing more code.
+ * The pattern, from four builds:
+ *
+ * - A held stroke that presses, detours past the slop and travels to its destination moves the
+ *   selection **exactly one character in 222 ms and one gesture** — three times faster and far more
+ *   accurate than the released path, which takes 0.7–2.3 s and two to seven escalating drags for the
+ *   same step.
+ * - Every move AFTER that one does nothing. Not a wrong offset — no change at all, through twelve
+ *   escalating destinations, whether the pointer is moved by a continuation or lifted and re-grabbed
+ *   for each move.
+ * - The page does not scroll and no fresh word is selected while this happens, so the later strokes
+ *   are reaching nothing rather than landing somewhere wrong.
+ *
+ * Which points at the target app, not at this class: Chrome appears to end its handle drag when the
+ * first gesture completes and to refuse to start another until something it is waiting for arrives.
+ * The lift this class sends is evidently not it.
+ *
+ * The 222 ms result also explains a finding recorded in AGENTS.md — that the landed offset is not a
+ * function of the final pixel. It is a function of the final pixel AND the lift: hold the finger and
+ * the handle stays exactly where it was put; lift it and the app snaps the handle somewhere of its
+ * own choosing. That is why the released path needs several read-and-correct rounds per character.
  *
  * The owner's design, and the reason for it is everything that goes wrong when each press is its own
  * press-move-release: the handle has to be found again every time, a miss is a tap on the page, and
@@ -64,21 +76,38 @@ class HeldPointer(
    * fresh word under the finger instead of failing quietly.
    */
   fun grab(from: PointF, towards: PointF, onGrabbed: (Boolean) -> kotlin.Unit) {
-    release()
-    val nudge = if (towards.x >= from.x) GRAB_NUDGE_PX else -GRAB_NUDGE_PX
+    // Never start a second chain on top of a live one: the old chain's next completion would lift
+    // the new chain's stroke, and both pointers would be lost.
+    if (stroke != null) {
+      Diag.log("held: refusing to grab, already holding")
+      onGrabbed(false)
+      return
+    }
+    /*
+     * The grab IS the first move, along the same path a released drag would take.
+     *
+     * A grab that only pressed and twitched two pixels never caught the handle: the chain ran
+     * healthily — sixty-odd links, a clean lift, the next grab accepted — while the selection sat
+     * still through twelve escalating moves. The released path that does work travels past the touch
+     * slop and then on to its destination in one stroke, so the first link here does exactly that
+     * and only the *holding* is new.
+     */
+    val away = if (towards.x >= from.x) SLOP_DETOUR_PX else -SLOP_DETOUR_PX
     val first = GestureDescription.StrokeDescription(
       Path().apply {
         moveTo(from.x, from.y)
-        lineTo(from.x + nudge, from.y)
+        lineTo(from.x + away, from.y)
+        lineTo(towards.x, towards.y)
       },
       0,
-      TICK_MS,
+      GRAB_MS,
       true,
     )
     stroke = first
-    at = PointF(from.x + nudge, from.y)
+    at = PointF(towards.x, towards.y)
     goal = null
     val accepted = dispatch(gestureOf(first)) { played -> if (played) link() else lost("grab not played") }
+    Diag.log("held: grab at ${from.x} accepted=$accepted")
     if (!accepted) forget()
     onGrabbed(accepted)
   }
@@ -103,18 +132,45 @@ class HeldPointer(
     releasing = true
   }
 
+  /**
+   * Lift now, without waiting for the link in flight to finish.
+   *
+   * Needed because a press has to start from a pointer that is definitely up: the grab is the only
+   * stroke the target app acts on, and a second chain started on top of a live one loses both.
+   */
+  fun releaseNow() {
+    if (stroke == null) return
+    releasing = false
+    lift()
+  }
+
   private fun lift() {
     val previous = stroke
     val from = at
     forget()
     if (previous == null || from == null) return
-    val lift = previous.continueStroke(
-      Path().apply { moveTo(from.x, from.y) },
-      0,
-      TICK_MS,
-      false,
-    )
-    dispatch(gestureOf(lift)) {}
+
+    /*
+     * The lift travels one pixel, and that is not a detail.
+     *
+     * A `StrokeDescription` needs a path with a length; a `moveTo` on its own is empty, and building
+     * one throws. The throw landed inside a gesture-completion callback, where it killed the lift
+     * silently and left the framework holding a pointer this class had already forgotten — after
+     * which every later grab was refused and twelve escalating drags moved nothing. That was the
+     * "stuck pointer", and it was self-inflicted.
+     */
+    val path = Path().apply {
+      moveTo(from.x, from.y)
+      lineTo(from.x + LIFT_NUDGE_PX, from.y)
+    }
+    val lift = runCatching { previous.continueStroke(path, 0, TICK_MS, false) }.getOrNull()
+    if (lift == null) {
+      Diag.log("held: could not build the lift; the pointer may still be down")
+      return
+    }
+    Diag.log("held: lifting after $links link(s)")
+    links = 0
+    if (!dispatch(gestureOf(lift)) {}) Diag.log("held: lift refused")
   }
 
   /**
@@ -134,17 +190,24 @@ class HeldPointer(
     val to = goal ?: PointF(from.x + idleWobble(), from.y)
     goal = null
 
-    val next = previous.continueStroke(
-      Path().apply {
-        moveTo(from.x, from.y)
-        lineTo(to.x, to.y)
-      },
-      0,
-      TICK_MS,
-      true,
-    )
+    val next = runCatching {
+      previous.continueStroke(
+        Path().apply {
+          moveTo(from.x, from.y)
+          lineTo(to.x, to.y)
+        },
+        0,
+        TICK_MS,
+        true,
+      )
+    }.getOrNull()
+    if (next == null) {
+      lost("could not build a link")
+      return
+    }
     stroke = next
     at = to
+    links++
     val accepted = dispatch(gestureOf(next)) { played -> if (played) link() else lost("link cancelled") }
     if (!accepted) lost("link refused")
   }
@@ -155,6 +218,9 @@ class HeldPointer(
   }
 
   private var releasing = false
+
+  /** Links since the last grab, for the log: it is the only way to see the chain is alive. */
+  private var links = 0
 
   private var wobble = 1f
 
@@ -182,7 +248,17 @@ class HeldPointer(
      */
     const val TICK_MS = 60L
 
-    /** A grab moves a hair, so the target app reads a drag rather than a long press. */
-    const val GRAB_NUDGE_PX = 2f
+    /**
+     * How far the grab detours past its target before coming back, and how long it takes.
+     *
+     * Same shape as the released drag that works: a touch that moves less than the system slop and
+     * lifts inside the tap timeout IS a tap, and a tap on a link navigates. Here the pointer never
+     * lifts, but the detour is also what makes the target app read a drag at all.
+     */
+    const val SLOP_DETOUR_PX = 60f
+    const val GRAB_MS = 150L
+
+    /** A lift needs a path with a length; an empty one throws and strands the pointer. */
+    const val LIFT_NUDGE_PX = 1f
   }
 }

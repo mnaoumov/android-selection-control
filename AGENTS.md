@@ -105,17 +105,25 @@ finger at x(target)" however good the pixel model is — which is why a characte
 to seven gestures of read-and-correct rather than one. Do not rebuild the aim on the assumption that
 it is a pure function; it is not.
 
-**A continuing stroke has to be continued from the previous gesture's completion, at once.** Three
-shapes of the held-pointer idea were measured. Continuing after reading the selection back (about
-300 ms later) never grabbed anything: eight strokes walked the pointer from x=690 to x=2104, off the
-side of the screen, selection untouched. Continuing from a timer that fired slightly EARLY was no
-better — dispatching while a gesture is still playing cancels it. Continuing immediately from
-`onCompleted` **works**: one press moved the selection one character in 253 ms and a single gesture,
-the fastest this project has managed by a factor of three. What is still broken is the release: after
-the first lift, later grabs are refused in silence and twelve escalating drags move nothing, which
-looks like a pointer left down inside the framework. `HeldPointer.kt` holds that work, deliberately
-NOT wired into the service. Worth finishing — a held drag also keeps the target app's selection
-toolbar down, which is the real answer to it reappearing on every press.
+**A held pointer moves the handle once, beautifully, and then the app stops listening.** The chain
+mechanism is solved: continue each stroke from the previous gesture's `onCompleted`, immediately —
+continuing 300 ms later after reading the selection back never grabs anything, and a timer that
+fires early is worse, because dispatching while a gesture plays cancels it. Give the lift a path
+with a length, too: a `moveTo` on its own throws, and the throw lands inside a completion callback
+where it strands a pointer nobody can reach.
+
+With that right, a held stroke that presses, detours past the slop and travels to its destination
+moves the selection **exactly one character in 222 ms and one gesture** — against 0.7–2.3 s and two
+to seven escalating drags for the released path. Every move after that one does nothing at all,
+through twelve escalating destinations, by continuation or by lift-and-regrab alike; the page does
+not scroll and no word is re-selected, so those strokes reach nothing rather than landing wrong.
+Chrome seems to end its handle drag when the first gesture completes and not to start another.
+
+That single measurement also explains the entry above about the landed offset not being a function
+of the final pixel: it is a function of the final pixel **and the lift**. Held, the handle stays
+exactly where it is put; lifted, the app snaps it somewhere of its own. Which is why a character
+step needs several read-and-correct rounds, and why finishing the held pointer is the one change
+that would make this pad fast. `HeldPointer.kt` holds the work, deliberately NOT wired in.
 
 **An overlay's `LayoutParams` x/y are inset by the status bar; `dispatchGesture` coordinates are raw
 screen pixels.** Ask for (60, 1040) and the window lands at y=1181 — 141 px lower, the status bar's
