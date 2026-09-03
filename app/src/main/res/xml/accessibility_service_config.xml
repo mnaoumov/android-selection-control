@@ -11,7 +11,7 @@
     the gesture spike's notes. Claiming the flag would be arguable and risky; the ordinary lane is well trodden.
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeViewTextSelectionChanged|typeViewScrolled|typeWindowContentChanged|typeWindowStateChanged"
+    android:accessibilityEventTypes="typeViewTextSelectionChanged|typeViewScrolled|typeWindowContentChanged|typeWindowStateChanged|typeWindowsChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagRetrieveInteractiveWindows|flagRequestAccessibilityButton"
     android:canRetrieveWindowContent="true"

@@ -71,7 +71,17 @@ class HandleLocator {
     windows: List<AccessibilityWindowInfo>,
     packageName: String?,
     screenWidth: Int,
-  ): Float? {
+  ): Float? = toolbarBounds(windows, packageName, screenWidth)?.exactCenterX()
+
+  /**
+   * The floating toolbar's rectangle, for anything that needs more than its centre — masking it, in
+   * particular. Same identification, so the two can never disagree about which window it is.
+   */
+  fun toolbarBounds(
+    windows: List<AccessibilityWindowInfo>,
+    packageName: String?,
+    screenWidth: Int,
+  ): Rect? {
     if (packageName == null) return null
     return windows
       .asSequence()
@@ -79,7 +89,6 @@ class HandleLocator {
       .map { window -> Rect().also { window.getBoundsInScreen(it) } }
       .filter { it.width() > 0 && it.width() < FULL_SCREEN_FRACTION * screenWidth }
       .minByOrNull { it.width().toLong() * it.height() }
-      ?.exactCenterX()
   }
 
   /**

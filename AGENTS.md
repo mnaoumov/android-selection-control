@@ -288,6 +288,26 @@ step failed by dragging where no handle was, and a drag that misses lands on the
 link navigates. It also stops when the handle is under the pad, because going non-touchable for the
 step cancels the in-flight touch — the step runs, the repeat does not.
 
+**The ▤ menu button covers the target app's selection toolbar.** It cannot be suppressed — it is
+Chrome's own `PopupWindow`, put up by its `ActionMode`, and no accessibility API can stop another
+app drawing — so the pad paints an overlay over its bounds instead. Three things this had to get
+right, each measured:
+
+- **`FLAG_LAYOUT_IN_SCREEN` on the mask window.** Without it `LayoutParams.x/y` are measured inside
+ the content area while the bounds from the accessibility window list are raw screen pixels, so the
+ cover landed exactly one status bar (141 px) low — blanking the body text under the toolbar and
+ leaving the toolbar itself in plain sight. It reads as a z-order problem and is not one: the
+ toolbar is at layer 21000, this overlay at 631000.
+- **Never refresh it mid-press.** The app takes its toolbar down for the duration of any handle drag
+ and puts it back after, so following it during a press added and removed an overlay window six
+ times inside one step; that press took 3.6 s, spent ten gestures and moved nothing.
+- **Do not believe the first disappearance.** Same reason — hiding on the first `null` made the mask
+ strobe once per gesture. It lingers ~700 ms before coming down.
+
+The mask is `FLAG_NOT_TOUCHABLE`, deliberately: the toolbar sits right beside the selection, which is
+where the handles are, and a touchable overlay there would eat the service's own gestures. So the
+hidden toolbar is still pressable blind — masking hides it without disabling it.
+
 **Closing the pad hides the overlay and leaves the service connected**, on purpose. The `✕` at the
 right of the status line is the only way out that is available on this device: the Accessibility
 switch is ECM-blocked (above), so `disableSelf` would strand the user behind it, needing

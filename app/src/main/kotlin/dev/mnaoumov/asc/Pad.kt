@@ -48,6 +48,7 @@ class Pad(
   private val onPressStart: (PadCommand) -> kotlin.Unit,
   private val onPressEnd: () -> kotlin.Unit,
   private val onSwapEdge: () -> kotlin.Unit,
+  private val onToggleMenu: () -> kotlin.Unit,
   private val onClose: () -> kotlin.Unit,
 ) {
 
@@ -57,6 +58,27 @@ class Pad(
 
   private var heldCommand: PadCommand? = null
   private var lastTouchAtMs = 0L
+
+  private var menuButton: Button? = null
+  private var menuMasked = false
+
+  /**
+   * Reflects whether the target app's selection toolbar is currently covered.
+   *
+   * The label states what is true, not what pressing it will do — "menu off" means the menu is off —
+   * because a button that describes its own action reads as a command and this is a state.
+   */
+  fun setMenuMasked(masked: Boolean) {
+    menuMasked = masked
+    menuButton?.text = menuLabel()
+  }
+
+  private fun menuLabel(): String = if (menuMasked) "▤\nmenu off" else "▤\nmenu on"
+
+  private fun wrapContent() = LinearLayout.LayoutParams(
+    LinearLayout.LayoutParams.WRAP_CONTENT,
+    LinearLayout.LayoutParams.WRAP_CONTENT,
+  )
 
   /**
    * Whether a finger really is still on [command]'s button — the gate on repeating it.
@@ -119,6 +141,7 @@ class Pad(
     root = null
     params = null
     statusView = null
+    menuButton = null
   }
 
   /** Rebuilds in the other mode, because the layout differs as much as the position does. */
@@ -222,13 +245,11 @@ class Pad(
       statusView,
       LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
     )
-    header.addView(
-      action(themed, "✕") { onClose() },
-      LinearLayout.LayoutParams(
-        LinearLayout.LayoutParams.WRAP_CONTENT,
-        LinearLayout.LayoutParams.WRAP_CONTENT,
-      ),
-    )
+    // The mask toggle lives beside the close button rather than in the direction grid: it is a
+    // setting about the view, not a movement, and the grid is already five buttons wide.
+    menuButton = button(themed, menuLabel()).apply { setOnClickListener { onToggleMenu() } }
+    header.addView(menuButton, wrapContent())
+    header.addView(action(themed, "✕") { onClose() }, wrapContent())
     column.addView(header)
 
     if (mode == PadMode.DOCKED) {

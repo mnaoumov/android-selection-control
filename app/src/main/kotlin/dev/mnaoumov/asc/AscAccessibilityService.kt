@@ -31,6 +31,13 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
   private lateinit var driver: SelectionDriver
   private var pad: Pad? = null
+  private var mask: ToolbarMask? = null
+
+  /** Last rectangle the mask was told to cover, so the log records changes rather than every event. */
+  private var maskedBounds: android.graphics.Rect? = null
+
+  /** When the target app last had a toolbar on screen, for the linger above. */
+  private var toolbarLastSeenAtMs = 0L
 
   /** One press at a time: the loop reads the result of each gesture before deciding the next. */
   private var busy = false
@@ -68,11 +75,15 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       onPressStart = ::onPressStart,
       onPressEnd = ::onPressEnd,
       onSwapEdge = ::onSwapEdge,
+      onToggleMenu = ::onToggleMenu,
       onClose = {
         held = null
+        mask?.hide()
         pad?.hide()
       },
     ).also { it.show() }
+
+    mask = ToolbarMask(this, getSystemService(WindowManager::class.java))
 
     connected = this
   }
@@ -80,6 +91,8 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   override fun onUnbind(intent: android.content.Intent?): Boolean {
     if (connected === this) connected = null
     // An overlay that outlives its service cannot be told to go away.
+    mask?.hide()
+    mask = null
     pad?.hide()
     pad = null
     return super.onUnbind(intent)
@@ -88,6 +101,59 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   override fun onAccessibilityEvent(event: AccessibilityEvent?) {
     if (event == null) return
     observer.onEvent(event)
+    // The toolbar comes back on every selection change, so the mask has to follow it there rather
+    // than only after a press of our own.
+    refreshMask()
+  }
+
+  /**
+   * Repaints the mask over wherever the target app's selection toolbar is now.
+   *
+   * Cheap enough to run per event only because it short-circuits when masking is off; the window
+   * list is not free to walk.
+   */
+  private fun refreshMask() {
+    val mask = mask ?: return
+    if (!mask.enabled) return
+
+    /*
+     * Never mid-press.
+     *
+     * The target app takes its toolbar down while a handle is being dragged and puts it back
+     * afterwards, so following it during a press meant adding and removing an overlay window six
+     * times inside one step — and that press took 3.6 s, spent ten gestures and moved nothing. The
+     * mask only has to be right when the user is looking at it, which is between presses.
+     */
+    if (busy) return
+
+    val foreground = observer.latest?.packageName ?: rootInActiveWindow?.packageName?.toString()
+    val bounds = locator.toolbarBounds(windows.orEmpty(), foreground, screenWidth())
+
+    /*
+     * A missing toolbar is usually a blink, not a dismissal — it goes away for the duration of any
+     * drag, including the user's own. Hiding on the first null made the mask strobe. So keep the
+     * cover in place briefly, and take it down only once the toolbar has stayed away.
+     */
+    val now = android.os.SystemClock.uptimeMillis()
+    if (bounds != null) toolbarLastSeenAtMs = now
+    val gone = bounds == null && now - toolbarLastSeenAtMs > MASK_LINGER_MS
+
+    if (bounds != maskedBounds && (bounds != null || gone)) {
+      Diag.log("mask -> $bounds")
+      maskedBounds = bounds
+    }
+    when {
+      bounds != null -> mask.update(bounds)
+      gone -> mask.update(null)
+      // else: leave the cover where it is until the toolbar has been away long enough to believe.
+    }
+  }
+
+  private fun onToggleMenu() {
+    val masked = mask?.toggle() ?: return
+    pad?.setMenuMasked(masked)
+    refreshMask()
+    pad?.showStatus(if (masked) "menu hidden" else "menu shown")
   }
 
   override fun onInterrupt() = Unit
@@ -134,6 +200,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       if (inTheWay) pad?.setTransparentToTouch(false)
       pad?.showStatus(describe(outcome))
       busy = false
+      // The press just moved the selection, so the toolbar has just moved too. After `busy` clears,
+      // or the guard in refreshMask would skip it.
+      refreshMask()
 
       /*
        * Repeat only while the finger is down AND the last step actually got somewhere.
@@ -318,5 +387,11 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
     /** How long an announcement stays trustworthy before the node rung is worth a walk. */
     const val STALE_MS = 4000L
+
+    /**
+     * How long the toolbar must stay gone before the mask comes down. Longer than the blink a drag
+     * causes, short enough that a dismissed selection does not leave a patch on screen.
+     */
+    const val MASK_LINGER_MS = 700L
   }
 }
