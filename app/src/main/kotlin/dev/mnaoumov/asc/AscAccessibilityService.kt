@@ -101,10 +101,25 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   }
 
   private fun describe(outcome: Outcome): String = when (outcome) {
-    is Outcome.Moved -> "moved ${outcome.fromOffset} → ${outcome.toOffset}"
-    Outcome.NoSelection -> "select some text first"
+    is Outcome.Moved ->
+      if (outcome.fromOffset == outcome.toOffset) "didn't move" else "moved ${outcome.fromOffset} → ${outcome.toOffset}"
+    // Distinguish "there is no selection" from "there is one but I cannot see it", because they need
+    // opposite things from the user and the second is common: a selection event fires only on a
+    // CHANGE, so one made before the service connected — or a long-press INSIDE an existing
+    // selection, which re-selects nothing — leaves the pad blind while text is visibly highlighted.
+    Outcome.NoSelection ->
+      if (aSelectionSeemsToExist()) "tap elsewhere, then long-press to re-select" else "select some text first"
     Outcome.HandleLost -> "lost the handle — reselect"
     is Outcome.Degraded -> "one character (${outcome.reason})"
+  }
+
+  /**
+   * Whether *something* on screen looks like a live selection, even though nothing has been
+   * announced. The floating toolbar is a real window, so its presence is the signal.
+   */
+  private fun aSelectionSeemsToExist(): Boolean {
+    val foreground = rootInActiveWindow?.packageName?.toString() ?: return false
+    return locator.toolbarCentreX(windows.orEmpty(), foreground, screenWidth()) != null
   }
 
   // --------------------------------------------------------- GestureDispatcher

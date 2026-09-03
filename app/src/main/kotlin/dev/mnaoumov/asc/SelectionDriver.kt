@@ -48,6 +48,18 @@ class SelectionDriver(
   private val toolbarCentre: () -> Float?,
 ) {
 
+  /**
+   * Whether a selection still appears to exist on screen, independently of anything announced.
+   *
+   * This is a **safety** check, not an optimisation, and it exists because of damage done during
+   * testing: a drag that misses the handle does not fail quietly — it lands on the page as a tap,
+   * and on a link it NAVIGATES, losing the page the user was reading. A miss produces no selection
+   * event, so silence alone cannot distinguish "not far enough" from "I just clicked something",
+   * and the escalation would keep poking. The floating toolbar disappearing is the signal that the
+   * selection is gone and there is nothing left to reach for.
+   */
+  private fun selectionStillOnScreen(): Boolean = toolbarCentre() != null
+
   /** The edge the pad is moving. The other one is the anchor and stays put. */
   var activeEdge: Edge = Edge.END
 
@@ -62,20 +74,40 @@ class SelectionDriver(
   private val knownBoundaries = sortedSetOf<Int>()
   private var boundariesNodeKey: String? = null
 
+  /** Gestures spent on the press in flight — the number that says whether a press feels slow. */
+  private var gestureCount = 0
+
   fun perform(command: PadCommand, onDone: (Outcome) -> Unit) {
+    val startedAt = android.os.SystemClock.uptimeMillis()
+    gestureCount = 0
+
     val snapshot = observer.latest
     if (snapshot == null || snapshot.isEmpty()) {
+      Diag.log("$command: nothing announced — the pad cannot see a selection")
       onDone(Outcome.NoSelection)
       return
     }
     rememberBoundaryContext(snapshot)
+    Diag.log(
+      "$command edge=$activeEdge at ${snapshot.low()}..${snapshot.high()} " +
+        "srcLen=${snapshot.sourceLength} oneLine=${snapshot.sourceIsOneLine()} " +
+        "boundaries=$knownBoundaries"
+    )
+
+    val report: (Outcome) -> Unit = { outcome ->
+      Diag.log(
+        "$command -> $outcome in ${android.os.SystemClock.uptimeMillis() - startedAt}ms, " +
+          "$gestureCount gesture(s)"
+      )
+      onDone(outcome)
+    }
 
     val growing = (activeEdge == Edge.END) == command.toRight
     when (command.unit) {
-      PadCommand.Unit.WORD -> if (growing) growOneUnit(command, onDone = onDone) else shrinkByWord(command, onDone)
-      PadCommand.Unit.CHARACTER -> if (growing) growOneCharacter(command, onDone) else growOneUnit(command, onDone = onDone)
-      PadCommand.Unit.PAGE -> sweepToEdge(command, PAGE_HOLD_MS, onDone)
-      PadCommand.Unit.DOCUMENT -> sweepToEdge(command, DOCUMENT_HOLD_MS, onDone)
+      PadCommand.Unit.WORD -> if (growing) growOneUnit(command, onDone = report) else shrinkByWord(command, report)
+      PadCommand.Unit.CHARACTER -> if (growing) growOneCharacter(command, report) else growOneUnit(command, onDone = report)
+      PadCommand.Unit.PAGE -> sweepToEdge(command, PAGE_HOLD_MS, report)
+      PadCommand.Unit.DOCUMENT -> sweepToEdge(command, DOCUMENT_HOLD_MS, report)
     }
   }
 
@@ -99,26 +131,40 @@ class SelectionDriver(
       return
     }
 
-    val reach = STEP_PX * (attempt + 1) * (if (command.toRight) 1 else -1)
+    // Escalate in characters rather than in a fixed pixel count: the distance that matters is the
+    // width of the next word, and the node's own geometry says how wide a character is here. A
+    // constant step wastes attempts on wide text and overshoots on narrow.
+    val step = (pixelsPerCharacter(before) * CHARS_PER_ATTEMPT).coerceAtLeast(STEP_PX)
+    val reach = step * (attempt + 1) * (if (command.toRight) 1 else -1)
+    gestureCount++
     gestures.drag(handle, PointF(handle.x + reach, handle.y), DRAG_MS) { completed ->
       if (!completed) {
         onDone(Outcome.HandleLost)
         return@drag
       }
-      handler.postDelayed({
-        val after = observer.latest
-        val fired = after != null && after.atMs != before.atMs
+      awaitChange(before) { after ->
+        Diag.log(
+          "  grow try ${attempt + 1}: handle=(${handle.x}, ${handle.y}) reach=$reach -> " +
+            if (after == null) "nothing" else "${after.low()}..${after.high()} bounds=${after.bounds}"
+        )
         when {
-          fired && locator.grabbedAHandle(before, after!!) -> {
+          after != null && locator.grabbedAHandle(before, after) -> {
             recordBoundary(after)
             locator.rememberAnchor(handle.x - reach.coerceAtLeast(0f))
             onDone(Outcome.Moved(before.high(), after.high()))
           }
-          fired -> onDone(Outcome.HandleLost)
+          after != null -> onDone(Outcome.HandleLost)
+          // Silence is ambiguous: the reach may be too short, or that drag may have landed on the
+          // page and taken the selection (or the whole page) with it. Never escalate past the point
+          // where a selection still visibly exists.
+          !selectionStillOnScreen() -> {
+            Diag.log("  grow: the selection is gone from screen — stopping rather than poking the page")
+            onDone(Outcome.HandleLost)
+          }
           attempt + 1 < MAX_ATTEMPTS -> growOneUnit(command, attempt + 1, onDone)
           else -> onDone(Outcome.HandleLost)
         }
-      }, SETTLE_MS)
+      }
     }
   }
 
@@ -140,27 +186,105 @@ class SelectionDriver(
         onDone(outcome)
         return@growOneUnit
       }
-      walkBackTo(target, command, onDone)
+      // A grow that happened to move exactly one character (a lone space, say) is already the answer.
+      if (outcome.toOffset == target) {
+        onDone(Outcome.Moved(start, target))
+        return@growOneUnit
+      }
+      walkBackTo(target, command, start, onDone)
     }
   }
 
-  /** Shrink one character at a time until the offset is [target]. */
-  private fun walkBackTo(target: Int, command: PadCommand, onDone: (Outcome) -> Unit, guard: Int = 0) {
-    val current = observer.latest?.high()
-    if (current == null) {
+  /**
+   * Shrink until the offset is [target].
+   *
+   * **In as few drags as possible, not one per character.** Shrinking tracks the finger, so the
+   * distance to travel is (characters to lose) × (pixels per character), and the node gives the
+   * second factor directly: its width over its length. One drag usually lands it; the loop exists to
+   * correct the estimate, not to walk.
+   *
+   * Doing this one character at a time is what made a single `char →` press take about eight
+   * seconds — every step paying a dispatch plus a settle to move one character.
+   */
+  private fun walkBackTo(
+    target: Int,
+    command: PadCommand,
+    origin: Int,
+    onDone: (Outcome) -> Unit,
+    guard: Int = 0,
+  ) {
+    val before = observer.latest
+    val current = before?.high()
+    if (before == null || current == null) {
       onDone(Outcome.NoSelection)
       return
     }
-    if (current == target || guard >= MAX_WALK_BACK) {
-      onDone(Outcome.Moved(current, current))
+    if (current == target || guard >= MAX_CORRECTIONS) {
+      onDone(Outcome.Moved(origin, current))
       return
     }
-    val back = PadCommand.entries.first {
-      it.unit == PadCommand.Unit.CHARACTER && it.toRight != command.toRight
+
+    val toLose = current - target
+    val perChar = pixelsPerCharacter(before)
+    // Shrinking the END edge means moving left; the START edge, right.
+    val direction = if (activeEdge == Edge.END) -1f else 1f
+    val handle = locator.locate(before, activeEdge, toolbarCentre())
+    if (handle == null) {
+      onDone(Outcome.HandleLost)
+      return
     }
-    growOneUnit(back) { outcome ->
-      if (outcome !is Outcome.Moved) onDone(outcome) else walkBackTo(target, command, onDone, guard + 1)
+    val reach = direction * toLose * perChar
+
+    gestureCount++
+
+    gestures.drag(handle, PointF(handle.x + reach, handle.y), DRAG_MS) { completed ->
+      if (!completed) {
+        onDone(Outcome.HandleLost)
+        return@drag
+      }
+      awaitChange(before) { after ->
+        when {
+          after == null -> onDone(Outcome.Moved(origin, current))
+          !locator.grabbedAHandle(before, after) -> onDone(Outcome.HandleLost)
+          else -> walkBackTo(target, command, origin, onDone, guard + 1)
+        }
+      }
     }
+  }
+
+  /**
+   * How wide one character is, from the node's own geometry — a width divided by a length, never a
+   * look at the characters. Only meaningful where the box is a single line; elsewhere fall back to
+   * the probe step and let the correction loop do the work.
+   */
+  private fun pixelsPerCharacter(snapshot: SelectionObserver.Snapshot): Float {
+    val bounds = snapshot.bounds
+    if (!snapshot.sourceIsOneLine() || bounds == null || snapshot.sourceLength <= 0) return STEP_PX
+    return (bounds.width().toFloat() / snapshot.sourceLength).coerceIn(MIN_CHAR_PX, MAX_CHAR_PX)
+  }
+
+  /**
+   * Wait for the next announcement rather than sleeping a fixed span.
+   *
+   * The event usually lands well inside the old fixed settle, and paying that settle on every one of
+   * a dozen gestures is most of why a press felt slow. Polling costs nothing and stops as soon as the
+   * answer arrives; the deadline is what distinguishes "not yet" from "never".
+   */
+  private fun awaitChange(
+    before: SelectionObserver.Snapshot?,
+    waited: Long = 0,
+    onResult: (SelectionObserver.Snapshot?) -> Unit,
+  ) {
+    val after = observer.latest
+    if (after != null && after.atMs != before?.atMs) {
+      onResult(after)
+      return
+    }
+    if (waited >= MAX_SETTLE_MS) {
+      onResult(null)
+      return
+    }
+    handler.postDelayed({ awaitChange(before, waited + POLL_MS, onResult) }, POLL_MS)
   }
 
   /**
@@ -181,7 +305,7 @@ class SelectionDriver(
       }
       return
     }
-    walkBackTo(target, command, onDone)
+    walkBackTo(target, command, current, onDone)
   }
 
   /**
@@ -205,16 +329,16 @@ class SelectionDriver(
       if (command.toRight) (gestures.screenWidth() - EDGE_INSET).toFloat() else EDGE_INSET.toFloat(),
       if (command.toRight) (gestures.screenHeight() - EDGE_INSET).toFloat() else EDGE_INSET.toFloat(),
     )
+    gestureCount++
     gestures.dragAndHold(handle, target, DRAG_MS, holdMs) { completed ->
-      handler.postDelayed({
-        val after = observer.latest
+      awaitChange(before) { after ->
         when {
           !completed -> onDone(Outcome.HandleLost)
-          after == null -> onDone(Outcome.NoSelection)
+          after == null -> onDone(Outcome.Moved(before.high(), before.high()))
           after.isEmpty() -> onDone(Outcome.HandleLost)
           else -> onDone(Outcome.Moved(before.high(), after.high()))
         }
-      }, SETTLE_MS)
+      }
     }
   }
 
@@ -236,24 +360,24 @@ class SelectionDriver(
     val y = snapshot.bounds.bottom + HandleLocator.HANDLE_DROP
     val from = PointF(x, y)
 
+    gestureCount++
+
     gestures.drag(from, PointF(x + HandleLocator.SCAN_NUDGE, y), DRAG_MS) { completed ->
       if (!completed) {
         onDone(Outcome.HandleLost)
         return@drag
       }
-      handler.postDelayed({
-        val after = observer.latest
-        val fired = after != null && after.atMs != snapshot.atMs
+      awaitChange(snapshot) { after ->
         when {
-          fired && locator.grabbedAHandle(snapshot, after!!) -> {
+          after != null && locator.grabbedAHandle(snapshot, after) -> {
             locator.rememberAnchor(2 * centre - x)
             onDone(Outcome.Moved(snapshot.high(), after.high()))
           }
           // The probe wrecked the selection. Stop; there is nothing left to hunt for.
-          fired -> onDone(Outcome.HandleLost)
+          after != null -> onDone(Outcome.HandleLost)
           else -> acquireThenRetry(command, onDone, probe + 1)
         }
-      }, SETTLE_MS)
+      }
     }
   }
 
@@ -272,16 +396,41 @@ class SelectionDriver(
   }
 
   private companion object {
-    /** One probe step. The escalation, not this, is what covers a wide word. */
+    /** Floor for one escalation step, for when the node's geometry gives nothing usable. */
     const val STEP_PX = 12f
+
+    /**
+     * How many characters an escalation step is worth. Under one and short words take several
+     * attempts; much over one and a step can jump clean past a short word to the one after.
+     */
+    const val CHARS_PER_ATTEMPT = 1.5f
     const val DRAG_MS = 150L
-    const val SETTLE_MS = 320L
+    /**
+     * The settle is polled, not slept: the announcement usually lands well inside this, and paying a
+     * fixed wait on every gesture of a multi-step press is most of why one felt slow.
+     */
+    const val POLL_MS = 25L
+
+    /**
+     * Measured: a successful step completes in ~170 ms *including* its 150 ms drag, so the
+     * announcement lands within a few tens of milliseconds. The cap only has to outlast that, and
+     * every millisecond of slack is paid again on each silent attempt of an escalation — which is
+     * where a slow press actually spends its time (four silent attempts cost 1.9 s of a 2.1 s press).
+     */
+    const val MAX_SETTLE_MS = 220L
 
     /** Must exceed the widest word on screen once multiplied by [STEP_PX]. */
     const val MAX_ATTEMPTS = 12
 
-    /** A character step overshoots one word, so the walk back is bounded by a word's length. */
-    const val MAX_WALK_BACK = 40
+    /**
+     * The walk back is one estimated drag plus corrections, so this bounds the corrections, not the
+     * characters. It should rarely go past the first.
+     */
+    const val MAX_CORRECTIONS = 6
+
+    /** Sanity bounds on the per-character width derived from a node's geometry. */
+    const val MIN_CHAR_PX = 6f
+    const val MAX_CHAR_PX = 60f
 
     const val EDGE_INSET = 24
     const val PAGE_HOLD_MS = 1200L
