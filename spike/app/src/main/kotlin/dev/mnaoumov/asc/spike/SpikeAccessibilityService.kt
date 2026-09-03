@@ -255,6 +255,13 @@ class SpikeAccessibilityService : AccessibilityService() {
         dx = parts[2].toFloat(),
         settleMs = parts.getOrNull(3)?.toLong() ?: SETTLE_MS,
       )
+      "track" -> track(
+        anchorX = parts[1].toFloat(),
+        y = parts[2].toFloat(),
+        dx = parts[3].toFloat(),
+        count = parts[4].toInt(),
+        settleMs = parts.getOrNull(5)?.toLong() ?: SETTLE_MS,
+      )
       "findhandle" -> findHandle(
         y = parts[1].toFloat(),
         centreX = parts[2].toFloat(),
@@ -773,6 +780,89 @@ class SpikeAccessibilityService : AccessibilityService() {
     }
 
     attempt(0, 0)
+  }
+
+  /**
+   * The closed loop for surfaces where interpolation cannot work — a wrapped phrase, whose node
+   * bounds are the UNION of its line boxes, or an app that reports block-width bounds.
+   *
+   * The trick is that **the toolbar knows what the node does not**. Its horizontal centre tracks the
+   * selection's (measured at two different widths: 615.5 for a word, 720.5 after widening, both
+   * matching the highlight), the two handles are symmetric about that centre, and the ANCHOR handle
+   * does not move while only one edge is being dragged. So the moving handle is simply
+   * `2·centre − anchor`, re-derived from the window list before every step, needing neither the
+   * node's bounds nor its text.
+   *
+   * This is deliberately not "remember where the last drag was dropped". That is what [probe] did,
+   * and a word-snap leaves the handle behind the finger, so the error accumulates until the handle
+   * is outside its own touch target — measured as nine good steps and then nothing.
+   */
+  private fun track(anchorX: Float, y: Float, dx: Float, count: Int, settleMs: Long) {
+    val lines = mutableListOf("track: anchor=$anchorX y=$y dx=$dx count=$count settle=${settleMs}ms")
+
+    fun attempt(i: Int, tries: Int) {
+      if (i >= count) {
+        emit(lines + "track: done after $count step(s)")
+        return
+      }
+      val centre = toolbarCentreX()
+      if (centre == null) {
+        emit(lines + "  step ${i + 1}: no floating toolbar window — no selection, or it is not announced; stopping")
+        return
+      }
+      val handleX = 2 * centre - anchorX
+      val snapshot = lastSelection
+      val reach = dx * (tries + 1)
+      dispatchStroke(
+        stroke = GestureDescription.StrokeDescription(line(handleX, y, handleX + reach, y), 0, PROBE_DRAG_MS),
+        what = "track step ${i + 1}/$count try ${tries + 1}",
+        verbose = false,
+      ) { completed ->
+        if (!completed) {
+          emit(lines + "  step ${i + 1}: gesture CANCELLED; stopping")
+          return@dispatchStroke
+        }
+        handler.postDelayed({
+          val after = lastSelection
+          val fired = after != null && after.atMs != snapshot?.atMs
+          when {
+            fired && grabbedAHandle(snapshot, after!!) -> {
+              lines += "  step ${i + 1}: centre=$centre handle=$handleX reach=${reach}px (x${tries + 1})  " +
+                delta(snapshot, after)
+              attempt(i + 1, 0)
+            }
+            fired -> emit(
+              lines + ("  step ${i + 1}: centre=$centre handle=$handleX — selection did NOT survive: " +
+                delta(snapshot, after) + "; stopping")
+            )
+            tries + 1 < SERVO_MAX_TRIES -> attempt(i, tries + 1)
+            else -> emit(
+              lines + ("  step ${i + 1}: nothing from $handleX at any reach up to ${dx * SERVO_MAX_TRIES}px; stopping")
+            )
+          }
+        }, settleMs)
+      }
+    }
+
+    attempt(0, 0)
+  }
+
+  /**
+   * The floating selection toolbar's horizontal centre — the one piece of selection geometry that
+   * needs no node bounds at all.
+   *
+   * Identified as a window of the selection's own package that is not the full-screen one. Crude,
+   * but the alternative is trusting bounds arithmetic that is exactly what fails here.
+   */
+  private fun toolbarCentreX(): Float? {
+    val pkg = lastSelection?.pkg ?: return null
+    return windows
+      .asSequence()
+      .filter { it.root?.packageName?.toString() == pkg }
+      .map { w -> Rect().also { w.getBoundsInScreen(it) } }
+      .filter { it.width() > 0 && it.width() < FULL_SCREEN_FRACTION * resources.displayMetrics.widthPixels }
+      .minByOrNull { it.width() * it.height() }
+      ?.exactCenterX()
   }
 
   /**
@@ -1321,6 +1411,9 @@ class SpikeAccessibilityService : AccessibilityService() {
      * the target's size only buys duplicate hits — and the nudge is as small as a drag can be while
      * still moving anything.
      */
+    /** A window narrower than this fraction of the screen is a candidate for the floating toolbar. */
+    const val FULL_SCREEN_FRACTION = 0.98f
+
     const val FIND_STEP = 48f
     const val FIND_NUDGE = 8f
     const val FIND_MAX_PROBES = 16

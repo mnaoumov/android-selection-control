@@ -116,9 +116,22 @@ The signature of a real grab is that **one edge held while the other moved, and 
 non-empty**.
 
 **The floating toolbar's horizontal centre tracks the selection's centre** to within ~6 px (measured:
-toolbar 615.5, highlight 621.5, handle midpoint 616.5). Since the handles are symmetric about it,
-that is the one piece of handle geometry available without either arithmetic on node bounds or
-reading anything.
+toolbar 615.5, highlight 621.5, handle midpoint 616.5), and it keeps tracking as the selection
+changes (720.5 after widening, matching the wider highlight). Since the handles are symmetric about
+it and the anchor handle does not move while one edge is dragged, the moving handle is
+`2 × centre − anchor` — **selection geometry with no node bounds and no text**, which is what `track`
+uses where interpolation cannot work.
+
+**The mirror identity holds only while BOTH handles are on the same row.** `moving = 2·centre −
+anchor` tracked a handle from 663.5 to 873.5 across four steps on a node where interpolation is
+useless — and then broke the moment the selection's end crossed to another line, because the start
+handle stays on the first line while the end handle moves to the last, so the toolbar centre is no
+longer their midpoint and the handle row being assumed is the wrong one. The drag then lands on the
+page and destroys the selection. Track the handle's ROW as well as its column, or stop at the wrap.
+
+**Do not track a handle by where the last drag was dropped.** A word-snap leaves the handle behind
+the finger, so the error accumulates until it falls outside its own touch target: measured as nine
+good steps and then nothing at all. Re-derive the position every step.
 
 **A node's bounds are the UNION of its line boxes when its phrase wraps.** Chrome's nodes do hug their
 text, but a phrase running across three lines reports one box covering all three (`196 2314 1060
@@ -281,6 +294,7 @@ fired one from the previous one's callback. Its parts are logged as `[1/3 hold]`
 | `nudge <start\|end> <dx> [settleMs]` | One **closed-loop** step: derive the handle from `selstate`, drag it `dx` px, re-read. The pad's kernel |
 | `servo <start\|end> <dx> <count> [settleMs]` | `nudge` repeated — the closed-loop walk, and the instrument that actually measures granularity |
 | `findhandle <y> <centreX> [step] [maxProbes]` | Hunt for a handle by probing outward from a centre, for the surfaces where interpolation cannot reach it |
+| `track <anchorX> <y> <dx> <count> [settleMs]` | The closed loop **without** node bounds: derive the moving handle as `2 × toolbarCentre − anchorX` before every step |
 | `draghold <x1> <y1> <x2> <y2> [dragMs] [holdMs]` | Drag then **hold without lifting** (two chained strokes), for the edge auto-scroll that plain `drag` can never trigger |
 
 Read either walk's output as a **sequence of offsets**, not of pixels: values landing inside a word
