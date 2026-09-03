@@ -147,7 +147,8 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
        * Posted rather than called, so each step starts from a fresh loop turn and the status line
        * gets drawn between them.
        */
-      if (held == command && madeProgress(outcome)) {
+      val stillHeld = held == command && pad?.fingerStillDown(command) == true
+      if (stillHeld && madeProgress(outcome)) {
         handler.post { if (held == command) step(command) }
       } else {
         held = null

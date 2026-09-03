@@ -2,10 +2,15 @@ package dev.mnaoumov.asc
 
 import android.content.Context
 import android.graphics.PixelFormat
+import android.os.SystemClock
+import android.text.Spannable
+import android.text.SpannableString
+import android.text.style.RelativeSizeSpan
 import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
@@ -50,6 +55,25 @@ class Pad(
   private var params: WindowManager.LayoutParams? = null
   private var statusView: TextView? = null
 
+  private var heldCommand: PadCommand? = null
+  private var lastTouchAtMs = 0L
+
+  /**
+   * Whether a finger really is still on [command]'s button — the gate on repeating it.
+   *
+   * **`ACTION_UP` alone cannot be trusted here, and that is measured, not defensive.** While the
+   * service is dispatching its own gestures the pad's pending UP can simply never arrive: a single
+   * injected tap logged `action=0` and then nothing, and the next touch three seconds later opened
+   * with `action=3` (CANCEL). In between, the repeat chain treated the button as held and walked the
+   * selection four characters for one tap.
+   *
+   * So the test is positive evidence rather than the absence of a release: the last touch event on
+   * that button has to be recent. A held finger keeps producing MOVE events, a lifted one stops, and
+   * a swallowed UP now costs at most one extra step instead of an unbounded run.
+   */
+  fun fingerStillDown(command: PadCommand): Boolean =
+    heldCommand == command && SystemClock.uptimeMillis() - lastTouchAtMs < TOUCH_FRESH_MS
+
   var mode: PadMode = PadMode.DOCKED
     private set
 
@@ -64,6 +88,29 @@ class Pad(
     windowManager.addView(view, layoutParams)
     root = view
     params = layoutParams
+    view.post { logButtonBounds(view) }
+  }
+
+  /**
+   * Logs where each button actually ended up, in raw screen pixels.
+   *
+   * Testing the pad means pressing its buttons with `adb shell input tap`, and computing those
+   * coordinates by hand from a screenshot is how a tap ends up 11 px outside the pad and gets
+   * written down as "gestures pass through the overlay" — a wrong conclusion that cost a whole
+   * round of measurement. Ask the layout instead. Labels are the pad's own glyphs, not user text.
+   */
+  private fun logButtonBounds(view: View) {
+    val at = IntArray(2)
+    fun walk(v: View) {
+      if (v is Button) {
+        v.getLocationOnScreen(at)
+        // Flatten the caption's newline: a log line that wraps loses everything after it.
+        val label = v.text.toString().replace("\n", "/")
+        Diag.log("pad button '$label' at ${at[0]},${at[1]} ${v.width}x${v.height}")
+      }
+      if (v is LinearLayout) for (i in 0 until v.childCount) walk(v.getChildAt(i))
+    }
+    walk(view)
   }
 
   fun hide() {
@@ -107,6 +154,17 @@ class Pad(
         width = WindowManager.LayoutParams.MATCH_PARENT
         height = WindowManager.LayoutParams.WRAP_CONTENT
         gravity = Gravity.BOTTOM or Gravity.START
+        /*
+         * Sit ABOVE the navigation bar, not under it.
+         *
+         * An accessibility overlay is laid out in raw screen coordinates, so a window docked to
+         * `Gravity.BOTTOM` reaches the physical bottom edge and the system draws the navigation bar
+         * on top of it. Measured on the rig at 720x1520: the gesture pill lay across the second row
+         * of buttons. The offset is read from `WindowMetrics` rather than from an
+         * `OnApplyWindowInsetsListener`, because this window is never dispatched navigation-bar
+         * insets at all — the listener fires with `bottom = 0` and the row stays covered.
+         */
+        y = navigationBarHeight()
       }
       PadMode.FLOATING -> {
         width = WindowManager.LayoutParams.WRAP_CONTENT
@@ -124,11 +182,17 @@ class Pad(
       WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
   }
 
+  private fun navigationBarHeight(): Int =
+    windowManager.currentWindowMetrics.windowInsets
+      .getInsets(WindowInsets.Type.navigationBars())
+      .bottom
+
   private fun buildView(themed: Context, layoutParams: WindowManager.LayoutParams): View {
     val column = LinearLayout(themed).apply {
       orientation = LinearLayout.VERTICAL
       setBackgroundColor(BACKGROUND)
       setPadding(PADDING, PADDING, PADDING, PADDING)
+
     }
 
     // Only the floating pad needs a grip: a docked one has nowhere to go.
@@ -175,11 +239,11 @@ class Pad(
           themed,
           commandButtons(
             themed,
-            PadCommand.WORD_LEFT to "⇤",
-            PadCommand.CHAR_LEFT to "←",
-            PadCommand.CHAR_RIGHT to "→",
-            PadCommand.WORD_RIGHT to "⇥",
-          ) + action(themed, "⇄") { onSwapEdge() }
+            PadCommand.WORD_LEFT to "⇤\nword",
+            PadCommand.CHAR_LEFT to "←\nchar",
+            PadCommand.CHAR_RIGHT to "→\nchar",
+            PadCommand.WORD_RIGHT to "⇥\nword",
+          ) + action(themed, "⇄\nswap") { onSwapEdge() }
         )
       )
       column.addView(
@@ -187,11 +251,11 @@ class Pad(
           themed,
           commandButtons(
             themed,
-            PadCommand.PAGE_UP to "⇞",
-            PadCommand.DOC_START to "⤒",
-            PadCommand.DOC_END to "⤓",
-            PadCommand.PAGE_DOWN to "⇟",
-          ) + action(themed, "▣") { toggleMode() }
+            PadCommand.PAGE_UP to "⇞\npage",
+            PadCommand.DOC_START to "⤒\nstart",
+            PadCommand.DOC_END to "⤓\nend",
+            PadCommand.PAGE_DOWN to "⇟\npage",
+          ) + action(themed, "▣\nfloat") { toggleMode() }
         )
       )
     } else {
@@ -230,17 +294,24 @@ class Pad(
    * set by hand since consuming the touch means the button no longer draws that state itself.
    */
   private fun holdable(themed: Context, label: String, command: PadCommand): View =
-    Button(themed).apply {
-      text = label
+    button(themed, label).apply {
       setOnTouchListener { view, event ->
         when (event.actionMasked) {
           MotionEvent.ACTION_DOWN -> {
             view.isPressed = true
+            heldCommand = command
+            lastTouchAtMs = SystemClock.uptimeMillis()
             onPressStart(command)
+            true
+          }
+          MotionEvent.ACTION_MOVE -> {
+            // Freshness, not position: see [fingerStillDown].
+            lastTouchAtMs = SystemClock.uptimeMillis()
             true
           }
           MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
             view.isPressed = false
+            heldCommand = null
             onPressEnd()
             true
           }
@@ -264,10 +335,29 @@ class Pad(
   }
 
   private fun action(themed: Context, label: String, onClick: () -> kotlin.Unit): View =
-    Button(themed).apply {
+    button(themed, label).apply { setOnClickListener { onClick() } }
+
+  /**
+   * A pad button, captioned where there is no room to spell it out.
+   *
+   * The docked pad is five buttons across the screen — 137 px each on the rig — so a wordy label
+   * does not fit and a bare arrow does not say whether it moves a character or a word. Both lines
+   * therefore go on the button, and the glyph is scaled back up so it stays the readable part.
+   */
+  private fun button(themed: Context, label: String): Button = Button(themed).apply {
+    isAllCaps = false
+    val newline = label.indexOf('\n')
+    if (mode == PadMode.DOCKED && newline > 0) {
+      textSize = CAPTION_TEXT_SIZE
+      maxLines = 2
+      setPadding(0, 0, 0, 0)
+      text = SpannableString(label).apply {
+        setSpan(RelativeSizeSpan(GLYPH_SCALE), 0, newline, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+      }
+    } else {
       text = label
-      setOnClickListener { onClick() }
     }
+  }
 
   /**
    * The strip consumes its touches (returns true), unlike a button's listener, because a drag must
@@ -321,5 +411,19 @@ class Pad(
     const val BACKGROUND = 0xE01565C0.toInt()
     const val STRIP_BACKGROUND = 0xFF0D47A1.toInt()
     const val FOREGROUND = 0xFFFFFFFF.toInt()
+
+    /**
+     * How recent the last touch event on a button must be for a hold to keep repeating.
+     *
+     * Generous, because a finger resting still produces MOVE events only now and then; short enough
+     * that a swallowed UP cannot run away with the selection.
+     */
+    const val TOUCH_FRESH_MS = 600L
+
+    /** Small enough that "start" fits a fifth of the screen width. */
+    const val CAPTION_TEXT_SIZE = 10f
+
+    /** The glyph carries the direction, so it is scaled back up above its caption. */
+    const val GLYPH_SCALE = 1.8f
   }
 }

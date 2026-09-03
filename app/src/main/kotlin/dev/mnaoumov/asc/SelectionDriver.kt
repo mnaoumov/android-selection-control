@@ -174,7 +174,11 @@ class SelectionDriver(
    * until the offset is one past where we started. Several gestures for one press, but exact, and
    * self-correcting because every step is read back.
    */
-  private fun growOneCharacter(command: PadCommand, onDone: (Outcome) -> Unit) {
+  private fun growOneCharacter(
+    command: PadCommand,
+    onDone: (Outcome) -> Unit,
+    retriesLeft: Int = MAX_STEP_RETRIES,
+  ) {
     val beforeGrow = observer.latest ?: run {
       onDone(Outcome.NoSelection)
       return
@@ -209,7 +213,7 @@ class SelectionDriver(
         onDone(Outcome.Moved(start, target))
         return@growOneUnit
       }
-      walkBackTo(target, command, start, onDone)
+      walkBackTo(target, command, start, onDone, retriesLeft = retriesLeft)
     }
   }
 
@@ -230,6 +234,7 @@ class SelectionDriver(
     origin: Int,
     onDone: (Outcome) -> Unit,
     guard: Int = 0,
+    retriesLeft: Int = MAX_STEP_RETRIES,
   ) {
     val before = observer.latestWithFreshBounds()
     val current = before?.high()
@@ -244,11 +249,23 @@ class SelectionDriver(
 
     val toLose = current - target
     if (toLose < 0) {
-      // We are already past the target and cannot come back: moving this edge outward again is a
-      // GROW, which snaps a whole word. Trying to correct upward is what made the loop oscillate
-      // 31 → 29 → 31 → 29 until it destroyed the selection. Stop one character out instead.
-      Diag.log("  shrink: overshot to $current past $target; stopping rather than oscillating")
-      onDone(Outcome.Moved(origin, current))
+      /*
+       * Past the target, and this edge cannot creep back: outward is a GROW and a grow snaps a whole
+       * word. Correcting upward by hand is what made the loop oscillate 31 → 29 → 31 → 29 until it
+       * destroyed the selection, so that is still not an option.
+       *
+       * What IS an option is starting the press over from here. The overshoot left the selection at
+       * a perfectly good offset, one short of where it was headed, so another grow-and-walk-back
+       * aims at the same place from a character closer — and it converges, because each retry aims
+       * absolutely rather than stepping. Bounded, because a press that keeps missing must end.
+       */
+      if (retriesLeft > 0 && selectionStillOnScreen()) {
+        Diag.log("  shrink: overshot to $current past $target; starting the step over from here")
+        growOneCharacter(command, onDone, retriesLeft - 1)
+      } else {
+        Diag.log("  shrink: overshot to $current past $target and out of retries")
+        onDone(Outcome.Moved(origin, current))
+      }
       return
     }
 
@@ -262,16 +279,39 @@ class SelectionDriver(
     }
 
     /*
-     * Aim SHORT, never past. The per-character width is a line average, and in proportional text a
-     * narrow run ("with") is far tighter than it, so a reach computed for N characters can cross
-     * N+1. Undershooting costs one more small gesture; overshooting cannot be undone, because the
-     * only way back is a grow and a grow snaps a word.
+     * Aim AT the target, not short of it.
+     *
+     * The old version deliberately undershot by a character and then crept, on the theory that a
+     * line-average width could not be trusted in proportional text. The measured behaviour says
+     * otherwise, and says it precisely: the handle lands on the character under the finger, and the
+     * offset comes out as `floor((x − left) / perChar)` to within a character. Two traces from the
+     * same node, both one drag:
+     *
+     *     aim at 16: x = 712.0 → landed 16      aim at 17: x = 733.875 → landed 17
+     *
+     * What the creep did instead was step a *fixed* 0.55 × perChar from wherever it happened to be
+     * — 24 px where a character was 21.9 — and floor-rounding turned that into two characters. The
+     * loop then refused to correct upward (a grow snaps a whole word) and stopped, so `char →` on a
+     * one-line node reported `Moved(16, 16)`: a press that cost 1.36 s, four gestures, and moved
+     * nothing. Pressed again it did exactly the same thing, for ever. That is the whole of "still
+     * cannot select char by char".
+     *
+     * Aiming at the target keeps every probe absolute, so an error in `perChar` shows up as landing
+     * on a neighbouring offset and the next iteration corrects from the new position rather than
+     * compounding a relative step.
      */
-    val reach = direction * when {
-      toLose >= 2 -> (toLose - 1) * perChar
-      // Grows with each retry, because a creep that moved nothing was simply too short.
-      else -> (perChar * FINAL_STEP_FRACTION * (guard + 1)).coerceAtLeast(MIN_SHRINK_PX)
-    }
+    /*
+     * ...and land INSIDE the target character, not on its boundary.
+     *
+     * The offset comes out as a floor, so a finger placed exactly on the boundary between characters
+     * 19 and 20 can round either way, and measured it rounded down: aiming at x = 799.5 for offset
+     * 20 returned 19, twice in a row, and the press burned seven gestures getting nowhere. Backing
+     * off a fraction of a character puts the finger clearly within the target's own cell.
+     */
+    val reach = direction * (toLose - BOUNDARY_BIAS) * perChar +
+      // A probe that moved nothing was too short to leave the character it started in; lengthen it
+      // rather than repeat it.
+      direction * guard * perChar * FINAL_STEP_FRACTION
 
     gestureCount++
 
@@ -291,12 +331,12 @@ class SelectionDriver(
           // one character out.
           after == null ->
             if (guard + 1 < MAX_CORRECTIONS && selectionStillOnScreen()) {
-              walkBackTo(target, command, origin, onDone, guard + 1)
+              walkBackTo(target, command, origin, onDone, guard + 1, retriesLeft)
             } else {
               onDone(Outcome.Moved(origin, current))
             }
           !locator.grabbedAHandle(before, after) -> onDone(Outcome.HandleLost)
-          else -> walkBackTo(target, command, origin, onDone, guard + 1)
+          else -> walkBackTo(target, command, origin, onDone, guard + 1, retriesLeft)
         }
       }
     }
@@ -521,6 +561,21 @@ class SelectionDriver(
      */
     const val FINAL_STEP_FRACTION = 0.55f
     const val MIN_SHRINK_PX = 8f
+
+    /**
+     * How far inside the target character to aim, as a fraction of its width. Enough to be clear of
+     * the boundary that floor-rounding is ambiguous at, small enough not to reach the next one.
+     */
+    const val BOUNDARY_BIAS = 0.35f
+
+    /**
+     * How many times one press may restart its walk back after overshooting the target.
+     *
+     * Each retry costs a grow plus a probe, so this trades about a second for a press that actually
+     * moves. Zero was the old behaviour, and it is what made the pad stick: the press reported
+     * success while leaving the selection exactly where it found it.
+     */
+    const val MAX_STEP_RETRIES = 2
 
     /** Sanity bounds on the per-character width derived from a node's geometry. */
     const val MIN_CHAR_PX = 6f
