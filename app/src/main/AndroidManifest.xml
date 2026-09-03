@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        Deliberately NO permissions at all, from the very first build — not even INTERNET.
+
+        The absence is enforced by the kernel (the UID is left out of the `inet` group), not by a
+        promise, and it cannot be acquired later without a new APK the user installs. Holding the
+        property from day one means never having to claw it back.
+
+        In particular there is no SYSTEM_ALERT_WINDOW: the pad is a TYPE_ACCESSIBILITY_OVERLAY
+        window, which an accessibility service may add without it. Verify on the built APK rather
+        than trusting this file:
+            aapt2 dump permissions app-debug.apk    # package line, nothing under it
+    -->
+
+    <application
+        android:allowBackup="false"
+        android:icon="@android:drawable/ic_menu_edit"
+        android:label="@string/app_name"
+        android:supportsRtl="true">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".AscAccessibilityService"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+    </application>
+
+</manifest>

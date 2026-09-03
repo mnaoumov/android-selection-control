@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        Debug-only additions. Still NO permissions: the zero-permission property is verified on the
+        built debug APK, so anything added here would show up in `aapt2 dump permissions`.
+    -->
+    <application>
+        <activity
+            android:name=".TargetActivity"
+            android:exported="true"
+            android:label="ASC target" />
+    </application>
+
+</manifest>
