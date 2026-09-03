@@ -3,7 +3,6 @@ package dev.mnaoumov.asc
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
 import android.graphics.PointF
-import android.os.Handler
 
 /**
  * A synthetic finger that presses once, moves as often as asked, and lifts when told.
@@ -39,7 +38,13 @@ import android.os.Handler
  * press-move-release: the handle has to be found again every time, a miss is a tap on the page, and
  * the target app puts its selection toolbar back between every pair of presses. Hold the pointer and
  * the handle is caught once, its position is afterwards *known* rather than derived, and the app
- * stays in a drag for the whole burst — so the toolbar stays down.
+ * stays in a drag — so the toolbar stays down.
+ *
+ * **That payoff is real, but only WITHIN one burst, never across taps.** A chain lives exactly as
+ * long as no real finger touches the screen, so the shape that works is: a tap is its own short
+ * chain, and a repeat is one long chain that runs while the finger is OFF the pad, ended by the tap
+ * that stops it. A design that expects one chain to survive a button press expects the impossible,
+ * and the whole of the pad build's held round was built on that expectation.
  *
  * **The mechanism it is built around, which a first attempt got wrong.** A stroke marked
  * `willContinue` keeps its pointer down, and the continuation must be dispatched from the previous
@@ -56,7 +61,6 @@ import android.os.Handler
  * chain runs itself. Read the result from the selection stream, as everything else here does.
  */
 class HeldPointer(
-  private val handler: Handler,
   /** Dispatches a gesture; the callback fires when the framework has finished playing it. */
   private val dispatch: (GestureDescription, (Boolean) -> kotlin.Unit) -> Boolean,
 ) {
@@ -88,11 +92,15 @@ class HeldPointer(
     /*
      * The grab IS the first move, along the same path a released drag would take.
      *
-     * A grab that only pressed and twitched two pixels never caught the handle: the chain ran
-     * healthily — sixty-odd links, a clean lift, the next grab accepted — while the selection sat
-     * still through twelve escalating moves. The released path that does work travels past the touch
-     * slop and then on to its destination in one stroke, so the first link here does exactly that
-     * and only the *holding* is new.
+     * The released path that works travels past the touch slop and then on to its destination in one
+     * stroke, so the first link here does exactly that and only the *holding* is new. A touch that
+     * moves less than the slop and lifts inside the tap timeout IS a tap, and a tap on a link
+     * navigates — the detour is what stops a miss taking the page with it.
+     *
+     * An earlier note here blamed a two-pixel twitch for never catching the handle, on a run where
+     * sixty links played healthily while the selection sat still. That run was on a WRAPPED node,
+     * whose derived handle was nowhere near the real one, so it cannot support the inference. The
+     * detour stays because the gesture spike measured its worth; the twitch was never the thing being tested.
      */
     val away = if (towards.x >= from.x) SLOP_DETOUR_PX else -SLOP_DETOUR_PX
     val first = GestureDescription.StrokeDescription(
@@ -114,9 +122,22 @@ class HeldPointer(
     onGrabbed(accepted)
   }
 
-  /** Ask the pressed pointer to travel to [point]. Silent: the selection stream reports the result. */
-  fun moveTo(point: PointF) {
+  /**
+   * Ask the pressed pointer to travel to [point]. Silent about the RESULT — the selection stream
+   * reports that — but never silent about having no pointer to move.
+   *
+   * Recording a goal on a chain that has already died is what made the last round unreadable: twelve
+   * escalating destinations were dutifully written into [goal], nobody was left alive to read them,
+   * and the log showed a grab, then nothing, then another grab. "Every move after the first does
+   * nothing" was true, and it was this, not the target app.
+   */
+  fun moveTo(point: PointF): Boolean {
+    if (stroke == null) {
+      Diag.log("held: moveTo(${point.x}) ignored — nothing is held")
+      return false
+    }
     goal = PointF(point.x, point.y)
+    return true
   }
 
   /**
@@ -187,8 +208,17 @@ class HeldPointer(
       lift()
       return
     }
-    val previous = stroke ?: return
-    val from = at ?: return
+    // Both of these used to return in silence, which reads in a log exactly like a chain that simply
+    // stopped being asked for anything. They should be impossible — a link only runs from the
+    // previous one's completion — so if one ever fires it is worth knowing about, not hiding.
+    val previous = stroke ?: run {
+      Diag.log("held: a link ran with no stroke to continue — the chain was forgotten under it")
+      return
+    }
+    val from = at ?: run {
+      Diag.log("held: a link ran with no position — the chain was forgotten under it")
+      return
+    }
     val to = goal ?: PointF(from.x + idleWobble(), from.y)
     goal = null
 
@@ -214,8 +244,16 @@ class HeldPointer(
     if (!accepted) lost("link refused")
   }
 
+  /**
+   * Every way this chain can die goes through here, and it logs under the same `held:` prefix as
+   * everything else — which it did not, for the whole of the pad build. It said "held pointer: …", so one
+   * grep on `held:` saw the grabs and the lifts and none of the deaths, and a chain that died looked
+   * exactly like a chain that had never been asked to do anything. That is most of why this class
+   * was described as failing silently.
+   */
   private fun lost(why: String) {
-    Diag.log("held pointer: $why")
+    Diag.log("held: LOST after $links link(s) — $why")
+    links = 0
     forget()
   }
 
