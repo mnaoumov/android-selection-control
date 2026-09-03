@@ -91,12 +91,28 @@ class HandleLocator {
    */
   fun grabbedAHandle(before: SelectionObserver.Snapshot?, after: SelectionObserver.Snapshot): Boolean {
     if (before == null) return false
-    if (after.isEmpty()) return false
-    // "Same node" must NOT be judged by bounds: they move whenever the page scrolls, and a browser
-    // scrolls constantly — its toolbar collapses on the first scroll and shifts everything. Length
-    // and package identify the run without depending on where it currently sits.
-    if (after.sourceLength != before.sourceLength) return false
     if (after.packageName != before.packageName) return false
+
+    // What failure actually looks like: a drag that missed the handle lands on the page and
+    // collapses the selection to a caret. Every measured miss looked like this — 22..22, 11..11,
+    // 160..160 — so emptiness is the discriminator, not novelty.
+    if (after.isEmpty()) return false
+
+    /*
+     * A DIFFERENT source node is success, not failure.
+     *
+     * The event's source follows the moving end: grow past a node's edge and the next announcement
+     * describes the node now holding that end, with offsets local to it. Treating that as a lost
+     * handle made the pad fail at every node boundary — which on a web page is every few words, and
+     * is exactly the "loses the handle too easily" the owner reported. The one-edge-held test below
+     * only means anything while the offsets share a frame of reference.
+     */
+    val sameNode = when {
+      before.source != null && after.source != null -> before.source == after.source
+      else -> after.sourceLength == before.sourceLength
+    }
+    if (!sameNode) return true
+
     return after.low() == before.low() || after.high() == before.high()
   }
 

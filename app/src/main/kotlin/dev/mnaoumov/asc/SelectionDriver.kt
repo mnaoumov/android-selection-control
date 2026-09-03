@@ -175,19 +175,37 @@ class SelectionDriver(
    * self-correcting because every step is read back.
    */
   private fun growOneCharacter(command: PadCommand, onDone: (Outcome) -> Unit) {
-    val start = observer.latest?.high() ?: run {
+    val beforeGrow = observer.latest ?: run {
       onDone(Outcome.NoSelection)
       return
     }
-    val target = if (command.toRight) start + 1 else start - 1
+    val start = beforeGrow.high()
 
     growOneUnit(command) { outcome ->
       if (outcome !is Outcome.Moved) {
         onDone(outcome)
         return@growOneUnit
       }
+      val afterGrow = observer.latest ?: run {
+        onDone(Outcome.NoSelection)
+        return@growOneUnit
+      }
+
+      /*
+       * Offsets are local to the source node, and a grow can carry the end into the NEXT node —
+       * after which `start + 1` is a number in a frame of reference that no longer exists. When the
+       * node has changed, one character past the old end is simply one character into the new one.
+       */
+      val crossed = beforeGrow.source != null && afterGrow.source != null &&
+        beforeGrow.source != afterGrow.source
+      val target = when {
+        crossed -> if (command.toRight) 1 else afterGrow.sourceLength - 1
+        command.toRight -> start + 1
+        else -> start - 1
+      }
+
       // A grow that happened to move exactly one character (a lone space, say) is already the answer.
-      if (outcome.toOffset == target) {
+      if (afterGrow.high() == target) {
         onDone(Outcome.Moved(start, target))
         return@growOneUnit
       }
