@@ -105,25 +105,30 @@ finger at x(target)" however good the pixel model is — which is why a characte
 to seven gestures of read-and-correct rather than one. Do not rebuild the aim on the assumption that
 it is a pure function; it is not.
 
-**A held pointer moves the handle once, beautifully, and then the app stops listening.** The chain
-mechanism is solved: continue each stroke from the previous gesture's `onCompleted`, immediately —
-continuing 300 ms later after reading the selection back never grabs anything, and a timer that
-fires early is worse, because dispatching while a gesture plays cancels it. Give the lift a path
-with a length, too: a `moveTo` on its own throws, and the throw lands inside a completion callback
-where it strands a pointer nobody can reach.
+**Continued strokes do not stay down, and that is now measured on two targets.** The chain
+mechanism itself is solved: continue each stroke from the previous gesture's `onCompleted`,
+immediately — continuing 300 ms later after reading the selection back never grabs anything, and a
+timer that fires early is worse, because dispatching while a gesture plays cancels it. Give the lift
+a path with a length too: a `moveTo` on its own throws, and the throw lands inside a completion
+callback where it strands a pointer nobody can reach.
 
-With that right, a held stroke that presses, detours past the slop and travels to its destination
-moves the selection **exactly one character in 222 ms and one gesture** — against 0.7–2.3 s and two
-to seven escalating drags for the released path. Every move after that one does nothing at all,
-through twelve escalating destinations, by continuation or by lift-and-regrab alike; the page does
-not scroll and no word is re-selected, so those strokes reach nothing rather than landing wrong.
-Chrome seems to end its handle drag when the first gesture completes and not to start another.
+With all that right, the pointer still does not persist. Against Chrome the first held stroke moved
+the selection **one character in 222 ms and one gesture** — three times faster than the released
+path — and every later move did nothing at all, through twelve escalating destinations. Against a
+plain selectable `TextView` in this app's own debug target the presses work, but the log shows a
+fresh grab for every single gesture: `isHeld` is false each time, so the chain is not surviving
+there either and what looks like a held pointer is the released path wearing its coat.
 
-That single measurement also explains the entry above about the landed offset not being a function
-of the final pixel: it is a function of the final pixel **and the lift**. Held, the handle stays
-exactly where it is put; lifted, the app snaps it somewhere of its own. Which is why a character
-step needs several read-and-correct rounds, and why finishing the held pointer is the one change
-that would make this pad fast. `HeldPointer.kt` holds the work, deliberately NOT wired in.
+One measurement from it is worth keeping regardless: the landed offset is a function of the final
+pixel **and the lift**. Held, the handle stays exactly where it is put; lifted, the app snaps it
+somewhere of its own. That is why a character step needs several read-and-correct rounds today, and
+it is the reason to come back to this. `HeldPointer.kt` holds the work, deliberately NOT wired in.
+
+**Interpolation needs a box that hugs its text, and a `TextView` does not give you one.** The debug
+target's blocks were `MATCH_PARENT` at first, so a 30-character node reported itself 1208 px wide;
+every derived handle landed hundreds of pixels right of the real one and every press failed. It read
+exactly like a gesture problem and was a fixture problem — the blocks are `WRAP_CONTENT` now. Worth
+remembering before blaming the loop for a target whose node bounds are wider than its text.
 
 **An overlay's `LayoutParams` x/y are inset by the status bar; `dispatchGesture` coordinates are raw
 screen pixels.** Ask for (60, 1040) and the window lands at y=1181 — 141 px lower, the status bar's

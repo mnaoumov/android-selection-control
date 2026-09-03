@@ -75,10 +75,23 @@ class TargetActivity : Activity() {
     setPadding(0, PADDING, 0, 4)
   }
 
+  /**
+   * A block of selectable text that is exactly as wide as its text.
+   *
+   * Width matters more than it looks. The pad derives a handle position by interpolating across the
+   * node bounds, which only means anything when the box hugs the text — true of Chrome inline nodes,
+   * and false of a full-width TextView. Left at MATCH_PARENT this rig reported a 30-character node
+   * 1208 px wide, so every derived handle landed hundreds of pixels right of the real one and every
+   * press failed, which looked like a gesture problem and was a fixture problem.
+   */
   private fun selectable(text: String) = TextView(this).apply {
     this.text = text
     textSize = 18f
     setTextIsSelectable(true)
+    layoutParams = LinearLayout.LayoutParams(
+      LinearLayout.LayoutParams.WRAP_CONTENT,
+      LinearLayout.LayoutParams.WRAP_CONTENT,
+    )
   }
 
   companion object {
