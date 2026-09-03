@@ -250,14 +250,25 @@ saving and restoring it, so anything else you rely on (a password manager's auto
 preserved and a second run is a no-op. It also picks the **physical device** and ignores emulators,
 per *Never touch* below.
 
-**There is no way to enable this from Settings on this device, and that is not a bug in the app.**
-ECM blocks the accessibility toggle for anything it considers sideloaded, deciding from install
-provenance: an `adb install` leaves `installerPackageName=null` and
-`initiatingPackageName=com.android.shell`, which it treats as untrusted. The toggle is then **absent,
-not greyed out**, and OxygenOS offers no "allow restricted settings" route, nor can `appops` clear it
-(adb's uid lacks `MANAGE_APP_OPS_MODES`). A trusted install source is the only real fix — which is
-why Play is a design constraint for this project rather than a distribution preference. Full
-reasoning in `the gesture spike's notes`.
+**The app DOES appear in Settings → Accessibility → Downloaded apps; what is missing is the switch
+inside it.** Say it that way round, because the looser version ("it does not appear in Settings") is
+wrong and the row is genuinely there, reading `Selection Pad — Off ›` exactly like every other entry.
+
+Open that row and it offers only **Shortcut** and **App info** — there is no "use this service"
+toggle. Verified on the app 2026-09-03 by `uiautomator dump`: the page's single `Switch`
+(`com.android.settings:id/switch_layout`) belongs to the Shortcut row. The control is Play-installed
+Bitwarden's row in the same list, which reads `On / Assist with filling password fields…` because it
+gets a real toggle in that position.
+
+The cause is ECM, keying on install provenance: an `adb install` leaves `installerPackageName=null`
+and `initiatingPackageName=com.android.shell`, which it treats as untrusted. OxygenOS offers no
+"allow restricted settings" route, and `appops` cannot clear it either (adb's uid lacks
+`MANAGE_APP_OPS_MODES`). A trusted install source is the only real fix — which is why Play is a
+design constraint here rather than a distribution preference. Full reasoning in `the gesture spike's notes`.
+
+A further wrinkle worth knowing: a service enabled with `settings put` **runs**, but that Settings
+row still reads `Off`. So the list is not a reliable indicator of what is actually running — check
+`settings get secure enabled_accessibility_services`, or just look for the pad.
 
 The launcher entry (**Selection Pad**) shows the Play-required disclosure and a link to Accessibility
 settings; on this device that link is informational, since the toggle will not be there.
