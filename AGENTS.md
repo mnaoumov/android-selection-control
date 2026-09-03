@@ -105,17 +105,17 @@ finger at x(target)" however good the pixel model is — which is why a characte
 to seven gestures of read-and-correct rather than one. Do not rebuild the aim on the assumption that
 it is a pure function; it is not.
 
-**A continuing stroke must be continued BEFORE the previous one completes.** The owner's idea of
-holding the pointer down across presses — press once, move on each press, release at the end — is
-right in principle and was built and measured: it grabbed nothing at all. Eight strokes walked the
-pointer from x=690 to x=2104, clean off the side of the screen, with the selection sitting unchanged
-on the word it started on (and, to its credit, no damage: no scroll, no navigation). The cause is the
-`StrokeDescription` contract — a stroke marked `willContinue` has its continuation dispatched from
-the previous gesture's completion callback here, which is exactly too late, so every stroke is
-cancelled. Making it work needs continuations dispatched on a timer slightly AHEAD of each stroke
-ending, which is a different loop from one that reads the result of each move before choosing the
-next. Worth doing: while a drag is held the target app keeps its selection toolbar down, which is the
-real fix for the toolbar reappearing on every press.
+**A continuing stroke has to be continued from the previous gesture's completion, at once.** Three
+shapes of the held-pointer idea were measured. Continuing after reading the selection back (about
+300 ms later) never grabbed anything: eight strokes walked the pointer from x=690 to x=2104, off the
+side of the screen, selection untouched. Continuing from a timer that fired slightly EARLY was no
+better — dispatching while a gesture is still playing cancels it. Continuing immediately from
+`onCompleted` **works**: one press moved the selection one character in 253 ms and a single gesture,
+the fastest this project has managed by a factor of three. What is still broken is the release: after
+the first lift, later grabs are refused in silence and twelve escalating drags move nothing, which
+looks like a pointer left down inside the framework. `HeldPointer.kt` holds that work, deliberately
+NOT wired into the service. Worth finishing — a held drag also keeps the target app's selection
+toolbar down, which is the real answer to it reappearing on every press.
 
 **An overlay's `LayoutParams` x/y are inset by the status bar; `dispatchGesture` coordinates are raw
 screen pixels.** Ask for (60, 1040) and the window lands at y=1181 — 141 px lower, the status bar's
