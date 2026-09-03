@@ -274,6 +274,14 @@ class SpikeAccessibilityService : AccessibilityService() {
         count = parts[3].toInt(),
         settleMs = parts.getOrNull(4)?.toLong() ?: SETTLE_MS,
       )
+      // The held-pointer fix — the same walk with the finger never lifting, and driven by broadcast so that
+      // nothing touches the screen. That is the control [servo] cannot give.
+      "held" -> held(
+        edge = parts[1],
+        dx = parts[2].toFloat(),
+        count = parts[3].toInt(),
+        linkMs = parts.getOrNull(4)?.toLong() ?: HELD_LINK_MS,
+      )
       // The pad build Phase 1a — the overlay that has to become the pad.
       "overlay" -> when (parts.getOrNull(1)) {
         "on" -> overlayOn(
@@ -301,7 +309,7 @@ class SpikeAccessibilityService : AccessibilityService() {
         "unknown command '${parts[0]}' — try: " +
           "dump|node|focus|select|clear|gran|copy|windows|" +
           "tap|long|drag|pressdrag|nodetap|nodelong|sel|events|chars|" +
-          "selstate|probe|nudge|servo|draghold|overlay"
+          "selstate|probe|nudge|servo|held|draghold|overlay"
       )
     }
   }
@@ -780,6 +788,139 @@ class SpikeAccessibilityService : AccessibilityService() {
     }
 
     attempt(0, 0)
+  }
+
+  /**
+   * A HELD pointer: press once, walk the handle with continued strokes, and lift only at the end —
+   * the shape the held-pointer fix needs, and the instrument that says why it has never worked.
+   *
+   * The released path ([servo]) pays for its lift: the target app snaps the handle to a boundary of
+   * its own choosing when the finger comes up, so a step is a read-and-correct round rather than a
+   * move. Held, the handle stays exactly where it is put — measured at 222 ms for one character
+   * against 0.7-2.3 s released.
+   *
+   * **What this command exists to measure.** `MotionEventInjector.onMotionEvent` calls
+   * `cancelAnyPendingInjectedEvents()` for EVERY real touch, and that clears the
+   * `mStrokeIdToPointerId` map `prepareToContinueOldGesture()` needs — so the platform should cancel
+   * a held pointer the instant a real finger touches the screen, anywhere. Every earlier attempt
+   * drove this from a pad BUTTON, which is a real touch, so the chain could never have survived its
+   * own trigger. This command is driven by broadcast and touches nothing, which is the control every
+   * earlier round was missing.
+   *
+   * Every link is timestamped and its dispatch result recorded, so a chain that dies says where and
+   * when rather than going quiet. [linkMs] is a parameter for the same reason: a slow chain leaves a
+   * window wide enough to inject a tap from the host part-way through and watch it die on cue.
+   */
+  private fun held(edge: String, dx: Float, count: Int, linkMs: Long) {
+    if (edge != EDGE_START && edge != EDGE_END) {
+      log("held: edge must be '$EDGE_START' or '$EDGE_END', got '$edge'")
+      return
+    }
+    val snap = lastSelection
+    if (snap == null) {
+      log("held: nothing announced — long-press some text first, then `selstate`")
+      return
+    }
+    val handle = handlePixel(snap, edge)
+    if (handle == null) {
+      log("held: handle not derivable from ${snap.describe()} — needs bounds and srcLen>0")
+      return
+    }
+    val (hx, hy) = handle
+    val startedAt = SystemClock.uptimeMillis()
+    fun since(): Long = SystemClock.uptimeMillis() - startedAt
+
+    val lines = mutableListOf(
+      "held: edge=$edge dx=$dx count=$count link=${linkMs}ms from ($hx, $hy) — ${snap.describe()}"
+    )
+
+    /*
+     * The grab travels past the touch slop and on to its first destination, exactly as the released
+     * drag that works does. A press that only twitches never catches the handle, and a stationary
+     * press that is HELD is a long press — which, having missed the handle, would select a fresh
+     * word under the finger instead of failing quietly.
+     */
+    val away = if (dx >= 0) SLOP_DETOUR_PX else -SLOP_DETOUR_PX
+    val grabPath = Path().apply {
+      moveTo(hx, hy)
+      lineTo(hx + away, hy)
+      lineTo(hx + dx, hy)
+    }
+    val grab = GestureDescription.StrokeDescription(grabPath, 0, PROBE_DRAG_MS, true)
+
+    var previous = grab
+    var at = hx + dx
+    var before = snap
+
+    fun finish(why: String) {
+      emit(lines + "held: $why (+${since()}ms)")
+    }
+
+    fun lift() {
+      val built = runCatching {
+        previous.continueStroke(line(at, hy, at + LIFT_NUDGE_PX, hy), 0, linkMs, false)
+      }
+      val stroke = built.getOrNull()
+      if (stroke == null) {
+        finish(
+          "could not BUILD the lift (${built.exceptionOrNull()?.javaClass?.simpleName}: " +
+            "${built.exceptionOrNull()?.message}) — the pointer is left down"
+        )
+        return
+      }
+      dispatchStroke(stroke, "held lift", verbose = false) { completed ->
+        lines += "  lift  +${since()}ms  completed=$completed"
+        finish("done")
+      }
+    }
+
+    fun link(i: Int) {
+      if (i >= count) {
+        lift()
+        return
+      }
+      val to = at + dx
+      val built = runCatching {
+        previous.continueStroke(line(at, hy, to, hy), 0, linkMs, true)
+      }
+      val stroke = built.getOrNull()
+      if (stroke == null) {
+        finish(
+          "could not BUILD link ${i + 1} (${built.exceptionOrNull()?.javaClass?.simpleName}: " +
+            "${built.exceptionOrNull()?.message})"
+        )
+        return
+      }
+      previous = stroke
+      at = to
+      val dispatchedAt = since()
+      dispatchStroke(stroke, "held link ${i + 1}/$count", verbose = false) { completed ->
+        val after = lastSelection
+        lines += "  link ${i + 1}  sent +${dispatchedAt}ms  back +${since()}ms  completed=$completed  " +
+          "x->$to  " + delta(before, after)
+        before = after ?: before
+        if (!completed) {
+          finish(
+            "CANCELLED at link ${i + 1} — the chain is dead here, and every later move would be a " +
+              "silent no-op rather than a wrong one"
+          )
+          return@dispatchStroke
+        }
+        link(i + 1)
+      }
+    }
+
+    log(lines.first())
+    dispatchStroke(grab, "held grab", verbose = false) { completed ->
+      lines += "  grab  ($hx -> $at)  back +${since()}ms  completed=$completed  " +
+        delta(snap, lastSelection)
+      before = lastSelection ?: snap
+      if (!completed) {
+        finish("the GRAB was cancelled — nothing was ever held")
+        return@dispatchStroke
+      }
+      link(0)
+    }
   }
 
   /**
@@ -1405,6 +1546,27 @@ class SpikeAccessibilityService : AccessibilityService() {
 
     /** The pad build. How long [dragHold] parks at the destination, waiting for an edge auto-scroll. */
     const val HOLD_MS = 2000L
+
+    /**
+     * The held-pointer fix. How far [held]'s grab detours past its target before coming back. The same shape the
+     * released drag uses: a touch that moves less than the system slop and lifts inside the tap
+     * timeout IS a tap, and the detour is also what makes the target app read a drag at all.
+     */
+    const val SLOP_DETOUR_PX = 60f
+
+    /**
+     * The held-pointer fix. How far the lift travels. Whether an empty path would do is one of the things [held]
+     * measures — `point()` is a bare moveTo and the framework takes it happily for a long-press, so
+     * the claim that it throws on a continuation needs checking rather than repeating.
+     */
+    const val LIFT_NUDGE_PX = 1f
+
+    /**
+     * The held-pointer fix. How long one link of a held chain lasts. Long by the pad's standards on purpose: the
+     * chain has to stay alive long enough for a tap injected from the host to land INSIDE it, which
+     * is the whole experiment.
+     */
+    const val HELD_LINK_MS = 250L
 
     /**
      * The pad build. [findHandle]'s scan. The step is the handle's own touch radius — probing finer than
