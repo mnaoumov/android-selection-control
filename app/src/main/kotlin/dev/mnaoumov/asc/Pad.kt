@@ -11,6 +11,23 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 
+/** Where the pad lives. */
+enum class PadMode {
+  /** A block the user drags anywhere. Good for reaching around content. */
+  FLOATING,
+
+  /**
+   * Pinned to the bottom edge, full width, in a compact two-row layout — where a keyboard would be.
+   *
+   * Note what this does NOT do: the app underneath is not reflowed, and cannot be. Only an
+   * `InputMethodService` pushes another app's content aside, and an IME is exactly what this cannot
+   * be, since it is only ever shown for an editable field and so could never appear over a browser
+   * page. Docking therefore buys predictability — the pad sits out of the reading area instead of
+   * over the middle of it — not extra room.
+   */
+  DOCKED,
+}
+
 /**
  * The floating pad.
  *
@@ -19,12 +36,6 @@ import android.widget.TextView
  * zero-permission property survives. (`attachAccessibilityOverlayToDisplay` looks like the modern
  * answer and is not: it takes a `SurfaceControl`, and `SurfaceControlViewHost.setView` with a null
  * host token is refused outright.)
- *
- * Two behaviours here are not decoration:
- *  - **the drag strip**, because the pad must be movable off the text being worked on;
- *  - **[setTransparentToTouch]**, because the pad eats the service's own gestures. A dispatch inside
- *    its footprint hits the pad — it will even press its own button — and a selection handle
- *    underneath cannot be driven at all until it gets out of the way.
  */
 class Pad(
   private val context: Context,
@@ -37,29 +48,17 @@ class Pad(
   private var params: WindowManager.LayoutParams? = null
   private var statusView: TextView? = null
 
+  var mode: PadMode = PadMode.DOCKED
+    private set
+
   val isShowing: Boolean get() = root != null
 
   fun show() {
     if (isShowing) return
-
-    val layoutParams = WindowManager.LayoutParams().apply {
-      width = WindowManager.LayoutParams.WRAP_CONTENT
-      height = WindowManager.LayoutParams.WRAP_CONTENT
-      x = INITIAL_X
-      y = INITIAL_Y
-      type = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
-      gravity = Gravity.TOP or Gravity.START
-      format = PixelFormat.TRANSLUCENT
-      // NOT_FOCUSABLE so the pad never takes key focus from the app being driven; NOT_TOUCH_MODAL so
-      // touches outside it still reach that app.
-      flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-    }
-
+    val layoutParams = layoutFor(mode)
     // A Service has no theme, and an unthemed Button inflates wrong.
     val themed = ContextThemeWrapper(context, android.R.style.Theme_DeviceDefault)
     val view = buildView(themed, layoutParams)
-
     windowManager.addView(view, layoutParams)
     root = view
     params = layoutParams
@@ -73,10 +72,20 @@ class Pad(
     statusView = null
   }
 
+  /** Rebuilds in the other mode, because the layout differs as much as the position does. */
+  fun toggleMode() {
+    val previousStatus = statusView?.text?.toString()
+    mode = if (mode == PadMode.DOCKED) PadMode.FLOATING else PadMode.DOCKED
+    hide()
+    show()
+    previousStatus?.let { showStatus(it) }
+  }
+
   /**
-   * Makes the pad ignore touches for the duration of a dispatched gesture, so a handle sitting under
-   * it can still be driven. Without this the gesture hits the pad instead of the app — measured: the
-   * service pressed its own button, and a handle underneath produced nothing at any reach.
+   * Makes the pad ignore touches, so a handle sitting under it can still be driven.
+   *
+   * Used sparingly and never for a whole press: a non-touchable pad also lets the USER's next tap
+   * through onto the page, which is how stray taps reached the content underneath.
    */
   fun setTransparentToTouch(transparent: Boolean) {
     val view = root ?: return
@@ -90,6 +99,29 @@ class Pad(
     statusView?.text = text
   }
 
+  private fun layoutFor(mode: PadMode) = WindowManager.LayoutParams().apply {
+    when (mode) {
+      PadMode.DOCKED -> {
+        width = WindowManager.LayoutParams.MATCH_PARENT
+        height = WindowManager.LayoutParams.WRAP_CONTENT
+        gravity = Gravity.BOTTOM or Gravity.START
+      }
+      PadMode.FLOATING -> {
+        width = WindowManager.LayoutParams.WRAP_CONTENT
+        height = WindowManager.LayoutParams.WRAP_CONTENT
+        gravity = Gravity.TOP or Gravity.START
+        x = FLOATING_X
+        y = FLOATING_Y
+      }
+    }
+    type = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+    format = PixelFormat.TRANSLUCENT
+    // NOT_FOCUSABLE so the pad never takes key focus from the app being driven; NOT_TOUCH_MODAL so
+    // touches outside it still reach that app.
+    flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+      WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+  }
+
   private fun buildView(themed: Context, layoutParams: WindowManager.LayoutParams): View {
     val column = LinearLayout(themed).apply {
       orientation = LinearLayout.VERTICAL
@@ -97,7 +129,10 @@ class Pad(
       setPadding(PADDING, PADDING, PADDING, PADDING)
     }
 
-    column.addView(buildDragStrip(themed, layoutParams) { column })
+    // Only the floating pad needs a grip: a docked one has nowhere to go.
+    if (mode == PadMode.FLOATING) {
+      column.addView(buildDragStrip(themed, layoutParams) { column })
+    }
 
     statusView = TextView(themed).apply {
       text = context.getString(R.string.app_name)
@@ -107,37 +142,77 @@ class Pad(
     }
     column.addView(statusView)
 
-    column.addView(row(themed, PadCommand.WORD_LEFT to "⇤ word", PadCommand.WORD_RIGHT to "word ⇥"))
-    column.addView(row(themed, PadCommand.CHAR_LEFT to "← char", PadCommand.CHAR_RIGHT to "char →"))
-    column.addView(row(themed, PadCommand.PAGE_UP to "⇞ page", PadCommand.PAGE_DOWN to "page ⇟"))
-    column.addView(row(themed, PadCommand.DOC_START to "⤒ start", PadCommand.DOC_END to "end ⤓"))
-
-    column.addView(
-      Button(themed).apply {
-        text = "⇄ swap edge"
-        setOnClickListener { onSwapEdge() }
-      }
-    )
+    if (mode == PadMode.DOCKED) {
+      // Two compact rows across the width, so the pad occupies a keyboard-sized strip rather than a
+      // block over the middle of the text.
+      column.addView(
+        rowOf(
+          themed,
+          commandButtons(
+            themed,
+            PadCommand.WORD_LEFT to "⇤",
+            PadCommand.CHAR_LEFT to "←",
+            PadCommand.CHAR_RIGHT to "→",
+            PadCommand.WORD_RIGHT to "⇥",
+          ) + action(themed, "⇄") { onSwapEdge() }
+        )
+      )
+      column.addView(
+        rowOf(
+          themed,
+          commandButtons(
+            themed,
+            PadCommand.PAGE_UP to "⇞",
+            PadCommand.DOC_START to "⤒",
+            PadCommand.DOC_END to "⤓",
+            PadCommand.PAGE_DOWN to "⇟",
+          ) + action(themed, "▣") { toggleMode() }
+        )
+      )
+    } else {
+      column.addView(row(themed, PadCommand.WORD_LEFT to "⇤ word", PadCommand.WORD_RIGHT to "word ⇥"))
+      column.addView(row(themed, PadCommand.CHAR_LEFT to "← char", PadCommand.CHAR_RIGHT to "char →"))
+      column.addView(row(themed, PadCommand.PAGE_UP to "⇞ page", PadCommand.PAGE_DOWN to "page ⇟"))
+      column.addView(row(themed, PadCommand.DOC_START to "⤒ start", PadCommand.DOC_END to "end ⤓"))
+      column.addView(
+        rowOf(
+          themed,
+          listOf(
+            action(themed, "⇄ swap edge") { onSwapEdge() },
+            action(themed, "▣ dock") { toggleMode() },
+          )
+        )
+      )
+    }
     return column
   }
 
-  private fun row(themed: Context, vararg buttons: Pair<PadCommand, String>): View {
+  private fun commandButtons(themed: Context, vararg buttons: Pair<PadCommand, String>): List<View> =
+    buttons.map { (command, label) -> action(themed, label) { onCommand(command) } }
+
+  private fun row(themed: Context, vararg buttons: Pair<PadCommand, String>): View =
+    rowOf(themed, commandButtons(themed, *buttons))
+
+  /** Every child weighted equally, so a docked row spreads across the full width. */
+
+  private fun rowOf(themed: Context, children: List<View>): View {
     val line = LinearLayout(themed).apply { orientation = LinearLayout.HORIZONTAL }
-    for ((command, label) in buttons) {
-      line.addView(
-        Button(themed).apply {
-          text = label
-          setOnClickListener { onCommand(command) }
-        }
-      )
+    for (child in children) {
+      child.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+      line.addView(child)
     }
     return line
   }
 
+  private fun action(themed: Context, label: String, onClick: () -> kotlin.Unit): View =
+    Button(themed).apply {
+      text = label
+      setOnClickListener { onClick() }
+    }
+
   /**
    * The strip consumes its touches (returns true), unlike a button's listener, because a drag must
-   * not also read as a press. `rawX`/`rawY` keep the arithmetic in screen coordinates, the space the
-   * drag actually happens in.
+   * not also read as a press.
    *
    * Note that `LayoutParams.x/y` are inset by the status bar while dispatched gestures use raw
    * screen pixels; anything comparing the two must read the pad's real bounds from the accessibility
@@ -181,8 +256,8 @@ class Pad(
   }
 
   private companion object {
-    const val INITIAL_X = 240
-    const val INITIAL_Y = 1900
+    const val FLOATING_X = 240
+    const val FLOATING_Y = 1900
     const val PADDING = 16
     const val BACKGROUND = 0xE01565C0.toInt()
     const val STRIP_BACKGROUND = 0xFF0D47A1.toInt()
