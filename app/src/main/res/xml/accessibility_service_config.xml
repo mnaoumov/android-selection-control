@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    canPerformGestures is the whole mechanism: the first spike established that the accessibility SELECTION
+    actions stop at the same editable-buffer boundary InputConnection does, and the gesture spike that
+    dispatchGesture does not, because it drives the target app's own selection UI instead.
+
+    flagRetrieveInteractiveWindows is needed for the floating-toolbar window, which is what locates
+    a selection whose node bounds do not hug its text.
+
+    Deliberately NOT isAccessibilityTool: this is the ordinary Play lane, per the policy reading in
+    the gesture spike's notes. Claiming the flag would be arguable and risky; the ordinary lane is well trodden.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeViewTextSelectionChanged|typeViewScrolled|typeWindowContentChanged|typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagRetrieveInteractiveWindows|flagRequestAccessibilityButton"
+    android:canRetrieveWindowContent="true"
+    android:canPerformGestures="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="0" />

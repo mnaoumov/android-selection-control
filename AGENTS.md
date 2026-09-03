@@ -11,8 +11,13 @@ plan lives here — this file is build/run mechanics only.
 
 ## Status
 
-**Feasibility spikes only — the app does not exist.** `spike/` is a throwaway diagnostic, first for the first spike
-and now for the gesture spike; nothing under it is app code.
+**The app exists as of 2026-09-03** — the repo root is the product (`app/`), and `spike/` remains a
+throwaway diagnostic, first for the first spike, then the gesture spike, then the pad build's probes. Nothing under `spike/` is app code and
+none of it was promoted; it is kept because it is how every mechanism below was measured, and how the next
+one will be.
+
+The two builds are **separate Gradle projects**: `spike/` has its own wrapper and settings, and the root
+`settings.gradle.kts` deliberately does not include it.
 
 - **the first spike — NO-GO.** Chrome page text does not support `ACTION_SET_SELECTION`. Page nodes report
  `sel=false edit=false`, `performAction` returns `false`, granularity-with-extend returns `true` and
@@ -211,6 +216,16 @@ through Android Studio's Device Manager.
 
 ## Build
 
+**The app** (repo root):
+
+```powershell
+$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+.\gradlew.bat:app:assembleDebug
+# -> app\build\outputs\apk\debug\app-debug.apk
+```
+
+**The spike** (its own build):
+
 ```powershell
 $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
 Push-Location spike
@@ -218,6 +233,28 @@ Push-Location spike
 Pop-Location
 # -> spike\app\build\outputs\apk\debug\app-debug.apk
 ```
+
+Both produce `app-debug.apk` from a `:app` module, so **check which directory you are in** before
+installing — the two APKs have different application ids (`dev.mnaoumov.asc` and
+`dev.mnaoumov.asc.spike`) and can be installed side by side.
+
+## Run the app
+
+```powershell
+$d = "<device-serial>"
+adb -s $d install -r app\build\outputs\apk\debug\app-debug.apk
+$orig = (adb -s $d shell settings get secure enabled_accessibility_services).Trim # SAVE THIS
+adb -s $d shell settings put secure enabled_accessibility_services "$orig`:dev.mnaoumov.asc/dev.mnaoumov.asc.AscAccessibilityService"
+adb -s $d shell settings put secure accessibility_enabled 1
+```
+
+The pad appears as soon as the service connects. Its buttons take **real injected input** —
+`adb shell input tap <x> <y>` — which is the right way to test them: the service's own
+`dispatchGesture` is a different input path, and O1 was careful about that distinction.
+
+**A reinstall can leave the service listed in settings but with no accessibility connection** — it
+answers commands while `windows` reports 0 and the tree comes back empty. Rewrite the
+`enabled_accessibility_services` string (remove ours, put it back) to force a rebind.
 
 ## Run the spike
 

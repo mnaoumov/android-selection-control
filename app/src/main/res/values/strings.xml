@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Selection Pad</string>
+
+    <!--
+        Play's non-isAccessibilityTool lane requires the accessibility use to be described in the
+        listing and disclosed in the app. This string is the service-level half of that.
+    -->
+    <string name="accessibility_service_description">Adds a floating pad of buttons that move the text selection precisely — one word or one character at a time — in apps where text can be selected by touch but not edited, such as a web page in a browser. It works by moving the selection handles the app already shows. It never reads, stores or sends the text: it uses only the position of the selection on screen.</string>
+
+    <string name="disclosure_title">Before you turn this on</string>
+    <string name="disclosure_body">Selection Pad uses Android\'s accessibility service so it can move the selection handles in other apps — that is the only way to reach text a keyboard cannot, such as a web page.\n\nWhat it does with that access:\n\n•  Reads where the current selection starts and ends, as positions on screen.\n•  Sends taps and drags to move the selection handles, one per button press.\n\nWhat it never does:\n\n•  It never reads the text itself, only positions and rectangles.\n•  It never stores anything.\n•  It cannot send anything anywhere — the app requests no permissions at all, including no internet access.\n\nNothing happens until you enable the service yourself, and turning it off in Accessibility settings stops it completely.</string>
+    <string name="disclosure_agree">I understand — open Accessibility settings</string>
+    <string name="disclosure_declined">Selection Pad stays off until you agree.</string>
+    <string name="consent_recorded">Thanks. Enable “Selection Pad” in the list that opens.</string>
+</resources>
