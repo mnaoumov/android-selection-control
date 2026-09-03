@@ -225,6 +225,15 @@ class SelectionDriver(
     }
 
     val toLose = current - target
+    if (toLose < 0) {
+      // We are already past the target and cannot come back: moving this edge outward again is a
+      // GROW, which snaps a whole word. Trying to correct upward is what made the loop oscillate
+      // 31 → 29 → 31 → 29 until it destroyed the selection. Stop one character out instead.
+      Diag.log("  shrink: overshot to $current past $target; stopping rather than oscillating")
+      onDone(Outcome.Moved(origin, current))
+      return
+    }
+
     val perChar = pixelsPerCharacter(before)
     // Shrinking the END edge means moving left; the START edge, right.
     val direction = if (activeEdge == Edge.END) -1f else 1f
@@ -233,7 +242,18 @@ class SelectionDriver(
       onDone(Outcome.HandleLost)
       return
     }
-    val reach = direction * toLose * perChar
+
+    /*
+     * Aim SHORT, never past. The per-character width is a line average, and in proportional text a
+     * narrow run ("with") is far tighter than it, so a reach computed for N characters can cross
+     * N+1. Undershooting costs one more small gesture; overshooting cannot be undone, because the
+     * only way back is a grow and a grow snaps a word.
+     */
+    val reach = direction * when {
+      toLose >= 2 -> (toLose - 1) * perChar
+      // Grows with each retry, because a creep that moved nothing was simply too short.
+      else -> (perChar * FINAL_STEP_FRACTION * (guard + 1)).coerceAtLeast(MIN_SHRINK_PX)
+    }
 
     gestureCount++
 
@@ -243,8 +263,20 @@ class SelectionDriver(
         return@drag
       }
       awaitChange(before) { after ->
+        Diag.log(
+          "  shrink ${guard + 1}: $current -> target $target, lose $toLose x ${perChar}px, " +
+            "handle=(${handle.x}, ${handle.y}) reach=$reach -> " +
+            if (after == null) "nothing" else "${after.low()}..${after.high()}"
+        )
         when {
-          after == null -> onDone(Outcome.Moved(origin, current))
+          // Nothing moved: the creep was too short. Try again slightly longer rather than give up
+          // one character out.
+          after == null ->
+            if (guard + 1 < MAX_CORRECTIONS && selectionStillOnScreen()) {
+              walkBackTo(target, command, origin, onDone, guard + 1)
+            } else {
+              onDone(Outcome.Moved(origin, current))
+            }
           !locator.grabbedAHandle(before, after) -> onDone(Outcome.HandleLost)
           else -> walkBackTo(target, command, origin, onDone, guard + 1)
         }
@@ -277,7 +309,8 @@ class SelectionDriver(
   ) {
     val after = observer.latest
     if (after != null && after.atMs != before?.atMs) {
-      onResult(after)
+      // A change is not the answer — the LAST change is. See awaitQuiet.
+      awaitQuiet(after, 0, onResult)
       return
     }
     if (waited >= MAX_SETTLE_MS) {
@@ -285,6 +318,35 @@ class SelectionDriver(
       return
     }
     handler.postDelayed({ awaitChange(before, waited + POLL_MS, onResult) }, POLL_MS)
+  }
+
+  /**
+   * Wait for the announcements to stop, and take the last one.
+   *
+   * A drag emits a selection event **while the finger is still down**, and the target app finalises
+   * on lift by snapping the handle to the nearest character — which is often not where the
+   * mid-gesture event said it was. Acting on the first event therefore leaves the loop believing
+   * something the app has since revised.
+   *
+   * Measured, and it is not subtle: a shrink announced `20..30`, the loop reported `29 → 30`, and
+   * the very next press opened at `20..29`. Every press after that repeated the same step forever,
+   * because the pad kept acting on a number the app had already taken back.
+   */
+  private fun awaitQuiet(
+    last: SelectionObserver.Snapshot,
+    quietFor: Long,
+    onResult: (SelectionObserver.Snapshot?) -> Unit,
+  ) {
+    val now = observer.latest
+    if (now != null && now.atMs != last.atMs) {
+      awaitQuiet(now, 0, onResult)
+      return
+    }
+    if (quietFor >= QUIET_MS) {
+      onResult(last)
+      return
+    }
+    handler.postDelayed({ awaitQuiet(last, quietFor + POLL_MS, onResult) }, POLL_MS)
   }
 
   /**
@@ -419,6 +481,12 @@ class SelectionDriver(
      */
     const val MAX_SETTLE_MS = 220L
 
+    /**
+     * How long the announcements must stay quiet before the last one is believed. Long enough to
+     * outlast the revision an app makes when the finger lifts, short enough not to be felt.
+     */
+    const val QUIET_MS = 130L
+
     /** Must exceed the widest word on screen once multiplied by [STEP_PX]. */
     const val MAX_ATTEMPTS = 12
 
@@ -426,7 +494,15 @@ class SelectionDriver(
      * The walk back is one estimated drag plus corrections, so this bounds the corrections, not the
      * characters. It should rarely go past the first.
      */
-    const val MAX_CORRECTIONS = 6
+    const val MAX_CORRECTIONS = 8
+
+    /**
+     * The last character is crept, not stepped: a fraction of the average width, so a narrow glyph
+     * cannot be jumped clean over. Shrinking is character-granular, so a short drag moves exactly
+     * one character or none — and none simply costs another try.
+     */
+    const val FINAL_STEP_FRACTION = 0.55f
+    const val MIN_SHRINK_PX = 8f
 
     /** Sanity bounds on the per-character width derived from a node's geometry. */
     const val MIN_CHAR_PX = 6f
