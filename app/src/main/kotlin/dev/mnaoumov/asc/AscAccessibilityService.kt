@@ -6,6 +6,7 @@ import android.graphics.Path
 import android.graphics.PointF
 import android.os.Handler
 import android.os.Looper
+import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 
@@ -85,13 +86,43 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       observer.refreshFromNodes(rootInActiveWindow, rootInActiveWindow?.packageName?.toString())
     }
 
-    // The pad must not be covering the point it is about to touch.
-    pad?.setTransparentToTouch(true)
+    /*
+     * Go transparent ONLY when the pad is actually in the way.
+     *
+     * A non-touchable pad lets our own gestures through to the app, which is necessary when a handle
+     * sits underneath it — but it also lets the USER's next tap through, onto the page. Doing that
+     * for the whole of every press meant a second press during the first landed on whatever was
+     * beneath the button: measured, it opened an image viewer and spare browser tabs. Most of the
+     * time the handle is nowhere near the pad, and then the pad should keep absorbing taps.
+     */
+    val inTheWay = handleIsUnderThePad()
+    if (inTheWay) pad?.setTransparentToTouch(true)
     driver.perform(command) { outcome ->
-      pad?.setTransparentToTouch(false)
+      if (inTheWay) pad?.setTransparentToTouch(false)
       pad?.showStatus(describe(outcome))
       busy = false
     }
+  }
+
+  /**
+   * Whether the handle we are about to drag lies inside the pad's own footprint.
+   *
+   * The pad's bounds come from the accessibility window list rather than from its `LayoutParams`,
+   * because those are inset by the status bar while gesture coordinates are raw screen pixels —
+   * comparing the two directly is off by the status bar's height.
+   */
+  private fun handleIsUnderThePad(): Boolean {
+    val snapshot = observer.latest ?: return false
+    val bounds = snapshot.bounds ?: return false
+    val handleY = bounds.bottom + HandleLocator.HANDLE_DROP
+    val padBounds = windows.orEmpty()
+      .firstOrNull {
+        it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY &&
+          it.root?.packageName?.toString() == packageName
+      }
+      ?.let { window -> android.graphics.Rect().also { window.getBoundsInScreen(it) } }
+      ?: return false
+    return handleY >= padBounds.top && handleY <= padBounds.bottom
   }
 
   private fun onSwapEdge() {
@@ -124,9 +155,26 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
   // --------------------------------------------------------- GestureDispatcher
 
+  /**
+   * A drag of the selection handle — with a deliberate detour, for safety rather than for effect.
+   *
+   * The steps this loop makes are small: a few pixels to creep one character, a few tens to cross a
+   * word. A touch that moves less than the system's touch slop and lifts inside the tap timeout **is
+   * a tap**, so a drag that misses its handle does not fail quietly — the page receives a click, and
+   * on a link that NAVIGATES. Measured the hard way: during testing the article changed underneath
+   * twice and three stray tabs were opened.
+   *
+   * So every drag first travels past the slop and only then comes back to where it was actually
+   * meant to end. A miss now reads as a scroll — recoverable, and it does not take the page with it
+   * — while a hit still finishes at the intended pixel, because the selection follows the finger and
+   * the loop reads the state only once the announcements go quiet.
+   */
   override fun drag(from: PointF, to: PointF, durationMs: Long, onFinished: (Boolean) -> Unit) {
+    val slop = ViewConfiguration.get(this).scaledTouchSlop * SLOP_MULTIPLE
+    val away = if (to.x >= from.x) slop.toFloat() else -slop.toFloat()
     val path = Path().apply {
       moveTo(from.x, from.y)
+      lineTo(from.x + away, from.y)
       lineTo(to.x, to.y)
     }
     dispatch(GestureDescription.StrokeDescription(path, 0, durationMs), onFinished)
@@ -186,6 +234,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   }
 
   private companion object {
+    /** How far past the touch slop a drag detours, so a miss cannot read as a tap. */
+    const val SLOP_MULTIPLE = 2
+
     /** How long an announcement stays trustworthy before the node rung is worth a walk. */
     const val STALE_MS = 4000L
   }
