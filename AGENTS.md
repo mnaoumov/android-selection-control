@@ -204,6 +204,25 @@ the *next* gesture and keeps the pointer down between them, so the hold, the dra
 fired one from the previous one's callback. Its parts are logged as `[1/3 hold]`, `[2/3 drag]`,
 `[3/3 settle]`; if the chain breaks, the missing part says where.
 
+#### Granularity-probe commands (the pad build)
+
+| Command | Meaning |
+|---|---|
+| `selstate` | Both observation rungs as one state: the **last announced** `SELECTION_CHANGED` (offsets, source bounds, srcLen, age) plus a node-rung scan for any `textSelectionStart/End`, and the handle pixels derived from them |
+| `probe <x> <y> <dx> <count> [settleMs]` | Walks a handle from `(x,y)` in `count` drags of `dx` px, each starting where the last ended, logging the announced offsets after each step |
+| `nudge <start\|end> <dx> [settleMs]` | One **closed-loop** step: derive the handle from `selstate`, drag it `dx` px, re-read. The pad's kernel |
+| `draghold <x1> <y1> <x2> <y2> [dragMs] [holdMs]` | Drag then **hold without lifting** (two chained strokes), for the edge auto-scroll that plain `drag` can never trigger |
+
+`probe` is deliberately **open-loop in pixels** — re-deriving the handle each step would let the
+servo hide the word-snapping it exists to measure. Read its output as a sequence: offsets rising one
+per step means no snapping; offsets standing still and then jumping means the app snaps. **A step
+logging `NO EVENT` is a measurement, not a gap** — the framework announces changes only, so an
+unchanged range is silent.
+
+Handle geometry is derived by interpolating the offset across the source node's bounds, then
+`HANDLE_INSET` px outside the end and `HANDLE_DROP` px below the text — 30 and 57, the gesture spike's measured
+Chrome numbers. They are **Chrome's**; Keep draws circles at the selection's corners instead.
+
 ### Gotchas
 
 - **A `performAction` returning `true` is not proof of anything the user can see.** Always pair it with
