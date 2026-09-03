@@ -277,6 +277,14 @@ The pad appears as soon as the service connects. Its buttons take **real injecte
 `adb shell input tap <x> <y>` — which is the right way to test them: the service's own
 `dispatchGesture` is a different input path, and O1 was careful about that distinction.
 
+**Closing the pad hides the overlay and leaves the service connected**, on purpose. The `✕` at the
+right of the status line is the only way out that is available on this device: the Accessibility
+switch is ECM-blocked (above), so `disableSelf` would strand the user behind it, needing
+`scripts\pad.ps1 on` to get back. Instead the service stays alive with no overlay, and **Show the
+pad** on the launcher screen puts it back — a direct call through
+`AscAccessibilityService.showPad`, which works because the activity and the service share one
+process.
+
 **A reinstall can leave the service listed in settings but with no accessibility connection** — it
 answers commands while `windows` reports 0 and the tree comes back empty. Rewrite the
 `enabled_accessibility_services` string (remove ours, put it back) to force a rebind.
@@ -440,6 +448,13 @@ receive touches and still never fire a click, and which of the two happens is th
  do not "tidy" that into one big log call.
 - The phone must be **unlocked**; a locked screen shows only a `com.android.systemui` window and every
  dump comes back empty.
+- **A locked phone still lists the pad, and still swallows every tap aimed at it.** Measured
+ 2026-09-03 with the screen dozing (`dumpsys power` → `mWakefulness=Dozing`, `dumpsys window` →
+ `mDreamingLockscreen=true`): `dumpsys window windows` reported our overlay with a real frame and
+ `isOnScreen=true`, and `adb shell input tap` on its buttons produced **no log line at all** — the
+ press never arrived. So the window list is not evidence that the pad is reachable; check
+ `mWakefulness` before concluding a button is broken, and take a screenshot first, because a dozing
+ screen screencaps as pure black (~20 KB PNG) rather than failing.
 
 ## Never touch
 

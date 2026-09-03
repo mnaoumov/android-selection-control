@@ -57,10 +57,14 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       windowManager = getSystemService(WindowManager::class.java),
       onCommand = ::onCommand,
       onSwapEdge = ::onSwapEdge,
+      onClose = { pad?.hide() },
     ).also { it.show() }
+
+    connected = this
   }
 
   override fun onUnbind(intent: android.content.Intent?): Boolean {
+    if (connected === this) connected = null
     // An overlay that outlives its service cannot be told to go away.
     pad?.hide()
     pad = null
@@ -233,7 +237,23 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     if (!dispatchGesture(gesture, callback, null)) onFinished(false)
   }
 
-  private companion object {
+  companion object {
+    /**
+     * The connected service, so the launcher screen can put a closed pad back.
+     *
+     * A plain reference rather than a bound service or a broadcast: the activity and the service
+     * share one process (no `android:process` in the manifest), and anything more elaborate would
+     * be ceremony around a field. Cleared in [onUnbind], so a stale instance cannot be poked.
+     */
+    private var connected: AscAccessibilityService? = null
+
+    /** Puts the pad back after the user closed it. False when the service is not running. */
+    fun showPad(): Boolean {
+      val pad = connected?.pad ?: return false
+      pad.show()
+      return true
+    }
+
     /** How far past the touch slop a drag detours, so a miss cannot read as a tap. */
     const val SLOP_MULTIPLE = 2
 

@@ -54,6 +54,24 @@ class MainActivity : Activity() {
       }
     )
 
+    /*
+     * The way back from the pad's own close button.
+     *
+     * Closing the pad hides the overlay and leaves the service connected, so putting it back is a
+     * method call rather than a trip through Accessibility settings — which matters because that
+     * switch is blocked by Enhanced Confirmation Mode for a sideloaded build.
+     */
+    column.addView(
+      Button(this).apply {
+        text = getString(R.string.show_pad)
+        setOnClickListener {
+          val message =
+            if (AscAccessibilityService.showPad()) R.string.pad_shown else R.string.pad_not_running
+          Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+        }
+      }
+    )
+
     setContentView(ScrollView(this).apply { addView(column) })
   }
 

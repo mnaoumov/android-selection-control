@@ -13,4 +13,8 @@
     <string name="disclosure_agree">I understand — open Accessibility settings</string>
     <string name="disclosure_declined">Selection Pad stays off until you agree.</string>
     <string name="consent_recorded">Thanks. Enable “Selection Pad” in the list that opens.</string>
+
+    <string name="show_pad">Show the pad</string>
+    <string name="pad_shown">The pad is back on screen.</string>
+    <string name="pad_not_running">Selection Pad is not running — enable it in Accessibility settings first.</string>
 </resources>

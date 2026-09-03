@@ -42,6 +42,7 @@ class Pad(
   private val windowManager: WindowManager,
   private val onCommand: (PadCommand) -> kotlin.Unit,
   private val onSwapEdge: () -> kotlin.Unit,
+  private val onClose: () -> kotlin.Unit,
 ) {
 
   private var root: View? = null
@@ -140,7 +141,30 @@ class Pad(
       textSize = 12f
       gravity = Gravity.CENTER
     }
-    column.addView(statusView)
+
+    /*
+     * Status line and the way out, on one row.
+     *
+     * The pad has to be dismissible from the pad itself: it is an always-on overlay sitting over
+     * whatever the user is reading, and until this existed the only ways to get rid of it were the
+     * Accessibility switch — which Enhanced Confirmation Mode blocks for a sideloaded build — or the
+     * by-hand script. Closing HIDES the overlay and leaves the service connected, deliberately: the
+     * service is what can put the pad back (see MainActivity), whereas `disableSelf` would strand
+     * the user behind that same blocked switch.
+     */
+    val header = LinearLayout(themed).apply { orientation = LinearLayout.HORIZONTAL }
+    header.addView(
+      statusView,
+      LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+    )
+    header.addView(
+      action(themed, "✕") { onClose() },
+      LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.WRAP_CONTENT,
+        LinearLayout.LayoutParams.WRAP_CONTENT,
+      ),
+    )
+    column.addView(header)
 
     if (mode == PadMode.DOCKED) {
       // Two compact rows across the width, so the pad occupies a keyboard-sized strip rather than a
