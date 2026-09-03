@@ -120,10 +120,16 @@ toolbar 615.5, highlight 621.5, handle midpoint 616.5). Since the handles are sy
 that is the one piece of handle geometry available without either arithmetic on node bounds or
 reading anything.
 
-**When the event's source node has bad bounds, the tree usually still contains a good one.** A 63-char
-node spanning three lines had per-line siblings covering the same text (`18 chars 231..588`,
-`24 chars 584..994`) — the selection event simply named the coarser ancestor. Prefer searching the
-tree for the tightest node covering the offset over trusting the event's own source.
+**A node's bounds are the UNION of its line boxes when its phrase wraps.** Chrome's nodes do hug their
+text, but a phrase running across three lines reports one box covering all three (`196 2314 1060
+2507` for 63 characters), and interpolating an offset across that is meaningless. This is a *different*
+failure from Obsidian's, where a 4-character node reports the full content width — two causes, one
+symptom, and a fix for one need not fix the other.
+
+**Do not read node identity off bounds alone.** Neighbouring nodes on the same line have plausible
+bounds and entirely different text: a probe's caret landed on the node holding `" for editing text
+files."` and was briefly taken for a finer view of the node holding `", shown here, are often
+included…"`. Check the text (or the length) before concluding two nodes describe the same run.
 
 **Our own overlay eats our own dispatched gestures.** A gesture aimed inside the overlay's real
 footprint hits the overlay — it will even fire the overlay's own button — and a selection handle
