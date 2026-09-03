@@ -100,6 +100,27 @@ on the page, and read as "gestures pass through the overlay" when the opposite i
 real bounds back from the `windows` command**, which reports the accessibility window list in screen
 pixels, rather than trusting what was asked for.
 
+**A probe that misses a handle DESTROYS the selection.** There is no way to ask whether a pixel holds
+a handle — only a drag moves one, and only a moved handle announces anything — so a search has to
+touch. A touch that lands on the page instead collapses the selection to a caret, which means a scan
+gets **at most one wrong guess**. Any acquisition-by-probing design has to survive that, or be sure
+of its first attempt.
+
+**"An event fired" is not proof that a handle was grabbed.** A collapsing selection announces a change
+just as loudly as a moving one, which produced a confident false hit at a pixel holding no handle.
+The signature of a real grab is that **one edge held while the other moved, and the range stayed
+non-empty**.
+
+**The floating toolbar's horizontal centre tracks the selection's centre** to within ~6 px (measured:
+toolbar 615.5, highlight 621.5, handle midpoint 616.5). Since the handles are symmetric about it,
+that is the one piece of handle geometry available without either arithmetic on node bounds or
+reading anything.
+
+**When the event's source node has bad bounds, the tree usually still contains a good one.** A 63-char
+node spanning three lines had per-line siblings covering the same text (`18 chars 231..588`,
+`24 chars 584..994`) — the selection event simply named the coarser ancestor. Prefer searching the
+tree for the tightest node covering the offset over trusting the event's own source.
+
 **Our own overlay eats our own dispatched gestures.** A gesture aimed inside the overlay's real
 footprint hits the overlay — it will even fire the overlay's own button — and a selection handle
 sitting under it cannot be driven at all, at any reach. Removing the overlay unblocks the identical
@@ -249,6 +270,7 @@ fired one from the previous one's callback. Its parts are logged as `[1/3 hold]`
 | `probe <x> <y> <dx> <count> [settleMs]` | Walks a handle from `(x,y)` in `count` drags of `dx` px, each starting where the last ended, logging the announced offsets after each step |
 | `nudge <start\|end> <dx> [settleMs]` | One **closed-loop** step: derive the handle from `selstate`, drag it `dx` px, re-read. The pad's kernel |
 | `servo <start\|end> <dx> <count> [settleMs]` | `nudge` repeated — the closed-loop walk, and the instrument that actually measures granularity |
+| `findhandle <y> <centreX> [step] [maxProbes]` | Hunt for a handle by probing outward from a centre, for the surfaces where interpolation cannot reach it |
 | `draghold <x1> <y1> <x2> <y2> [dragMs] [holdMs]` | Drag then **hold without lifting** (two chained strokes), for the edge auto-scroll that plain `drag` can never trigger |
 
 Read either walk's output as a **sequence of offsets**, not of pixels: values landing inside a word
@@ -277,9 +299,19 @@ Chrome numbers. They are **Chrome's**; Keep draws circles at the selection's cor
 
 | Command | Meaning |
 |---|---|
-| `overlay on [w] [h] [x] [y]` | Attach a touchable box with two buttons over whatever is on screen; defaults to 660x260 at (300, 2200) |
+| `overlay on [w] [h] [x] [y]` | Attach a touchable box — a drag strip above two buttons — over whatever is on screen; defaults to 660x260 at (300, 2200) |
+| `overlay move <x> <y>` | Move it, the scripted equivalent of dragging its strip |
 | `overlay off` | Release it |
 | `overlay state` | Whether one is attached, and where |
+
+The pad carries a **drag strip** so it can be pushed around the screen (owner's request, and the
+manual half of the "pad must not cover what it is about to touch" constraint). The strip's touch
+listener returns `true` — it consumes — unlike the diagnostic listeners on the buttons, because a
+drag must not also read as a press. Dragging updates `LayoutParams.x/y` and calls
+`WindowManager.updateViewLayout`, tracking `rawX/rawY` so the arithmetic stays in screen coordinates.
+
+Every placement logs **both** the requested position and the real screen bounds, for the reason in
+the gotcha below.
 
 **Use `WindowManager.addView` with `TYPE_ACCESSIBILITY_OVERLAY` (2032) — NOT
 `attachAccessibilityOverlayToDisplay`.** That API takes a `SurfaceControl`, so views must reach it

@@ -22,8 +22,10 @@ import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.TextView
 
 /**
  * Feasibility spikes: selection actions, then synthesised gestures.
@@ -110,7 +112,7 @@ class SpikeAccessibilityService : AccessibilityService() {
 
   /** The attached overlay, if any, and where it sits — see [overlayOn]. */
   private var overlayView: View? = null
-  private var overlayRect: Rect? = null
+  private var overlayParams: WindowManager.LayoutParams? = null
 
   private val receiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
@@ -253,6 +255,12 @@ class SpikeAccessibilityService : AccessibilityService() {
         dx = parts[2].toFloat(),
         settleMs = parts.getOrNull(3)?.toLong() ?: SETTLE_MS,
       )
+      "findhandle" -> findHandle(
+        y = parts[1].toFloat(),
+        centreX = parts[2].toFloat(),
+        step = parts.getOrNull(3)?.toFloat() ?: FIND_STEP,
+        maxProbes = parts.getOrNull(4)?.toInt() ?: FIND_MAX_PROBES,
+      )
       "servo" -> servo(
         edge = parts[1],
         dx = parts[2].toFloat(),
@@ -268,8 +276,9 @@ class SpikeAccessibilityService : AccessibilityService() {
           y = parts.getOrNull(5)?.toInt() ?: OVERLAY_Y,
         )
         "off" -> overlayOff(quiet = false)
+        "move" -> overlayMove(parts[2].toInt(), parts[3].toInt())
         "state", null -> overlayState()
-        else -> log("overlay: expected on|off|state, got '${parts[1]}'")
+        else -> log("overlay: expected on|off|move|state, got '${parts[1]}'")
       }
 
       "draghold" -> dragHold(
@@ -767,6 +776,102 @@ class SpikeAccessibilityService : AccessibilityService() {
   }
 
   /**
+   * Finds a selection handle by probing, for the surfaces where arithmetic cannot: block-width or
+   * multi-line source nodes, where interpolating an offset across the node's bounds puts the handle
+   * ~130 px out in x and ~76 px out in y (measured 2026-09-02), and where
+   * `refreshWithExtraData(EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY)` returns nothing but the node's
+   * own bounds.
+   *
+   * It scans OUTWARD FROM THE CENTRE, alternating right and left, because the centre is the one
+   * thing that can be known without arithmetic: the floating toolbar window's horizontal centre
+   * tracks the selection's to within about 6 px, and the two handles are symmetric about it. So the
+   * unknown is only the selection's half-width, a scan of a few steps rather than of the line.
+   *
+   * A probe is a deliberately tiny drag. It has to be a drag rather than a tap because only a drag
+   * moves a handle, and only a moved handle announces anything — there is no way to ASK whether a
+   * given pixel holds one. The disturbance is the measurement, and it is self-correcting: the step
+   * that fires tells us both that the handle was there and where it now is.
+   *
+   * Reports the probe count and the wall clock, because feasibility was never in doubt — a handle is
+   * a ~48 px target and a scan will find it — and **cost** is the whole question.
+   */
+  private fun findHandle(y: Float, centreX: Float, step: Float, maxProbes: Int) {
+    val startedAt = SystemClock.uptimeMillis()
+    val before = lastSelection
+    val lines = mutableListOf(
+      "findhandle: y=$y centre=$centreX step=$step max=$maxProbes",
+      "  before: " + (before?.describe() ?: "<nothing announced>"),
+    )
+
+    fun probe(n: Int) {
+      if (n > maxProbes) {
+        emit(lines + "findhandle: NOT FOUND in $maxProbes probes (${SystemClock.uptimeMillis() - startedAt}ms)")
+        return
+      }
+      // 1 -> centre+step, 2 -> centre-step, 3 -> centre+2·step, ... so the nearer candidates go first.
+      val ring = (n + 1) / 2
+      val x = if (n % 2 == 1) centreX + ring * step else centreX - ring * step
+      val snapshot = lastSelection
+      dispatchStroke(
+        stroke = GestureDescription.StrokeDescription(line(x, y, x + FIND_NUDGE, y), 0, PROBE_DRAG_MS),
+        what = "findhandle probe $n at ($x, $y)",
+        verbose = false,
+      ) { completed ->
+        if (!completed) {
+          emit(lines + "  probe $n at x=$x: gesture CANCELLED; stopping")
+          return@dispatchStroke
+        }
+        handler.postDelayed({
+          val after = lastSelection
+          val fired = after != null && after.atMs != snapshot?.atMs
+          when {
+            fired && grabbedAHandle(snapshot, after!!) -> emit(
+              lines + listOf(
+                "  probe $n at x=$x: HIT — " + delta(snapshot, after),
+                "findhandle: found in $n probe(s), ${SystemClock.uptimeMillis() - startedAt}ms; " +
+                  "the other handle mirrors it at x=${2 * centreX - x}",
+              )
+            )
+            // An event is NOT proof of a grab. A probe that lands on the page rather than on a
+            // handle collapses the selection, and that announces a change too — measured, and it
+            // read as a confident hit at a pixel where no handle was. The signature of a real grab
+            // is that one edge held while the other moved.
+            fired -> emit(
+              lines + listOf(
+                "  probe $n at x=$x: event fired but the selection did NOT survive — " +
+                  delta(snapshot, after),
+                "findhandle: ABORTED at probe $n (${SystemClock.uptimeMillis() - startedAt}ms) — " +
+                  "the probe destroyed the selection, so there is nothing left to scan for",
+              )
+            )
+            else -> {
+              lines += "  probe $n at x=$x: nothing"
+              probe(n + 1)
+            }
+          }
+        }, FIND_SETTLE_MS)
+      }
+    }
+
+    probe(1)
+  }
+
+  /**
+   * Did that probe move a handle, or wreck the selection?
+   *
+   * A grab keeps the anchor: one edge holds while the other moves, and the range stays non-empty.
+   * A miss lands on the page and collapses the selection to a caret, which announces a change just
+   * as loudly — so "an event fired" is not the test, and treating it as one produced a confident
+   * hit at a pixel that held no handle.
+   */
+  private fun grabbedAHandle(before: SelectionSnapshot?, after: SelectionSnapshot): Boolean {
+    if (before == null) return false
+    if (after.low() == after.high()) return false
+    if (after.bounds != before.bounds) return false
+    return after.low() == before.low() || after.high() == before.high()
+  }
+
+  /**
    * Drag, then HOLD at the destination without lifting — the precondition for the PageDown / End
    * buttons, which need the target app's own edge auto-scroll. Plain [drag] lifts the moment it
    * arrives, so it can never trigger one.
@@ -819,9 +924,6 @@ class SpikeAccessibilityService : AccessibilityService() {
   private fun overlayOn(width: Int, height: Int, x: Int, y: Int) {
     overlayOff(quiet = true)
 
-    // A Service has no theme, and an unthemed Button inflates badly or not at all.
-    val view = buildPadView(ContextThemeWrapper(this, android.R.style.Theme_DeviceDefault))
-
     val params = WindowManager.LayoutParams().apply {
       this.width = width
       this.height = height
@@ -836,10 +938,27 @@ class SpikeAccessibilityService : AccessibilityService() {
         WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
     }
 
+    // A Service has no theme, and an unthemed Button inflates badly or not at all.
+    val view = buildPadView(ContextThemeWrapper(this, android.R.style.Theme_DeviceDefault), params)
+
     getSystemService(WindowManager::class.java).addView(view, params)
     overlayView = view
-    overlayRect = Rect(x, y, x + width, y + height)
-    log("overlay: added ${width}x$height at ($x, $y) -> ${overlayRect?.flattenToString()}")
+    overlayParams = params
+    logOverlayPlacement("added ${width}x$height")
+  }
+
+  /** Moves an attached pad, the scripted equivalent of dragging its strip. */
+  private fun overlayMove(x: Int, y: Int) {
+    val view = overlayView
+    val params = overlayParams
+    if (view == null || params == null) {
+      log("overlay: nothing attached to move")
+      return
+    }
+    params.x = x
+    params.y = y
+    getSystemService(WindowManager::class.java).updateViewLayout(view, params)
+    logOverlayPlacement("moved")
   }
 
   private fun overlayOff(quiet: Boolean) {
@@ -851,32 +970,70 @@ class SpikeAccessibilityService : AccessibilityService() {
     runCatching { getSystemService(WindowManager::class.java).removeView(view) }
       .onFailure { log("overlay: removeView failed: ${it::class.java.simpleName}: ${it.message}") }
     overlayView = null
-    overlayRect = null
+    overlayParams = null
     if (!quiet) log("overlay: removed")
   }
 
   private fun overlayState() {
-    log("overlay: " + (overlayRect?.let { "attached at ${it.flattenToString()}" } ?: "not attached"))
+    if (overlayView == null) {
+      log("overlay: not attached")
+      return
+    }
+    logOverlayPlacement("state")
   }
 
   /**
-   * Two buttons and a background, and nothing else — every listener here exists to answer O1.
-   * The touch listeners return false so they observe without consuming, leaving the click to fire
-   * normally if it is going to.
+   * Always report BOTH the requested LayoutParams position and the real screen bounds.
+   *
+   * They differ by the status bar's height — ask for y=1040 and the window lands at 1181 — because
+   * LayoutParams coordinates are content-relative while dispatchGesture's are raw screen pixels.
+   * Reading a footprint off the requested value once produced a tap that missed the pad by 11 px,
+   * hit the page, followed a link, and read as "gestures pass through the overlay" when the truth
+   * is the exact opposite. The accessibility window list is the authority; the request is not.
    */
-  private fun buildPadView(ctx: android.content.Context): View {
+  private fun logOverlayPlacement(what: String) {
+    val params = overlayParams
+    val requested = params?.let { Rect(it.x, it.y, it.x + it.width, it.y + it.height) }
+    log(
+      "overlay: $what — requested=${requested?.flattenToString() ?: "none"} " +
+        "real=${realOverlayBounds()?.flattenToString() ?: "<not in the window list yet>"}"
+    )
+  }
+
+  /** The pad's actual screen rectangle, straight from the accessibility window list. */
+  private fun realOverlayBounds(): Rect? = windows
+    .firstOrNull {
+      it.type == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY &&
+        it.root?.packageName == packageName
+    }
+    ?.let { w -> Rect().also { w.getBoundsInScreen(it) } }
+
+  /**
+   * A drag strip above two buttons. The buttons' listeners exist to answer O1 and return false so
+   * they observe without consuming; the strip's returns TRUE, because a drag must not also read as
+   * a press.
+   *
+   * The strip is what makes the pad movable, which the owner asked for and which is also the manual
+   * half of the O3 mitigation: a pad sitting over a selection handle blocks the very gesture the
+   * loop needs, so the user has to be able to push it out of the way.
+   */
+  private fun buildPadView(ctx: android.content.Context, params: WindowManager.LayoutParams): View {
     val root = LinearLayout(ctx)
-    root.orientation = LinearLayout.HORIZONTAL
-    root.gravity = Gravity.CENTER
+    root.orientation = LinearLayout.VERTICAL
     root.setBackgroundColor(OVERLAY_BACKGROUND)
-    root.setOnTouchListener { _, event ->
+
+    root.addView(buildDragStrip(ctx, root, params))
+
+    val row = LinearLayout(ctx)
+    row.orientation = LinearLayout.HORIZONTAL
+    row.gravity = Gravity.CENTER
+    row.setOnTouchListener { _, event ->
       log(
         "overlay: ROOT ${MotionEvent.actionToString(event.actionMasked)} " +
           "at (${event.x}, ${event.y}) raw=(${event.rawX}, ${event.rawY})"
       )
       false
     }
-
     for (label in OVERLAY_BUTTONS) {
       val button = Button(ctx)
       button.text = label
@@ -887,9 +1044,59 @@ class SpikeAccessibilityService : AccessibilityService() {
         log("overlay: button '$label' ${MotionEvent.actionToString(event.actionMasked)}")
         false
       }
-      root.addView(button)
+      row.addView(button)
     }
+    root.addView(row)
     return root
+  }
+
+  private fun buildDragStrip(
+    ctx: android.content.Context,
+    root: View,
+    params: WindowManager.LayoutParams,
+  ): View {
+    val strip = TextView(ctx)
+    strip.text = DRAG_STRIP_LABEL
+    strip.gravity = Gravity.CENTER
+    strip.setBackgroundColor(DRAG_STRIP_BACKGROUND)
+    strip.setTextColor(DRAG_STRIP_FOREGROUND)
+    strip.layoutParams = LinearLayout.LayoutParams(
+      LinearLayout.LayoutParams.MATCH_PARENT,
+      DRAG_STRIP_HEIGHT,
+    )
+
+    // Where the finger went down, and where the window was at that moment. The delta between the
+    // two is what moves the pad; tracking rawX/rawY keeps it in screen coordinates, the same space
+    // the drag is happening in.
+    var fingerDownX = 0f
+    var fingerDownY = 0f
+    var windowOriginX = 0
+    var windowOriginY = 0
+
+    strip.setOnTouchListener { _, event ->
+      when (event.actionMasked) {
+        MotionEvent.ACTION_DOWN -> {
+          fingerDownX = event.rawX
+          fingerDownY = event.rawY
+          windowOriginX = params.x
+          windowOriginY = params.y
+          true
+        }
+        MotionEvent.ACTION_MOVE -> {
+          params.x = windowOriginX + (event.rawX - fingerDownX).toInt()
+          params.y = windowOriginY + (event.rawY - fingerDownY).toInt()
+          runCatching { getSystemService(WindowManager::class.java).updateViewLayout(root, params) }
+            .onFailure { log("overlay: drag update failed: ${it::class.java.simpleName}: ${it.message}") }
+          true
+        }
+        MotionEvent.ACTION_UP -> {
+          logOverlayPlacement("dragged")
+          true
+        }
+        else -> false
+      }
+    }
+    return strip
   }
 
   /**
@@ -1110,6 +1317,16 @@ class SpikeAccessibilityService : AccessibilityService() {
     const val HOLD_MS = 2000L
 
     /**
+     * The pad build. [findHandle]'s scan. The step is the handle's own touch radius — probing finer than
+     * the target's size only buys duplicate hits — and the nudge is as small as a drag can be while
+     * still moving anything.
+     */
+    const val FIND_STEP = 48f
+    const val FIND_NUDGE = 8f
+    const val FIND_MAX_PROBES = 16
+    const val FIND_SETTLE_MS = 300L
+
+    /**
      * The pad build. How far [servo] escalates a step that announces nothing, in multiples of its dx.
      *
      * 4 was not enough, and the reason turned out to be the finding itself: measured 2026-09-02,
@@ -1145,6 +1362,12 @@ class SpikeAccessibilityService : AccessibilityService() {
     const val OVERLAY_Y = 2200
     const val OVERLAY_BACKGROUND = 0xCC1565C0.toInt()
     val OVERLAY_BUTTONS = listOf("WORD >", "CHAR >")
+
+    /** The strip that makes the pad movable — owner's request, and the manual half of the O3 fix. */
+    const val DRAG_STRIP_HEIGHT = 90
+    const val DRAG_STRIP_LABEL = "≡  drag to move"
+    const val DRAG_STRIP_BACKGROUND = 0xEE0D47A1.toInt()
+    const val DRAG_STRIP_FOREGROUND = 0xFFFFFFFF.toInt()
 
     val NOTEWORTHY_ACTIONS = setOf(
       "SET_SELECTION",
