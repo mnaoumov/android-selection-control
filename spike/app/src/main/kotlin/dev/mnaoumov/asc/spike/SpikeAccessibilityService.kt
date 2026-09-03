@@ -221,6 +221,12 @@ class SpikeAccessibilityService : AccessibilityService() {
         dx = parts[2].toFloat(),
         settleMs = parts.getOrNull(3)?.toLong() ?: SETTLE_MS,
       )
+      "servo" -> servo(
+        edge = parts[1],
+        dx = parts[2].toFloat(),
+        count = parts[3].toInt(),
+        settleMs = parts.getOrNull(4)?.toLong() ?: SETTLE_MS,
+      )
       "draghold" -> dragHold(
         x1 = parts[1].toFloat(),
         y1 = parts[2].toFloat(),
@@ -234,7 +240,7 @@ class SpikeAccessibilityService : AccessibilityService() {
         "unknown command '${parts[0]}' — try: " +
           "dump|node|focus|select|clear|gran|copy|windows|" +
           "tap|long|drag|pressdrag|nodetap|nodelong|sel|events|chars|" +
-          "selstate|probe|nudge|draghold"
+          "selstate|probe|nudge|servo|draghold"
       )
     }
   }
@@ -635,6 +641,63 @@ class SpikeAccessibilityService : AccessibilityService() {
         emit(listOf("$what -> " + delta(snap, lastSelection)))
       }, settleMs)
     }
+  }
+
+  /**
+   * [nudge] repeated [count] times — the CLOSED-loop walk, and the instrument that actually answers
+   * the granularity question.
+   *
+   * [probe] does the same walk open-loop and was tried first; it loses the handle after a handful
+   * of steps, because a handle does not stay under the pixel the last drag lifted at (it follows
+   * the selection, which may snap, saturate at a node edge, or extend into a node the event never
+   * mentions). Once lost, the steps land on the page instead — measured as TYPE_VIEW_CLICKED events
+   * and a dropped selection. Re-deriving the handle from the announced range each step is the fix,
+   * and it is also exactly what the pad's buttons will do.
+   *
+   * Read the offset sequence, not the pixels: values landing INSIDE a word prove character
+   * granularity; values that only ever sit on word boundaries, with several steps producing no
+   * event in between, prove the app snaps.
+   */
+  private fun servo(edge: String, dx: Float, count: Int, settleMs: Long) {
+    if (edge != EDGE_START && edge != EDGE_END) {
+      log("servo: edge must be '$EDGE_START' or '$EDGE_END', got '$edge'")
+      return
+    }
+    val lines = mutableListOf("servo: edge=$edge dx=$dx count=$count settle=${settleMs}ms")
+
+    fun step(i: Int) {
+      if (i >= count) {
+        emit(lines + "servo: done after $count step(s)")
+        return
+      }
+      val snap = lastSelection
+      if (snap == null) {
+        emit(lines + "  step ${i + 1}: nothing announced — long-press some text first; stopping")
+        return
+      }
+      val handle = handlePixel(snap, edge)
+      if (handle == null) {
+        emit(lines + "  step ${i + 1}: handle not derivable from ${snap.describe()}; stopping")
+        return
+      }
+      val (hx, hy) = handle
+      dispatchStroke(
+        stroke = GestureDescription.StrokeDescription(line(hx, hy, hx + dx, hy), 0, PROBE_DRAG_MS),
+        what = "servo step ${i + 1}/$count",
+        verbose = false,
+      ) { completed ->
+        if (!completed) {
+          emit(lines + "  step ${i + 1}: gesture CANCELLED; chain stops here")
+          return@dispatchStroke
+        }
+        handler.postDelayed({
+          lines += "  step ${i + 1}: handle=($hx, $hy) -> ${hx + dx}  " + delta(snap, lastSelection)
+          step(i + 1)
+        }, settleMs)
+      }
+    }
+
+    step(0)
   }
 
   /**
