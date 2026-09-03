@@ -75,7 +75,15 @@ class HeldPointer(
   val isHeld: Boolean get() = stroke != null
 
   /**
-   * Press at [from] and start the chain.
+   * Press at [from] and start the chain. [onGrabbed] fires when the first stroke has **played**, not
+   * when it was accepted for dispatch.
+   *
+   * That distinction cost a whole round of measurement. Reporting on acceptance means the caller
+   * starts waiting for the selection to change before the grab has even run: the stroke takes
+   * [GRAB_MS], the caller's settle is 220 ms, and the announcement lands after the stroke — so the
+   * caller times out, concludes the grab caught nothing, and falls back to the released path. Six of
+   * seven presses did exactly that, each one reporting `-> nothing` from a grab that had in fact
+   * worked.
    *
    * The first stroke travels a couple of pixels rather than standing still, because a stationary
    * press that is held **is a long press** — and a long press that missed the handle would select a
@@ -116,10 +124,19 @@ class HeldPointer(
     stroke = first
     at = PointF(towards.x, towards.y)
     goal = null
-    val accepted = dispatch(gestureOf(first)) { played -> if (played) link() else lost("grab not played") }
+    val accepted = dispatch(gestureOf(first)) { played ->
+      // Continue the chain FIRST and tell the caller second: a continuation must be dispatched from
+      // this completion immediately, and whatever the caller does next must not get in front of it.
+      if (played) link() else lost("grab not played")
+      onGrabbed(played)
+    }
     Diag.log("held: grab at ${from.x} accepted=$accepted")
-    if (!accepted) forget()
-    onGrabbed(accepted)
+    // A refused dispatch never calls back, so this is the one path that has to report for itself —
+    // and it must report exactly once, like the other.
+    if (!accepted) {
+      forget()
+      onGrabbed(false)
+    }
   }
 
   /**
@@ -205,6 +222,20 @@ class HeldPointer(
   private fun link() {
     if (releasing) {
       releasing = false
+      lift()
+      return
+    }
+    /*
+     * A chain that nobody stops runs for ever, at a dispatched gesture every [TICK_MS].
+     *
+     * Every caller here does release, but "every caller does" is not a property of this class, and
+     * the failure it guards against is not a slow loop — it is a finger left pressed on the owner's
+     * phone, holding the target app in a drag, until something notices. One dropped callback is all
+     * it would take. So the chain has an end of its own, generous enough that no honest burst
+     * reaches it.
+     */
+    if (links >= MAX_LINKS) {
+      Diag.log("held: $links links without a release — lifting on my own")
       lift()
       return
     }
@@ -298,7 +329,16 @@ class HeldPointer(
     const val SLOP_DETOUR_PX = 60f
     const val GRAB_MS = 150L
 
-    /** A lift needs a path with a length; an empty one throws and strands the pointer. */
+    /** How far the lift travels. See [lift] for why this is not the load-bearing detail it was. */
     const val LIFT_NUDGE_PX = 1f
+
+    /**
+     * The chain's own end, in links, if nothing releases it.
+     *
+     * At [TICK_MS] this is about twelve seconds of holding — far longer than any press or burst, so
+     * it never fires in normal use, and short enough that a bug cannot leave a finger pressed on the
+     * owner's phone indefinitely.
+     */
+    const val MAX_LINKS = 200
   }
 }

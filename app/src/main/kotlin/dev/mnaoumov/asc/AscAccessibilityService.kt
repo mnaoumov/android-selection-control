@@ -43,6 +43,25 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   private var busy = false
 
   /**
+   * The synthetic finger that does not lift between corrections (the held-pointer fix).
+   *
+   * Built on the raw `dispatchGesture` rather than on [dispatch], because a chain needs the
+   * gesture-level `Boolean` — "accepted for dispatch" — to tell a refusal apart from a cancellation,
+   * and [dispatch] folds both into its callback.
+   */
+  private val heldPointer = HeldPointer { gesture, onFinished ->
+    val callback = object : GestureResultCallback() {
+      override fun onCompleted(gestureDescription: GestureDescription?) = finish(true)
+      override fun onCancelled(gestureDescription: GestureDescription?) = finish(false)
+      private fun finish(completed: Boolean) {
+        runCatching { onFinished(completed) }
+          .onFailure { Diag.log("held: a link's follow-up threw ${it::class.java.simpleName}: ${it.message}") }
+      }
+    }
+    dispatchGesture(gesture, callback, null)
+  }
+
+  /**
    * The direction button currently held down, which is what makes a hold repeat.
    *
    * Note the one case where a hold stops early by design: when the handle sits under the pad, the
@@ -343,6 +362,25 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       dispatch(hold, onFinished)
     }
   }
+
+  /**
+   * The held route (the held-pointer fix). The grab travels past the touch slop for the same reason [drag] does — a
+   * miss that reads as a tap navigates — and [HeldPointer] adds the detour itself.
+   */
+  override fun grabAndHold(from: PointF, to: PointF, onGrabbed: (Boolean) -> Unit) {
+    // A chain from a previous press cannot be reused: the press itself is a real touch, and a real
+    // touch ends the target app's tracking of the handle even though the chain survives it
+    // (measured, the held-pointer fix). So start clean rather than inheriting a pointer the app has stopped
+    // following.
+    if (heldPointer.isHeld) heldPointer.releaseNow()
+    heldPointer.grab(from, to, onGrabbed)
+  }
+
+  override fun moveHeld(to: PointF): Boolean = heldPointer.moveTo(to)
+
+  override fun releaseHeld() = heldPointer.release()
+
+  override fun heldAt(): PointF? = heldPointer.position
 
   override fun screenWidth(): Int = resources.displayMetrics.widthPixels
 
