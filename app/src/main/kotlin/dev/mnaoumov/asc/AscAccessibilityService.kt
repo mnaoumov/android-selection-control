@@ -385,8 +385,19 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     /** How far past the touch slop a drag detours, so a miss cannot read as a tap. */
     const val SLOP_MULTIPLE = 2
 
+    /** A lift still needs a stroke, and the shortest legal one will do. */
+    const val LIFT_MS = 1L
+
     /** How long an announcement stays trustworthy before the node rung is worth a walk. */
     const val STALE_MS = 4000L
+
+    /**
+     * How long after the last press the held pointer is lifted.
+     *
+     * Long enough that a run of presses shares one grab, short enough that the app is not left
+     * mid-drag when the user has moved on.
+     */
+    const val RELEASE_IDLE_MS = 1500L
 
     /**
      * How long the toolbar must stay gone before the mask comes down. Longer than the blink a drag

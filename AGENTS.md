@@ -97,6 +97,26 @@ a tap somewhere neutral before a long-press that is meant to start over.
 `TYPE_VIEW_CLICKED` and, once, followed a link and navigated the page out from under the run. An app must
 not dispatch a drag when it does not know where the handle is.
 
+**The landed offset is NOT a function of where the finger ends up.** Measured 2026-09-03 on one
+Chrome node, three drags all ending at exactly x=741.5: from the handle at 712 it left the offset at
+16, from 777.6 it gave 18, from 755.75 it gave 16 again. Same final pixel, three answers. Whatever
+Chrome does on a handle drag keeps something from the grab, so a step cannot be computed as "put the
+finger at x(target)" however good the pixel model is — which is why a character step still costs two
+to seven gestures of read-and-correct rather than one. Do not rebuild the aim on the assumption that
+it is a pure function; it is not.
+
+**A continuing stroke must be continued BEFORE the previous one completes.** The owner's idea of
+holding the pointer down across presses — press once, move on each press, release at the end — is
+right in principle and was built and measured: it grabbed nothing at all. Eight strokes walked the
+pointer from x=690 to x=2104, clean off the side of the screen, with the selection sitting unchanged
+on the word it started on (and, to its credit, no damage: no scroll, no navigation). The cause is the
+`StrokeDescription` contract — a stroke marked `willContinue` has its continuation dispatched from
+the previous gesture's completion callback here, which is exactly too late, so every stroke is
+cancelled. Making it work needs continuations dispatched on a timer slightly AHEAD of each stroke
+ending, which is a different loop from one that reads the result of each move before choosing the
+next. Worth doing: while a drag is held the target app keeps its selection toolbar down, which is the
+real fix for the toolbar reappearing on every press.
+
 **An overlay's `LayoutParams` x/y are inset by the status bar; `dispatchGesture` coordinates are raw
 screen pixels.** Ask for (60, 1040) and the window lands at y=1181 — 141 px lower, the status bar's
 height. Mixing the two coordinate spaces silently misplaces everything, and it cost one wrong
