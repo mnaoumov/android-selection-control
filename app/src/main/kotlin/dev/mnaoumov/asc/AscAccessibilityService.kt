@@ -35,6 +35,16 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   /** One press at a time: the loop reads the result of each gesture before deciding the next. */
   private var busy = false
 
+  /**
+   * The direction button currently held down, which is what makes a hold repeat.
+   *
+   * Note the one case where a hold stops early by design: when the handle sits under the pad, the
+   * pad is made non-touchable for the step, and losing touchability cancels the in-flight touch. The
+   * step still runs; only the repeat ends. Better than the alternative, which is a finger held over
+   * a window that is passing every touch through to the page.
+   */
+  private var held: PadCommand? = null
+
   override fun onServiceConnected() {
     super.onServiceConnected()
 
@@ -55,9 +65,13 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     pad = Pad(
       context = this,
       windowManager = getSystemService(WindowManager::class.java),
-      onCommand = ::onCommand,
+      onPressStart = ::onPressStart,
+      onPressEnd = ::onPressEnd,
       onSwapEdge = ::onSwapEdge,
-      onClose = { pad?.hide() },
+      onClose = {
+        held = null
+        pad?.hide()
+      },
     ).also { it.show() }
 
     connected = this
@@ -80,7 +94,22 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
   // ------------------------------------------------------------------ the pad
 
-  private fun onCommand(command: PadCommand) {
+  /**
+   * A direction button went down: one step now, and more while the finger stays on it.
+   *
+   * The repeat is chained off completion rather than driven by a timer — see [Pad.holdable] for why
+   * — so this only has to record what is held and start the first step.
+   */
+  private fun onPressStart(command: PadCommand) {
+    held = command
+    if (!busy) step(command)
+  }
+
+  private fun onPressEnd() {
+    held = null
+  }
+
+  private fun step(command: PadCommand) {
     if (busy) return
     busy = true
 
@@ -105,7 +134,35 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       if (inTheWay) pad?.setTransparentToTouch(false)
       pad?.showStatus(describe(outcome))
       busy = false
+
+      /*
+       * Repeat only while the finger is down AND the last step actually got somewhere.
+       *
+       * Stopping on no progress is a safety property, not tidiness. A step that failed did so by
+       * dragging somewhere that was not a handle, and a drag that misses lands on the page — on a
+       * link, that navigates. Hammering that at a few presses a second because a finger is resting
+       * on a button is the worst thing this app could do, so a hold ends the moment a step stops
+       * moving the selection, leaving the reason on the status line.
+       *
+       * Posted rather than called, so each step starts from a fresh loop turn and the status line
+       * gets drawn between them.
+       */
+      if (held == command && madeProgress(outcome)) {
+        handler.post { if (held == command) step(command) }
+      } else {
+        held = null
+      }
     }
+  }
+
+  /**
+   * Whether that step moved the selection. [Outcome.Degraded] counts: it means a word step fell back
+   * to a single character, which is less than asked for but is still progress.
+   */
+  private fun madeProgress(outcome: Outcome): Boolean = when (outcome) {
+    is Outcome.Moved -> outcome.fromOffset != outcome.toOffset
+    is Outcome.Degraded -> true
+    Outcome.NoSelection, Outcome.HandleLost -> false
   }
 
   /**
@@ -130,6 +187,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   }
 
   private fun onSwapEdge() {
+    held = null
     driver.activeEdge = if (driver.activeEdge == Edge.END) Edge.START else Edge.END
     locator.forgetAnchor()
     pad?.showStatus("moving the ${if (driver.activeEdge == Edge.END) "end" else "start"}")

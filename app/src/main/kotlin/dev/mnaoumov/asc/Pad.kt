@@ -40,7 +40,8 @@ enum class PadMode {
 class Pad(
   private val context: Context,
   private val windowManager: WindowManager,
-  private val onCommand: (PadCommand) -> kotlin.Unit,
+  private val onPressStart: (PadCommand) -> kotlin.Unit,
+  private val onPressEnd: () -> kotlin.Unit,
   private val onSwapEdge: () -> kotlin.Unit,
   private val onClose: () -> kotlin.Unit,
 ) {
@@ -212,7 +213,41 @@ class Pad(
   }
 
   private fun commandButtons(themed: Context, vararg buttons: Pair<PadCommand, String>): List<View> =
-    buttons.map { (command, label) -> action(themed, label) { onCommand(command) } }
+    buttons.map { (command, label) -> holdable(themed, label, command) }
+
+  /**
+   * A direction button that repeats while it is held down.
+   *
+   * Deliberately **not** a repeat timer. A press here is a closed loop that takes anywhere from
+   * 300 ms to 2.2 s — several dispatched gestures, each verified by reading the selection back — so a
+   * fixed-interval timer would queue presses faster than they complete and the extra ones would be
+   * dropped on the `busy` guard. Instead the service starts the next step when the previous one
+   * *finishes*, if the finger is still down, which paces itself for free and needs no initial-delay
+   * constant either: a tap's finger has always lifted long before the first step completes, so a tap
+   * is exactly one step.
+   *
+   * Touch rather than click, because press and release are separate facts here, and `isPressed` is
+   * set by hand since consuming the touch means the button no longer draws that state itself.
+   */
+  private fun holdable(themed: Context, label: String, command: PadCommand): View =
+    Button(themed).apply {
+      text = label
+      setOnTouchListener { view, event ->
+        when (event.actionMasked) {
+          MotionEvent.ACTION_DOWN -> {
+            view.isPressed = true
+            onPressStart(command)
+            true
+          }
+          MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+            view.isPressed = false
+            onPressEnd()
+            true
+          }
+          else -> false
+        }
+      }
+    }
 
   private fun row(themed: Context, vararg buttons: Pair<PadCommand, String>): View =
     rowOf(themed, commandButtons(themed, *buttons))

@@ -277,6 +277,17 @@ The pad appears as soon as the service connects. Its buttons take **real injecte
 `adb shell input tap <x> <y>` — which is the right way to test them: the service's own
 `dispatchGesture` is a different input path, and O1 was careful about that distinction.
 
+**Holding a direction button repeats it, chained off completion rather than on a timer.** A press is
+a closed loop costing 300 ms – 2.2 s, so a fixed-interval repeat would queue steps faster than they
+finish and the surplus would vanish on the `busy` guard. The next step therefore starts when the
+previous one *ends*, if the finger is still down — self-pacing, and no initial-delay constant is
+needed either, since a tap's finger has lifted long before step one completes.
+
+A hold stops on the first step that does not move the selection. That is a **safety** rule: a failed
+step failed by dragging where no handle was, and a drag that misses lands on the page, which on a
+link navigates. It also stops when the handle is under the pad, because going non-touchable for the
+step cancels the in-flight touch — the step runs, the repeat does not.
+
 **Closing the pad hides the overlay and leaves the service connected**, on purpose. The `✕` at the
 right of the status line is the only way out that is available on this device: the Accessibility
 switch is ECM-blocked (above), so `disableSelf` would strand the user behind it, needing
