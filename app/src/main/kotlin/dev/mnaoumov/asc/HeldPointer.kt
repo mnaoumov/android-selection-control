@@ -8,30 +8,32 @@ import android.os.Handler
 /**
  * A synthetic finger that presses once, moves as often as asked, and lifts when told.
  *
- * **NOT WIRED IN, and now for a measured reason rather than an unfinished one.** The chain itself
- * works: a grab is accepted, sixty-odd links play in a row, the lift is clean and the next grab is
- * accepted again. What does not work is the target app's side of it.
+ * **The chain works, and the held-pointer fix measured exactly how.** An earlier version of this comment concluded
+ * that Chrome ends its handle drag after the first gesture. That was wrong, and it was wrong because
+ * every attempt to test it drove this class from a pad BUTTON — which is a real touch, and a real
+ * touch is precisely what breaks it. `spike`'s `held` command runs the same chain from a broadcast,
+ * touching nothing, and the picture inverts:
  *
- * The pattern, from four builds:
+ * - The chain never dies. Ten links and a clean lift, every time, on a browser page and on this
+ *   app's own `TargetActivity`. Every link reports `completed=true`, with or without interference.
+ * - **But any real touch permanently ends the TARGET APP's tracking**, while leaving this chain
+ *   alive and reporting success. One brief tap mid-chain stopped the selection moving from that link
+ *   on and it never recovered; a resting finger does the same for as long as it is down. Matched
+ *   runs from one selection: 9 of 10 links moved untouched, 3 of 10 with a finger down, 2 of 10
+ *   after a single tap. **So a chain cannot span pad presses — the press is what ends it.**
+ * - The lift does **not** snap. Three links landed `10..12` and it was still `10..12` after the lift
+ *   and 900 ms of settle.
+ * - One press as a whole grab-move-lift costs **318–329 ms and one chain**, against 0.7–2.3 s and
+ *   two to seven escalating drags released.
  *
- * - A held stroke that presses, detours past the slop and travels to its destination moves the
- *   selection **exactly one character in 222 ms and one gesture** — three times faster and far more
- *   accurate than the released path, which takes 0.7–2.3 s and two to seven escalating drags for the
- *   same step.
- * - Every move AFTER that one does nothing. Not a wrong offset — no change at all, through twelve
- *   escalating destinations, whether the pointer is moved by a continuation or lifted and re-grabbed
- *   for each move.
- * - The page does not scroll and no fresh word is selected while this happens, so the later strokes
- *   are reaching nothing rather than landing somewhere wrong.
+ * The old "one move, then nothing through twelve destinations" was measured on a WRAPPED paragraph,
+ * whose node bounds are the union of its line boxes — so the interpolated handle sat below the last
+ * line and nothing was ever grabbed. That is the handle-location defect's defect, not this class's.
  *
- * Which points at the target app, not at this class: Chrome appears to end its handle drag when the
- * first gesture completes and to refuse to start another until something it is waiting for arrives.
- * The lift this class sends is evidently not it.
- *
- * The 222 ms result also explains a finding recorded in AGENTS.md — that the landed offset is not a
- * function of the final pixel. It is a function of the final pixel AND the lift: hold the finger and
- * the handle stays exactly where it was put; lift it and the app snaps the handle somewhere of its
- * own choosing. That is why the released path needs several read-and-correct rounds per character.
+ * The finding that survives all of it: the landed offset is a function of the final pixel AND the
+ * lift. Held, the handle stays exactly where it was put; released, the app snaps it somewhere of its
+ * own choosing. That is why the released path needs several read-and-correct rounds per character —
+ * and exactly what a held press does not have to pay.
  *
  * The owner's design, and the reason for it is everything that goes wrong when each press is its own
  * press-move-release: the handle has to be found again every time, a miss is a tap on the page, and
@@ -151,13 +153,13 @@ class HeldPointer(
     if (previous == null || from == null) return
 
     /*
-     * The lift travels one pixel, and that is not a detail.
+     * The lift travels one pixel.
      *
-     * A `StrokeDescription` needs a path with a length; a `moveTo` on its own is empty, and building
-     * one throws. The throw landed inside a gesture-completion callback, where it killed the lift
-     * silently and left the framework holding a pointer this class had already forgotten — after
-     * which every later grab was refused and twelve escalating drags moved nothing. That was the
-     * "stuck pointer", and it was self-inflicted.
+     * This used to say that a `moveTo` on its own throws. **It does not** — `spike`'s `point()` is
+     * exactly that path, and `tap`, `long` and `pressdrag`'s settle stroke all use it happily, as a
+     * first stroke and as a continuation (the held-pointer fix). Whatever stranded a pointer here, it was not this,
+     * so the claim is withdrawn rather than repeated. The nudge stays because a lift that travels is
+     * no worse and keeps the shape uniform with [link].
      */
     val path = Path().apply {
       moveTo(from.x, from.y)

@@ -113,24 +113,40 @@ finger at x(target)" however good the pixel model is — which is why a characte
 to seven gestures of read-and-correct rather than one. Do not rebuild the aim on the assumption that
 it is a pure function; it is not.
 
-**Continued strokes do not stay down, and that is now measured on two targets.** The chain
-mechanism itself is solved: continue each stroke from the previous gesture's `onCompleted`,
+**Continued strokes DO stay down. What stops is the target app's handle drag, and what stops it is
+the user's own finger.** Measured 2026-09-03 (the held-pointer fix) with `spike`'s `held` command, which is driven by
+broadcast and so can run a chain with nothing touching the screen — the control every earlier round
+was missing. Corrects the earlier entry here, which blamed Chrome for ending its drag; that was wrong.
+
+- **The chain never dies.** Ten links and a clean lift, every time, on both targets — and it survives
+ a real tap and a resting finger too. Every link reports `completed=true`.
+- **But any real touch permanently ends the app's tracking.** A single brief tap mid-chain killed the
+ selection's movement from that link onwards and it never recovered, while the chain itself ran to a
+ clean lift. A finger resting through the chain does the same for as long as it is down. Matched
+ runs from the same selection: 9 of 10 links moved untouched, 3 of 10 with a finger down, 2 of 10
+ after one tap. **So a held chain cannot span pad presses — the press is what ends it.**
+- **The lift does NOT snap.** Three links landed `10..12` and it was still `10..12` after the lift and
+ 900 ms of settle. The snap belongs to the RELEASED path, not to lifting as such.
+- **One press = one chain, and it is exact.** Five consecutive grab-move-lift presses cost
+ **318–329 ms and one chain each**, against 0.7–2.3 s and two to seven gestures released.
+
+The chain mechanism is solved: continue each stroke from the previous gesture's `onCompleted`,
 immediately — continuing 300 ms later after reading the selection back never grabs anything, and a
-timer that fires early is worse, because dispatching while a gesture plays cancels it. Give the lift
-a path with a length too: a `moveTo` on its own throws, and the throw lands inside a completion
-callback where it strands a pointer nobody can reach.
+timer that fires early is worse, because dispatching while a gesture plays cancels it.
 
-With all that right, the pointer still does not persist. Against Chrome the first held stroke moved
-the selection **one character in 222 ms and one gesture** — three times faster than the released
-path — and every later move did nothing at all, through twelve escalating destinations. Against a
-plain selectable `TextView` in this app's own debug target the presses work, but the log shows a
-fresh grab for every single gesture: `isHeld` is false each time, so the chain is not surviving
-there either and what looks like a held pointer is the released path wearing its coat.
+**A `moveTo`-only path does NOT throw** — `spike`'s `point` is exactly that, and `tap`, `long` and
+`pressdrag`'s settle stroke all use it happily, as a first stroke and as a continuation. The earlier
+claim here that it throws is withdrawn; whatever stranded that pointer, it was not this.
 
-One measurement from it is worth keeping regardless: the landed offset is a function of the final
-pixel **and the lift**. Held, the handle stays exactly where it is put; lifted, the app snaps it
-somewhere of its own. That is why a character step needs several read-and-correct rounds today, and
-it is the reason to come back to this. `HeldPointer.kt` holds the work, deliberately NOT wired in.
+The still-true half of the old entry: the landed offset is a function of the final pixel **and the
+lift**. Held, the handle stays exactly where it is put; released, the app snaps it somewhere of its
+own. That is why the released path needs several read-and-correct rounds per character, and it is
+exactly what a held press does not have to pay.
+
+**The earlier Chrome result — one move, then nothing through twelve destinations — was a wrapped
+paragraph.** Its node bounds are the union of four line boxes, so the interpolated handle sits below
+the *last* line rather than on the selection, and nothing was ever grabbed. That is the handle-location defect,
+not a held-pointer one. Re-measuring on a one-line node is what turned the whole picture around.
 
 **Interpolation needs a box that hugs its text, and a `TextView` does not give you one.** The debug
 target's blocks were `MATCH_PARENT` at first, so a 30-character node reported itself 1208 px wide;
