@@ -122,6 +122,21 @@ it and the anchor handle does not move while one edge is dragged, the moving han
 `2 × centre − anchor` — **selection geometry with no node bounds and no text**, which is what `track`
 uses where interpolation cannot work.
 
+**The event's source node follows the MOVING end of the selection.** Grow a selection past its node
+and the next event describes the node containing the new end, with that node's own bounds — usually
+single-line and tight — so interpolation starts working again by itself. Measured: a three-line
+selection drove four clean `servo` steps because its source had become the single-line node holding
+the end. The genuinely hard case is therefore narrow: **a line wrap INSIDE one node**, the only place
+where the source stays coarse while the end moves.
+
+**Only the MOVING edge is derivable; the other one is not.** `low`/`high` are offsets into the
+SOURCE node, not into the selection, so on a multi-line selection the non-moving edge computes to
+nonsense — a start handle at x=26 whose real position was ~556, a line higher. Derive the edge being
+moved and never the other.
+
+**The floating toolbar pins the selection's START, not its end.** Its vertical position moved ten
+pixels across a deliberate three-line selection — it cannot be used to find the moving handle's row.
+
 **The mirror identity holds only while BOTH handles are on the same row.** `moving = 2·centre −
 anchor` tracked a handle from 663.5 to 873.5 across four steps on a node where interpolation is
 useless — and then broke the moment the selection's end crossed to another line, because the start
