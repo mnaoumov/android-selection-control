@@ -241,12 +241,26 @@ installing — the two APKs have different application ids (`dev.mnaoumov.asc` a
 ## Run the app
 
 ```powershell
-$d = "<device-serial>"
-adb -s $d install -r app\build\outputs\apk\debug\app-debug.apk
-$orig = (adb -s $d shell settings get secure enabled_accessibility_services).Trim # SAVE THIS
-adb -s $d shell settings put secure enabled_accessibility_services "$orig`:dev.mnaoumov.asc/dev.mnaoumov.asc.AscAccessibilityService"
-adb -s $d shell settings put secure accessibility_enabled 1
+adb -s <device-serial> install -r app\build\outputs\apk\debug\app-debug.apk
+.\scripts\pad.ps1 on # off | status
 ```
+
+`scripts\pad.ps1` is the by-hand switch. It **edits the enabled-services list in place** rather than
+saving and restoring it, so anything else you rely on (a password manager's autofill service) is
+preserved and a second run is a no-op. It also picks the **physical device** and ignores emulators,
+per *Never touch* below.
+
+**There is no way to enable this from Settings on this device, and that is not a bug in the app.**
+ECM blocks the accessibility toggle for anything it considers sideloaded, deciding from install
+provenance: an `adb install` leaves `installerPackageName=null` and
+`initiatingPackageName=com.android.shell`, which it treats as untrusted. The toggle is then **absent,
+not greyed out**, and OxygenOS offers no "allow restricted settings" route, nor can `appops` clear it
+(adb's uid lacks `MANAGE_APP_OPS_MODES`). A trusted install source is the only real fix — which is
+why Play is a design constraint for this project rather than a distribution preference. Full
+reasoning in `the gesture spike's notes`.
+
+The launcher entry (**Selection Pad**) shows the Play-required disclosure and a link to Accessibility
+settings; on this device that link is informational, since the toggle will not be there.
 
 The pad appears as soon as the service connects. Its buttons take **real injected input** —
 `adb shell input tap <x> <y>` — which is the right way to test them: the service's own

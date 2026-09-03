@@ -120,7 +120,7 @@ class SelectionDriver(
    * word on screen.
    */
   private fun growOneUnit(command: PadCommand, attempt: Int = 0, onDone: (Outcome) -> Unit) {
-    val before = observer.latest
+    val before = observer.latestWithFreshBounds()
     if (before == null) {
       onDone(Outcome.NoSelection)
       return
@@ -213,7 +213,7 @@ class SelectionDriver(
     onDone: (Outcome) -> Unit,
     guard: Int = 0,
   ) {
-    val before = observer.latest
+    val before = observer.latestWithFreshBounds()
     val current = before?.high()
     if (before == null || current == null) {
       onDone(Outcome.NoSelection)
@@ -379,7 +379,7 @@ class SelectionDriver(
    * end, and the hold time here is a guess at "one screen" rather than a measurement.
    */
   private fun sweepToEdge(command: PadCommand, holdMs: Long, onDone: (Outcome) -> Unit) {
-    val before = observer.latest ?: run {
+    val before = observer.latestWithFreshBounds() ?: run {
       onDone(Outcome.NoSelection)
       return
     }
@@ -412,7 +412,7 @@ class SelectionDriver(
    */
   private fun acquireThenRetry(command: PadCommand, onDone: (Outcome) -> Unit, probe: Int = 1) {
     val centre = toolbarCentre()
-    val snapshot = observer.latest
+    val snapshot = observer.latestWithFreshBounds()
     if (centre == null || snapshot?.bounds == null || probe > HandleLocator.SCAN_MAX_PROBES) {
       onDone(Outcome.HandleLost)
       return

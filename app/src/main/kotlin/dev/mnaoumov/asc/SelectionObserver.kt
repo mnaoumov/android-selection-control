@@ -41,6 +41,15 @@ class SelectionObserver {
     val sourceLength: Int,
     val packageName: String?,
     val atMs: Long,
+    /**
+     * The node the range belongs to, kept so its bounds can be re-read rather than remembered.
+     *
+     * Bounds captured when the event fired go stale the moment anything scrolls — and in a browser
+     * that is constantly: the toolbar collapses on the first scroll and shifts the whole page, and
+     * the loop's own drags can scroll too. A handle derived from remembered bounds then aims at
+     * where the text used to be, which reads to the user as "it loses the handle far too easily".
+     */
+    val source: AccessibilityNodeInfo? = null,
   ) {
     fun low(): Int = minOf(from, to)
 
@@ -58,6 +67,22 @@ class SelectionObserver {
   @Volatile
   var latest: Snapshot? = null
     private set
+
+  /**
+   * The latest snapshot with its geometry re-read from the live node, because remembered bounds go
+   * stale on every scroll.
+   *
+   * Returns the snapshot unchanged when the node cannot be refreshed — a node that has gone away is
+   * a reason to stop, not a reason to use numbers known to be wrong, and the caller decides which.
+   */
+  fun latestWithFreshBounds(): Snapshot? {
+    val snapshot = latest ?: return null
+    val source = snapshot.source ?: return snapshot
+    if (!runCatching { source.refresh() }.getOrDefault(false)) return snapshot
+    val bounds = Rect().also { source.getBoundsInScreen(it) }
+    if (bounds.isEmpty) return snapshot
+    return snapshot.copy(bounds = bounds, sourceLength = source.text?.length ?: snapshot.sourceLength)
+  }
 
   /**
    * Feeds the event rung. Returns true if this event changed what we know.
@@ -79,6 +104,7 @@ class SelectionObserver {
       sourceLength = source.text?.length ?: -1,
       packageName = event.packageName?.toString(),
       atMs = SystemClock.uptimeMillis(),
+      source = source,
     )
     return true
   }
@@ -100,6 +126,7 @@ class SelectionObserver {
       sourceLength = node.text?.length ?: -1,
       packageName = packageName,
       atMs = SystemClock.uptimeMillis(),
+      source = node,
     )
   }
 

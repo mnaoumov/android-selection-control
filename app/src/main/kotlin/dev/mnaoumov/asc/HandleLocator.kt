@@ -92,7 +92,11 @@ class HandleLocator {
   fun grabbedAHandle(before: SelectionObserver.Snapshot?, after: SelectionObserver.Snapshot): Boolean {
     if (before == null) return false
     if (after.isEmpty()) return false
-    if (after.bounds != before.bounds) return false
+    // "Same node" must NOT be judged by bounds: they move whenever the page scrolls, and a browser
+    // scrolls constantly — its toolbar collapses on the first scroll and shifts everything. Length
+    // and package identify the run without depending on where it currently sits.
+    if (after.sourceLength != before.sourceLength) return false
+    if (after.packageName != before.packageName) return false
     return after.low() == before.low() || after.high() == before.high()
   }
 
