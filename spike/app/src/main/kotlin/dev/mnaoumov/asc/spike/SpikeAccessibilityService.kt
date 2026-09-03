@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Path
+import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Bundle
@@ -14,8 +15,15 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import android.view.ContextThemeWrapper
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.Button
+import android.widget.LinearLayout
 
 /**
  * Feasibility spikes: selection actions, then synthesised gestures.
@@ -100,6 +108,10 @@ class SpikeAccessibilityService : AccessibilityService() {
    */
   private val handler = Handler(Looper.getMainLooper())
 
+  /** The attached overlay, if any, and where it sits — see [overlayOn]. */
+  private var overlayView: View? = null
+  private var overlayRect: Rect? = null
+
   private val receiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
       val cmd = intent?.getStringExtra("cmd")
@@ -108,7 +120,12 @@ class SpikeAccessibilityService : AccessibilityService() {
         return
       }
       runCatching { dispatch(cmd.trim()) }
-        .onFailure { log("ERROR while handling '$cmd': ${it::class.java.simpleName}: ${it.message}") }
+        .onFailure { failure ->
+          // The message alone is not enough for a framework throw — "Adding window failed" says
+          // nothing about which call rejected it. One line per frame, per the logcat 4 KB rule.
+          log("ERROR while handling '$cmd': ${failure::class.java.simpleName}: ${failure.message}")
+          failure.stackTraceToString().lineSequence().take(STACK_FRAMES).forEach { log("  $it") }
+        }
     }
   }
 
@@ -120,6 +137,9 @@ class SpikeAccessibilityService : AccessibilityService() {
 
   override fun onUnbind(intent: Intent?): Boolean {
     runCatching { unregisterReceiver(receiver) }
+    // Without this an overlay outlives the service that made it, and the only way back is a
+    // reinstall — the `overlay off` command needs a running service to receive it.
+    overlayOff(quiet = true)
     return super.onUnbind(intent)
   }
 
@@ -239,6 +259,19 @@ class SpikeAccessibilityService : AccessibilityService() {
         count = parts[3].toInt(),
         settleMs = parts.getOrNull(4)?.toLong() ?: SETTLE_MS,
       )
+      // The pad build Phase 1a — the overlay that has to become the pad.
+      "overlay" -> when (parts.getOrNull(1)) {
+        "on" -> overlayOn(
+          width = parts.getOrNull(2)?.toInt() ?: OVERLAY_W,
+          height = parts.getOrNull(3)?.toInt() ?: OVERLAY_H,
+          x = parts.getOrNull(4)?.toInt() ?: OVERLAY_X,
+          y = parts.getOrNull(5)?.toInt() ?: OVERLAY_Y,
+        )
+        "off" -> overlayOff(quiet = false)
+        "state", null -> overlayState()
+        else -> log("overlay: expected on|off|state, got '${parts[1]}'")
+      }
+
       "draghold" -> dragHold(
         x1 = parts[1].toFloat(),
         y1 = parts[2].toFloat(),
@@ -252,7 +285,7 @@ class SpikeAccessibilityService : AccessibilityService() {
         "unknown command '${parts[0]}' — try: " +
           "dump|node|focus|select|clear|gran|copy|windows|" +
           "tap|long|drag|pressdrag|nodetap|nodelong|sel|events|chars|" +
-          "selstate|probe|nudge|servo|draghold"
+          "selstate|probe|nudge|servo|draghold|overlay"
       )
     }
   }
@@ -760,6 +793,105 @@ class SpikeAccessibilityService : AccessibilityService() {
     }
   }
 
+  // ------------------------------------------------------- the pad build: the overlay
+
+  /**
+   * Adds a touchable box over whatever is on screen — the thing that has to become the pad.
+   *
+   * **`TYPE_ACCESSIBILITY_OVERLAY` via `WindowManager.addView`, NOT
+   * `attachAccessibilityOverlayToDisplay`.** the gesture spike's design note named the latter, and it is the
+   * wrong API for this. It takes a `SurfaceControl`, so the views have to reach it through a
+   * `SurfaceControlViewHost` — and `setView` on a host with a null host token is refused,
+   * `RuntimeException("Adding window failed")` out of `ViewRootImpl.setView`, measured on the
+   * device both before and after attaching the surface, so it is not an ordering problem. That
+   * path wants a host token an ordinary app has no public way to mint: `InputTransferToken`'s
+   * constructor is package-private.
+   *
+   * The window type an accessibility service is actually entitled to is `TYPE_ACCESSIBILITY_OVERLAY`
+   * (2032), which `WindowManager.addView` accepts **without `SYSTEM_ALERT_WINDOW`** — so the
+   * zero-permission property survives, which was the whole reason the gesture spike reached for the other API in
+   * the first place. It is also API 22 rather than 34, so it costs nothing in reach.
+   *
+   * The point of the box is not the box. It is that the pad's buttons must be PRESSABLE, so the
+   * view logs raw MotionEvents and button clicks SEPARATELY — a view can receive touches and still
+   * never fire a click, and which of the two happens is the whole answer.
+   */
+  private fun overlayOn(width: Int, height: Int, x: Int, y: Int) {
+    overlayOff(quiet = true)
+
+    // A Service has no theme, and an unthemed Button inflates badly or not at all.
+    val view = buildPadView(ContextThemeWrapper(this, android.R.style.Theme_DeviceDefault))
+
+    val params = WindowManager.LayoutParams().apply {
+      this.width = width
+      this.height = height
+      this.x = x
+      this.y = y
+      type = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+      gravity = Gravity.TOP or Gravity.START
+      format = PixelFormat.TRANSLUCENT
+      // NOT_FOCUSABLE so the pad never steals key focus from the app being driven, and
+      // NOT_TOUCH_MODAL so touches outside the box still reach that app.
+      flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+    }
+
+    getSystemService(WindowManager::class.java).addView(view, params)
+    overlayView = view
+    overlayRect = Rect(x, y, x + width, y + height)
+    log("overlay: added ${width}x$height at ($x, $y) -> ${overlayRect?.flattenToString()}")
+  }
+
+  private fun overlayOff(quiet: Boolean) {
+    val view = overlayView
+    if (view == null) {
+      if (!quiet) log("overlay: nothing attached")
+      return
+    }
+    runCatching { getSystemService(WindowManager::class.java).removeView(view) }
+      .onFailure { log("overlay: removeView failed: ${it::class.java.simpleName}: ${it.message}") }
+    overlayView = null
+    overlayRect = null
+    if (!quiet) log("overlay: removed")
+  }
+
+  private fun overlayState() {
+    log("overlay: " + (overlayRect?.let { "attached at ${it.flattenToString()}" } ?: "not attached"))
+  }
+
+  /**
+   * Two buttons and a background, and nothing else — every listener here exists to answer O1.
+   * The touch listeners return false so they observe without consuming, leaving the click to fire
+   * normally if it is going to.
+   */
+  private fun buildPadView(ctx: android.content.Context): View {
+    val root = LinearLayout(ctx)
+    root.orientation = LinearLayout.HORIZONTAL
+    root.gravity = Gravity.CENTER
+    root.setBackgroundColor(OVERLAY_BACKGROUND)
+    root.setOnTouchListener { _, event ->
+      log(
+        "overlay: ROOT ${MotionEvent.actionToString(event.actionMasked)} " +
+          "at (${event.x}, ${event.y}) raw=(${event.rawX}, ${event.rawY})"
+      )
+      false
+    }
+
+    for (label in OVERLAY_BUTTONS) {
+      val button = Button(ctx)
+      button.text = label
+      button.setOnClickListener {
+        log("overlay: BUTTON CLICK '$label' — a press reached the overlay's view hierarchy")
+      }
+      button.setOnTouchListener { _, event ->
+        log("overlay: button '$label' ${MotionEvent.actionToString(event.actionMasked)}")
+        false
+      }
+      root.addView(button)
+    }
+    return root
+  }
+
   /**
    * The handle's screen pixel for one edge of [snap], by the gesture spike's measured geometry: interpolate the
    * offset linearly across the source node's bounds, then drop below the baseline and sit outside
@@ -962,6 +1094,7 @@ class SpikeAccessibilityService : AccessibilityService() {
     const val CHUNK = 3000
     const val TEXT_PREVIEW = 80
     const val MAX_EVENTS = 300
+    const val STACK_FRAMES = 20
 
     /** ViewConfiguration's tap timeout is 100 ms and its long-press timeout 500 ms; leave margin. */
     const val TAP_MS = 60L
@@ -1000,6 +1133,18 @@ class SpikeAccessibilityService : AccessibilityService() {
 
     const val EDGE_START = "start"
     const val EDGE_END = "end"
+
+    /**
+     * The pad build Phase 1a. Deliberately small and low on the 1272x2772 screen: the question "does the
+     * overlay swallow touches meant for the app underneath" needs an app underneath that is still
+     * reachable, and the probe text sits around y=1100 so the box must stay clear of it.
+     */
+    const val OVERLAY_W = 660
+    const val OVERLAY_H = 260
+    const val OVERLAY_X = 300
+    const val OVERLAY_Y = 2200
+    const val OVERLAY_BACKGROUND = 0xCC1565C0.toInt()
+    val OVERLAY_BUTTONS = listOf("WORD >", "CHAR >")
 
     val NOTEWORTHY_ACTIONS = setOf(
       "SET_SELECTION",

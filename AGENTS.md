@@ -40,8 +40,11 @@ An **always-on selection pad** — cursor buttons that extend the selection the 
 mirrors). It is a **closed loop**: each press reads the current selection, moves it one step, reads again.
 
 **The pad is an accessibility overlay, NOT an `InputMethodService`** — an IME only appears when an editable
-field has focus, so it could never show over a browser page. Use `attachAccessibilityOverlayToDisplay`
-(API 34), which needs no `SYSTEM_ALERT_WINDOW`, so the zero-permission property survives.
+field has focus, so it could never show over a browser page. The overlay is a `TYPE_ACCESSIBILITY_OVERLAY`
+window added with `WindowManager.addView`, which needs no `SYSTEM_ALERT_WINDOW`, so the zero-permission
+property survives. (the gesture spike named `attachAccessibilityOverlayToDisplay` for this; that API does not work from
+an ordinary app — see the overlay section below.) **Measured 2026-09-02: a finger press reaches its buttons,
+and its presence does not perturb the selection loop at all.**
 
 **The granularity risk is answered (2026-09-02) — see `the pad build's notes` for the measurement.** Chrome hands
 over both granularities for free, split by direction of travel: **growing** the selection moves it a whole
@@ -88,6 +91,20 @@ a tap somewhere neutral before a long-press that is meant to start over.
 **A drag that misses the handle is not a no-op — it is a tap on the page.** Lost-handle drags logged
 `TYPE_VIEW_CLICKED` and, once, followed a link and navigated the page out from under the run. An app must
 not dispatch a drag when it does not know where the handle is.
+
+**An overlay's `LayoutParams` x/y are inset by the status bar; `dispatchGesture` coordinates are raw
+screen pixels.** Ask for (60, 1040) and the window lands at y=1181 — 141 px lower, the status bar's
+height. Mixing the two coordinate spaces silently misplaces everything, and it cost one wrong
+conclusion here: a tap computed against the REQUESTED footprint missed the overlay by 11 px, landed
+on the page, and read as "gestures pass through the overlay" when the opposite is true. **Read the
+real bounds back from the `windows` command**, which reports the accessibility window list in screen
+pixels, rather than trusting what was asked for.
+
+**Our own overlay eats our own dispatched gestures.** A gesture aimed inside the overlay's real
+footprint hits the overlay — it will even fire the overlay's own button — and a selection handle
+sitting under it cannot be driven at all, at any reach. Removing the overlay unblocks the identical
+drag at the identical pixel immediately. So anything that dispatches must first ensure it is not
+covering the point it is about to touch.
 
 **The announced offsets are LOCAL to the event's source node.** When a selection grows past a node's edge
 the source switches to the newly-covered node and the offsets restart from it — the run below stepped
@@ -255,6 +272,29 @@ sequence. One notification tap cost a whole 25-step run this way.
 Handle geometry is derived by interpolating the offset across the source node's bounds, then
 `HANDLE_INSET` px outside the end and `HANDLE_DROP` px below the text — 30 and 57, the gesture spike's measured
 Chrome numbers. They are **Chrome's**; Keep draws circles at the selection's corners instead.
+
+#### Overlay commands (the pad build Phase 1a)
+
+| Command | Meaning |
+|---|---|
+| `overlay on [w] [h] [x] [y]` | Attach a touchable box with two buttons over whatever is on screen; defaults to 660x260 at (300, 2200) |
+| `overlay off` | Release it |
+| `overlay state` | Whether one is attached, and where |
+
+**Use `WindowManager.addView` with `TYPE_ACCESSIBILITY_OVERLAY` (2032) — NOT
+`attachAccessibilityOverlayToDisplay`.** That API takes a `SurfaceControl`, so views must reach it
+through a `SurfaceControlViewHost`, and `setView` on a host with a **null host token is refused**:
+`RuntimeException("Adding window failed")` from `ViewRootImpl.setView`, measured both before and
+after attaching the surface, so it is not an ordering problem. There is no public way to mint a host
+token — `InputTransferToken`'s constructor is package-private. `TYPE_ACCESSIBILITY_OVERLAY` is what
+an accessibility service is entitled to, needs **no `SYSTEM_ALERT_WINDOW`**, and is API 22.
+
+Two more that are not obvious: **a Service has no theme**, so views need a `ContextThemeWrapper` or a
+`Button` inflates wrong; and `onUnbind` must remove the overlay, because one that outlives its
+service cannot be told to go away — `overlay off` needs a running service to receive it.
+
+The overlay view logs **raw MotionEvents and button clicks separately, on purpose** — a view can
+receive touches and still never fire a click, and which of the two happens is the measurement.
 
 ### Gotchas
 
