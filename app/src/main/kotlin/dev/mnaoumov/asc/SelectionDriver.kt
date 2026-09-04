@@ -91,9 +91,35 @@ class SelectionDriver(
   var activeEdge: Edge = Edge.END
 
   /**
+   * The offset of the edge being moved — `low()` for START, `high()` for END.
+   *
+   * **Read this, never `high()`, wherever the loop means "where the moving edge is now".** Every
+   * path once took `high()` unconditionally, which is right for the END edge and off by the whole
+   * width of the selection for the START one. [HandleLocator.locate] already picked the correct
+   * handle, so the gesture landed on the real handle, the selection really moved, and the loop then
+   * corrected against a number belonging to the other end — measured 2026-09-03 with `⇄ swap` on
+   * `12..19`: the grab moved the start to 11, three corrections aimed the other way put it back at
+   * 12, and the press reported `Moved(19, 19)`. A `char →` in the same state moved the start two
+   * characters the wrong way. That is why one reading serves every path rather than each path
+   * remembering.
+   */
+  private fun SelectionObserver.Snapshot.movingOffset(): Int =
+    if (activeEdge == Edge.START) low() else high()
+
+  /**
+   * The sign a SHRINK adds to the moving edge's offset, and the direction it travels in x — the same
+   * number, because offsets increase rightward.
+   *
+   * Shrinking the END edge moves LEFT and lowers the offset; shrinking the START edge moves RIGHT
+   * and raises it. Every "how far still to go" below is measured in this frame, so a step and an
+   * overshoot keep their signs on both edges.
+   */
+  private val towardAnchor: Int get() = if (activeEdge == Edge.END) -1 else 1
+
+  /**
    * Offsets the selection has been seen to land on while GROWING, which are exactly word boundaries,
    * because a grow snaps to one. This is how `word ←` finds the previous boundary **without reading
-   * any text**: retrace to the largest remembered boundary below where we are.
+   * any text**: retrace to the nearest remembered boundary in the shrinking direction.
    *
    * Cleared whenever the source node changes, since offsets are local to it and mean nothing across
    * a boundary.
@@ -117,6 +143,7 @@ class SelectionDriver(
     rememberBoundaryContext(snapshot)
     Diag.log(
       "$command edge=$activeEdge at ${snapshot.low()}..${snapshot.high()} " +
+        "moving=${snapshot.movingOffset()} " +
         "srcLen=${snapshot.sourceLength} oneLine=${snapshot.sourceIsOneLine()} " +
         "boundaries=$knownBoundaries"
     )
@@ -181,7 +208,7 @@ class SelectionDriver(
           after != null && locator.grabbedAHandle(before, after) -> {
             recordBoundary(after)
             locator.rememberAnchor(handle.x - reach.coerceAtLeast(0f))
-            onDone(Outcome.Moved(before.high(), after.high()))
+            onDone(Outcome.Moved(before.movingOffset(), after.movingOffset()))
           }
           after != null -> onDone(Outcome.HandleLost)
           // Silence is ambiguous: the reach may be too short, or that drag may have landed on the
@@ -213,7 +240,7 @@ class SelectionDriver(
       onDone(Outcome.NoSelection)
       return
     }
-    val start = beforeGrow.high()
+    val start = beforeGrow.movingOffset()
 
     growOneUnit(command) { outcome ->
       if (outcome !is Outcome.Moved) {
@@ -239,7 +266,7 @@ class SelectionDriver(
       }
 
       // A grow that happened to move exactly one character (a lone space, say) is already the answer.
-      if (afterGrow.high() == target) {
+      if (afterGrow.movingOffset() == target) {
         onDone(Outcome.Moved(start, target))
         return@growOneUnit
       }
@@ -303,9 +330,8 @@ class SelectionDriver(
       acquireThenRetry(command, onDone)
       return
     }
-    val start = before.high()
+    val start = before.movingOffset()
     val perChar = pixelsPerCharacter(before)
-    val growing = (activeEdge == Edge.END) == command.toRight
 
     /*
      * Aim at ONE character, in either direction — not at [CHARS_PER_ATTEMPT].
@@ -392,9 +418,11 @@ class SelectionDriver(
     guard: Int = 0,
   ) {
     val before = observer.latestWithFreshBounds()
-    // Mirrors [walkBackTo]: `high()` is read for both edges. That is wrong for the START edge and is
-    // tracked as the swap-edge fix; matching it here keeps one bug rather than two different ones.
-    val current = before?.high()
+    // Mirrors [walkBackTo], down to the frame the arithmetic below is written in: [movingOffset] for
+    // where we are, [towardAnchor] for which way a shrink travels. The two paths hand work to each
+    // other whenever a chain dies, so a difference between them would be a difference in the middle
+    // of one press.
+    val current = before?.movingOffset()
     if (before == null || current == null) {
       gestures.releaseHeld()
       onDone(Outcome.NoSelection)
@@ -422,9 +450,11 @@ class SelectionDriver(
     }
 
     val perChar = pixelsPerCharacter(before)
-    // Shrinking the END edge means moving left; the START edge, right.
-    val direction = if (activeEdge == Edge.END) -1f else 1f
-    val toLose = current - target
+    val direction = towardAnchor.toFloat()
+    // Characters still to travel, counted in the SHRINKING direction — `current - target` on the END
+    // edge, its mirror on the START one. Written the old way round it came out negative on every
+    // ordinary START step, and each of the signs below then read a normal step as an overshoot.
+    val toLose = towardAnchor * (target - current)
     /*
      * Aim AT the target and land INSIDE its cell — the offset comes out as a floor, so a finger on
      * the boundary rounds down and the bias backs off into the target's own cell.
@@ -506,7 +536,7 @@ class SelectionDriver(
     retriesLeft: Int = MAX_STEP_RETRIES,
   ) {
     val before = observer.latestWithFreshBounds()
-    val current = before?.high()
+    val current = before?.movingOffset()
     if (before == null || current == null) {
       onDone(Outcome.NoSelection)
       return
@@ -516,7 +546,9 @@ class SelectionDriver(
       return
     }
 
-    val toLose = current - target
+    // Counted in the shrinking direction, so "past the target" below means the same thing on both
+    // edges. See [towardAnchor].
+    val toLose = towardAnchor * (target - current)
     if (toLose < 0) {
       /*
        * Past the target, and this edge cannot creep back: outward is a GROW and a grow snaps a whole
@@ -539,8 +571,7 @@ class SelectionDriver(
     }
 
     val perChar = pixelsPerCharacter(before)
-    // Shrinking the END edge means moving left; the START edge, right.
-    val direction = if (activeEdge == Edge.END) -1f else 1f
+    val direction = towardAnchor.toFloat()
     val handle = locator.locate(before, activeEdge, toolbarCentre())
     if (handle == null) {
       onDone(Outcome.HandleLost)
@@ -692,11 +723,17 @@ class SelectionDriver(
    * is built on. So use the boundaries we have already been shown: every grow landed on one.
    */
   private fun shrinkByWord(command: PadCommand, onDone: (Outcome) -> Unit) {
-    val current = observer.latest?.high() ?: run {
+    val current = observer.latest?.movingOffset() ?: run {
       onDone(Outcome.NoSelection)
       return
     }
-    val target = knownBoundaries.filter { it < current }.maxOrNull()
+    // The nearest boundary in the SHRINKING direction, which is below the END edge and above the
+    // START one. Taking the largest below for both put `word ⇥` on the START edge behind itself.
+    val target = if (towardAnchor < 0) {
+      knownBoundaries.filter { it < current }.maxOrNull()
+    } else {
+      knownBoundaries.filter { it > current }.minOrNull()
+    }
     if (target == null) {
       // Honest degradation: one character, and say so rather than pretend it was a word.
       growOneUnit(command) { outcome ->
@@ -733,9 +770,9 @@ class SelectionDriver(
       awaitChange(before) { after ->
         when {
           !completed -> onDone(Outcome.HandleLost)
-          after == null -> onDone(Outcome.Moved(before.high(), before.high()))
+          after == null -> onDone(Outcome.Moved(before.movingOffset(), before.movingOffset()))
           after.isEmpty() -> onDone(Outcome.HandleLost)
-          else -> onDone(Outcome.Moved(before.high(), after.high()))
+          else -> onDone(Outcome.Moved(before.movingOffset(), after.movingOffset()))
         }
       }
     }
@@ -770,7 +807,7 @@ class SelectionDriver(
         when {
           after != null && locator.grabbedAHandle(snapshot, after) -> {
             locator.rememberAnchor(2 * centre - x)
-            onDone(Outcome.Moved(snapshot.high(), after.high()))
+            onDone(Outcome.Moved(snapshot.movingOffset(), after.movingOffset()))
           }
           // The probe wrecked the selection. Stop; there is nothing left to hunt for.
           after != null -> onDone(Outcome.HandleLost)
@@ -781,7 +818,7 @@ class SelectionDriver(
   }
 
   private fun recordBoundary(snapshot: SelectionObserver.Snapshot) {
-    knownBoundaries += snapshot.high()
+    knownBoundaries += snapshot.movingOffset()
   }
 
   /** Offsets are local to the source node, so a change of node invalidates every remembered one. */

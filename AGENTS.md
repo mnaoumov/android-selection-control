@@ -13,7 +13,8 @@ The held-pointer fix for everything a continued stroke will and will not tolerat
 Open work is split by shape, one item each: **the swap-edge fix** the swap-edge path reads the wrong end;
 **The button-drive work** drive page / start / end to completion; **the word-left fix** word-left and its remembered boundaries;
 **The handle-location defect** a handle inside a wrapped node; **the test-rig work** make the test rig a repo asset; **the Play distribution work** Play
-distribution, which ECM makes mandatory rather than optional.
+distribution, which ECM makes mandatory rather than optional; **the snap-back fix** one offset the app snaps back
+after the lift.
 
 Nothing about this project's plan lives here — this file is build/run mechanics only.
 
@@ -119,6 +120,12 @@ way — 11 to 19 and back to 11 — every one moving exactly one character**, at
 gesture on thirteen of the sixteen. Before: 0.7-2.3 s and two to seven gestures. A long press starts
 a run that stepped sixteen characters in about six seconds, one per step, stopped by a tap. The
 zero-permission property survives (`aapt2 dump permissions` prints the package line and nothing).
+
+Re-measured 2026-09-03 for the START edge and it holds there too: **sixteen presses, 12 to 4 and back
+to 12, one character and one gesture each, 320-361 ms** (the swap-edge fix). But **"held, it does not snap" is not
+universal** — on the same fixture the END edge at offset 24 lands on 23, reports it, and is snapped
+back to 24 by the app *after* the lift, so that one press can never get past it. The snap-back fix has the trace;
+do not treat the no-snap property as a law when reading the loop.
 
 **The first travel aims at exactly ONE character, in both directions** — not at the released path's
 [`CHARS_PER_ATTEMPT`] overshoot and not backed off by `BOUNDARY_BIAS`. Both deviations were measured
