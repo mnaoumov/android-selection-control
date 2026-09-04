@@ -3,14 +3,14 @@
 Android app giving **cursor and selection control where no keyboard can reach** — text that is
 selectable by touch but *not* editable: a web page in a browser, a read-only view.
 
-Tracked centrally in a private tracker. Three items are closed and hold the history: **the first spike**
+Tracked centrally in a private tracker. Four items are closed and hold the history: **the first spike**
 (NO-GO — the accessibility selection actions stop at the editable-buffer boundary), **the gesture spike** (GO —
-`dispatchGesture` drives the target app's own selection UI, plus the per-app observation matrix), and
-**The pad build** (the pad itself, built and measured). Read the gesture spike for the mechanism and the pad build for what the pad
-does and what it costs.
+`dispatchGesture` drives the target app's own selection UI, plus the per-app observation matrix),
+**The pad build** (the pad itself, built and measured), and **the held-pointer fix** (the held pointer, and why a
+character step now costs one gesture). Read the gesture spike for the mechanism, the pad build for what the pad does, and
+The held-pointer fix for everything a continued stroke will and will not tolerate.
 
-Open work is split by shape, one item each: **the held-pointer fix** make a character step cost one gesture — the
-latency, and the reason the pad is not enjoyable yet; **the swap-edge fix** the swap-edge path reads the wrong end;
+Open work is split by shape, one item each: **the swap-edge fix** the swap-edge path reads the wrong end;
 **The button-drive work** drive page / start / end to completion; **the word-left fix** word-left and its remembered boundaries;
 **The handle-location defect** a handle inside a wrapped node; **the test-rig work** make the test rig a repo asset; **the Play distribution work** Play
 distribution, which ECM makes mandatory rather than optional.
