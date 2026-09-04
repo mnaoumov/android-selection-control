@@ -57,10 +57,26 @@ class SelectionObserver {
 
     fun isEmpty(): Boolean = low() == high()
 
-    /** Whether the source node's box is a single line, which is when interpolation across it works. */
+    /**
+     * Whether the source node's box is a single line, which is when interpolation across it works.
+     *
+     * **A shape test, not a height in pixels.** This used to ask whether the box was under 110 px
+     * tall, a number calibrated on body text at 56-70 px a line. A Wikipedia article title is one
+     * line and 145 px tall, so it failed — the loop then fell back to a 12 px character width where
+     * the truth was 64, aimed a fifth of the distance it needed, announced nothing and reported
+     * `HandleLost` on every press. A font size is not a wrap.
+     *
+     * The shape that does hold across font sizes: on ONE line, a character's width and the line's
+     * height are the same order — measured 0.44 for that title (64 px over 145) and 0.33 for a plain
+     * `TextView` (28 over 85). Wrapping divides the apparent character width by the number of lines
+     * AND multiplies the height by it, so the ratio falls quadratically: 0.05 for a four-line
+     * paragraph, 0.10 for the three-line phrase on record. Nothing sits near the threshold.
+     */
     fun sourceIsOneLine(): Boolean {
       val box = bounds ?: return false
-      return box.height() in 1..MAX_SINGLE_LINE_HEIGHT
+      if (box.height() <= 0 || sourceLength <= 0) return false
+      val characterWidth = box.width().toFloat() / sourceLength
+      return characterWidth / box.height() >= MIN_ONE_LINE_RATIO
     }
   }
 
@@ -158,10 +174,11 @@ class SelectionObserver {
     const val MAX_DEPTH = 60
 
     /**
-     * Above this, a source node's box spans wrapped lines and interpolating an offset across it is
-     * meaningless — measured at 193 px for a 63-character phrase running over three lines, against
-     * ~56-70 px for one line on the same page.
+     * Below this ratio of character width to box height, the box spans wrapped lines and
+     * interpolating an offset across it is meaningless. See [Snapshot.sourceIsOneLine] for the
+     * measurements; the gap between one line (0.33-0.44) and wrapped (0.05-0.10) is wide enough that
+     * the exact threshold does not matter.
      */
-    const val MAX_SINGLE_LINE_HEIGHT = 110
+    const val MIN_ONE_LINE_RATIO = 0.2f
   }
 }
