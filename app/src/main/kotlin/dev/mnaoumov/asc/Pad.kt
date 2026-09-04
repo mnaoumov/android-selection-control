@@ -10,6 +10,7 @@ import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowInsets
 import android.view.WindowManager
 import android.widget.Button
@@ -45,8 +46,12 @@ enum class PadMode {
 class Pad(
   private val context: Context,
   private val windowManager: WindowManager,
-  private val onPressStart: (PadCommand) -> kotlin.Unit,
-  private val onPressEnd: () -> kotlin.Unit,
+  /** A short press, ended. One step. */
+  private val onTap: (PadCommand) -> kotlin.Unit,
+  /** A long press, ended. Step until something stops it. */
+  private val onRepeat: (PadCommand) -> kotlin.Unit,
+  /** Stop a run. True if there was one, so the pad can say so. */
+  private val onStopRepeat: () -> Boolean,
   private val onSwapEdge: () -> kotlin.Unit,
   private val onToggleMenu: () -> kotlin.Unit,
   private val onClose: () -> kotlin.Unit,
@@ -56,8 +61,8 @@ class Pad(
   private var params: WindowManager.LayoutParams? = null
   private var statusView: TextView? = null
 
-  private var heldCommand: PadCommand? = null
-  private var lastTouchAtMs = 0L
+  /** When the finger went down, which is the only thing that separates a tap from a hold. */
+  private var pressedAtMs = 0L
 
   private var menuButton: Button? = null
   private var menuMasked = false
@@ -79,22 +84,6 @@ class Pad(
     LinearLayout.LayoutParams.WRAP_CONTENT,
     LinearLayout.LayoutParams.WRAP_CONTENT,
   )
-
-  /**
-   * Whether a finger really is still on [command]'s button — the gate on repeating it.
-   *
-   * **`ACTION_UP` alone cannot be trusted here, and that is measured, not defensive.** While the
-   * service is dispatching its own gestures the pad's pending UP can simply never arrive: a single
-   * injected tap logged `action=0` and then nothing, and the next touch three seconds later opened
-   * with `action=3` (CANCEL). In between, the repeat chain treated the button as held and walked the
-   * selection four characters for one tap.
-   *
-   * So the test is positive evidence rather than the absence of a release: the last touch event on
-   * that button has to be recent. A held finger keeps producing MOVE events, a lifted one stops, and
-   * a swallowed UP now costs at most one extra step instead of an unbounded run.
-   */
-  fun fingerStillDown(command: PadCommand): Boolean =
-    heldCommand == command && SystemClock.uptimeMillis() - lastTouchAtMs < TOUCH_FRESH_MS
 
   var mode: PadMode = PadMode.DOCKED
     private set
@@ -301,39 +290,54 @@ class Pad(
     buttons.map { (command, label) -> holdable(themed, label, command) }
 
   /**
-   * A direction button that repeats while it is held down.
+   * A direction button. A tap steps once; a hold arms a run that starts when the finger LIFTS.
    *
-   * Deliberately **not** a repeat timer. A press here is a closed loop that takes anywhere from
-   * 300 ms to 2.2 s — several dispatched gestures, each verified by reading the selection back — so a
-   * fixed-interval timer would queue presses faster than they complete and the extra ones would be
-   * dropped on the `busy` guard. Instead the service starts the next step when the previous one
-   * *finishes*, if the finger is still down, which paces itself for free and needs no initial-delay
-   * constant either: a tap's finger has always lifted long before the first step completes, so a tap
-   * is exactly one step.
+   * **Why the step waits for the release, which is not a preference.** The fast path holds a
+   * synthetic finger down across the whole step, and a real touch anywhere on the screen ends the
+   * target app's tracking of that held pointer — measured the held-pointer fix: matched runs moved the selection on
+   * 9 of 10 links untouched and 2 of 10 after one brief tap, never recovering. Stepping on
+   * `ACTION_DOWN` therefore started a chain that the button's own `ACTION_UP` killed about 100 ms
+   * later, every single time: the log read `grab accepted=true`, then `LOST after 8 link(s) — link
+   * cancelled`. The press was cancelling itself.
+   *
+   * So nothing is dispatched while a finger is on the glass. A tap is one chain after the lift; a
+   * hold is one long chain after the lift, and **any touch stops it** — which costs nothing to
+   * implement, because that touch would end the run's tracking regardless. The gesture and the
+   * mechanism agree for once.
+   *
+   * The repeat is still **not** a fixed-interval timer: the service starts each step when the
+   * previous one finishes, so it paces itself and cannot queue presses faster than they complete.
    *
    * Touch rather than click, because press and release are separate facts here, and `isPressed` is
    * set by hand since consuming the touch means the button no longer draws that state itself.
    */
   private fun holdable(themed: Context, label: String, command: PadCommand): View =
     button(themed, label).apply {
+      // Says "keep holding and you will get a run" while the finger is still down. A perfectly still
+      // finger produces no MOVE events, so this cannot be driven off them; the decision at ACTION_UP
+      // is made on elapsed time, which is reliable either way.
+      val arm = Runnable { showStatus("release to repeat $label") }
       setOnTouchListener { view, event ->
         when (event.actionMasked) {
           MotionEvent.ACTION_DOWN -> {
             view.isPressed = true
-            heldCommand = command
-            lastTouchAtMs = SystemClock.uptimeMillis()
-            onPressStart(command)
+            pressedAtMs = SystemClock.uptimeMillis()
+            if (onStopRepeat()) showStatus("stopped")
+            view.postDelayed(arm, LONG_PRESS_MS)
             true
           }
-          MotionEvent.ACTION_MOVE -> {
-            // Freshness, not position: see [fingerStillDown].
-            lastTouchAtMs = SystemClock.uptimeMillis()
-            true
-          }
-          MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+          // Consumed so the framework keeps delivering this gesture to us; the position is not used.
+          MotionEvent.ACTION_MOVE -> true
+          MotionEvent.ACTION_UP -> {
             view.isPressed = false
-            heldCommand = null
-            onPressEnd()
+            view.removeCallbacks(arm)
+            if (SystemClock.uptimeMillis() - pressedAtMs >= LONG_PRESS_MS) onRepeat(command)
+            else onTap(command)
+            true
+          }
+          MotionEvent.ACTION_CANCEL -> {
+            view.isPressed = false
+            view.removeCallbacks(arm)
             true
           }
           else -> false
@@ -439,7 +443,13 @@ class Pad(
      * Generous, because a finger resting still produces MOVE events only now and then; short enough
      * that a swallowed UP cannot run away with the selection.
      */
-    const val TOUCH_FRESH_MS = 600L
+    /**
+     * How long a press has to last to mean "repeat" rather than "once".
+     *
+     * The platform's own long-press timeout, so it matches every other hold on the device rather
+     * than inventing a duration the hand has to learn.
+     */
+    val LONG_PRESS_MS = ViewConfiguration.getLongPressTimeout().toLong()
 
     /** Small enough that "start" fits a fifth of the screen width. */
     const val CAPTION_TEXT_SIZE = 10f

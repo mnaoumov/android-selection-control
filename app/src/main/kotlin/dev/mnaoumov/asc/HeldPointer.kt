@@ -193,11 +193,11 @@ class HeldPointer(
     /*
      * The lift travels one pixel.
      *
-     * This used to say that a `moveTo` on its own throws. **It does not** — `spike`'s `point()` is
-     * exactly that path, and `tap`, `long` and `pressdrag`'s settle stroke all use it happily, as a
-     * first stroke and as a continuation (the held-pointer fix). Whatever stranded a pointer here, it was not this,
-     * so the claim is withdrawn rather than repeated. The nudge stays because a lift that travels is
-     * no worse and keeps the shape uniform with [link].
+     * This used to say that building a `moveTo`-only path throws. It does not — `spike`'s `point()`
+     * is exactly that, and `tap` and `long` use it — so that claim is withdrawn. But the nudge is
+     * NOT decoration: a zero-length **continuation** is refused, and the refusal arrives as a
+     * cancelled link rather than an exception (the held-pointer fix, and see [link]). The lift is a continuation, so
+     * it has to travel.
      */
     val path = Path().apply {
       moveTo(from.x, from.y)
@@ -216,8 +216,8 @@ class HeldPointer(
   /**
    * One link of the chain, dispatched without waiting for anything.
    *
-   * When there is nowhere to go it still sends a stroke — a one-pixel wobble rather than a perfectly
-   * stationary one, so the app keeps seeing a drag rather than deciding the finger has settled.
+   * When there is nowhere to go it still sends a stroke, holding position exactly — see the comment
+   * on the idle path for why standing perfectly still matters.
    */
   private fun link() {
     if (releasing) {
@@ -250,14 +250,31 @@ class HeldPointer(
       Diag.log("held: a link ran with no position — the chain was forgotten under it")
       return
     }
-    val to = goal ?: PointF(from.x + idleWobble(), from.y)
+    val to = goal
     goal = null
 
+    /*
+     * An idle link moves half a pixel, alternating, and both halves of that matter.
+     *
+     * **Not zero.** A continuation whose path has no length is refused by the framework, and the
+     * refusal arrives as a cancellation of the link rather than an exception: measured as
+     * `LOST after 1 link(s) — link cancelled` on every press, including during a repeat run with no
+     * finger anywhere near the screen, which is what ruled out a real touch as the cause.
+     *
+     * **And not a whole pixel.** It used to wobble a full pixel each way, and when the handle sits
+     * near a character boundary that flips the offset back and forth for ever: the selection
+     * announces on every tick, the caller's settle never goes quiet, and its "did that move?" test
+     * stops meaning anything. Measured — a press that should have cost 330 ms took 3.2 s across 80
+     * links, all three corrections reported "nothing", and it landed two characters out.
+     *
+     * Half a pixel is long enough to be a path and far too short to cross a character, which is tens
+     * of pixels wide; alternating keeps the drift at zero over any number of links.
+     */
     val next = runCatching {
       previous.continueStroke(
         Path().apply {
           moveTo(from.x, from.y)
-          lineTo(to.x, to.y)
+          lineTo(to?.x ?: (from.x + idleNudge()), to?.y ?: from.y)
         },
         0,
         TICK_MS,
@@ -269,7 +286,9 @@ class HeldPointer(
       return
     }
     stroke = next
-    at = to
+    // An idle link went half a pixel; treat that as standing still, so the position a caller reads
+    // back is the one it asked for rather than one drifted by bookkeeping.
+    if (to != null) at = to
     links++
     val accepted = dispatch(gestureOf(next)) { played -> if (played) link() else lost("link cancelled") }
     if (!accepted) lost("link refused")
@@ -293,11 +312,12 @@ class HeldPointer(
   /** Links since the last grab, for the log: it is the only way to see the chain is alive. */
   private var links = 0
 
-  private var wobble = 1f
+  private var nudge = IDLE_NUDGE_PX
 
-  private fun idleWobble(): Float {
-    wobble = -wobble
-    return wobble
+  /** Alternates, so a long idle drifts nowhere. */
+  private fun idleNudge(): Float {
+    nudge = -nudge
+    return nudge
   }
 
   private fun forget() {
@@ -331,6 +351,14 @@ class HeldPointer(
 
     /** How far the lift travels. See [lift] for why this is not the load-bearing detail it was. */
     const val LIFT_NUDGE_PX = 1f
+
+    /**
+     * How far an idle link travels: enough to be a path, far too little to cross a character.
+     *
+     * A character is tens of pixels wide on every surface measured, so half a pixel cannot move the
+     * selection — and a zero-length continuation is refused outright. See [link].
+     */
+    const val IDLE_NUDGE_PX = 0.5f
 
     /**
      * The chain's own end, in links, if nothing releases it.

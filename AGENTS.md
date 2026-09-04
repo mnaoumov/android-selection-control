@@ -113,6 +113,37 @@ finger at x(target)" however good the pixel model is — which is why a characte
 to seven gestures of read-and-correct rather than one. Do not rebuild the aim on the assumption that
 it is a pure function; it is not.
 
+**A character step costs one gesture and about a third of a second (the held-pointer fix, 2026-09-03).** Measured on
+the OnePlus 15 against `TargetActivity`'s one-line block, ten presses, five each way, every one
+moving **exactly one character**: **324-694 ms and 1-2 gestures**, against 0.7-2.3 s and two to seven
+before. A long press starts a run that stepped twelve characters in about seven seconds. The
+zero-permission property survives (`aapt2 dump permissions` prints the package line and nothing).
+
+**The pad steps on RELEASE, never while a finger is on the glass**, and that is forced by the
+mechanism rather than chosen: see the entry below. A tap is one step, a press held past the platform
+long-press timeout arms a run that starts when the finger lifts, and any touch stops a run — which
+costs nothing, because that touch would end the run's tracking anyway.
+
+**Two things about a continued stroke's idle link, both measured the hard way.** A chain has to keep
+dispatching to stay down, and while the loop waits for an announcement it has nowhere to go:
+
+- **A zero-length continuation is refused**, and the refusal arrives as a *cancellation of the link*
+ rather than an exception — `LOST after 1 link(s) — link cancelled`, on every press. This retires
+ the "a `moveTo`-only path is fine" note that a first reading of `spike`'s `point` suggested;
+ that path is only ever used as a FINAL stroke, and `pressdrag`, which uses one as a continuation,
+ is itself recorded as never having worked.
+- **A whole-pixel wobble is too much.** When the handle sits near a character boundary it flips the
+ offset back and forth for ever, the settle never goes quiet, and "did that move?" stops meaning
+ anything: one press took 3.2 s across 80 links and landed two characters out. Half a pixel,
+ alternating, is a real path and cannot cross a character.
+
+**Still open: a chain in the app is cancelled one or two links after the grab**, where the same chain
+driven from `spike` survives ten links and a clean lift. It is NOT the pad's touch — a repeat run's
+second and later steps happen with no finger anywhere near the screen and are cancelled identically,
+and a 250 ms delay before dispatching changed nothing. The grab itself always survives, which is why
+the step still works; only the held *corrections* fall back to the released path, which is the
+difference between the 330 ms presses and the 660 ms ones.
+
 **Continued strokes DO stay down. What stops is the target app's handle drag, and what stops it is
 the user's own finger.** Measured 2026-09-03 (the held-pointer fix) with `spike`'s `held` command, which is driven by
 broadcast and so can run a chain with nothing touching the screen — the control every earlier round
@@ -134,9 +165,11 @@ The chain mechanism is solved: continue each stroke from the previous gesture's 
 immediately — continuing 300 ms later after reading the selection back never grabs anything, and a
 timer that fires early is worse, because dispatching while a gesture plays cancels it.
 
-**A `moveTo`-only path does NOT throw** — `spike`'s `point` is exactly that, and `tap`, `long` and
-`pressdrag`'s settle stroke all use it happily, as a first stroke and as a continuation. The earlier
-claim here that it throws is withdrawn; whatever stranded that pointer, it was not this.
+**A `moveTo`-only path does not THROW, but it is not usable as a continuation either.** `spike`'s
+`point` is exactly that path and `tap` and `long` build strokes from it happily, so the old claim
+that constructing one throws is withdrawn. What it cannot do is continue a chain: dispatched as a
+continuation it comes back cancelled, silently, as the entry above records. `pressdrag`'s settle
+stroke is such a continuation, which is a candidate reason `pressdrag` has never worked.
 
 The still-true half of the old entry: the landed offset is a function of the final pixel **and the
 lift**. Held, the handle stays exactly where it is put; released, the app snaps it somewhere of its
