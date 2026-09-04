@@ -3,18 +3,18 @@
 Android app giving **cursor and selection control where no keyboard can reach** — text that is
 selectable by touch but *not* editable: a web page in a browser, a read-only view.
 
-Tracked centrally in a private tracker. Four items are closed and hold the history: **the first spike**
+Tracked centrally in a private tracker. Five items are closed and hold the history: **the first spike**
 (NO-GO — the accessibility selection actions stop at the editable-buffer boundary), **the gesture spike** (GO —
 `dispatchGesture` drives the target app's own selection UI, plus the per-app observation matrix),
-**The pad build** (the pad itself, built and measured), and **the held-pointer fix** (the held pointer, and why a
-character step now costs one gesture). Read the gesture spike for the mechanism, the pad build for what the pad does, and
-The held-pointer fix for everything a continued stroke will and will not tolerate.
+**The pad build** (the pad itself, built and measured), **the held-pointer fix** (the held pointer, and why a
+character step now costs one gesture), and **the swap-edge fix** (the swap button, and the one reading of "where
+the moving edge is" that both edges now share). Read the gesture spike for the mechanism, the pad build for what the pad
+does, and the held-pointer fix for everything a continued stroke will and will not tolerate.
 
-Open work is split by shape, one item each: **the swap-edge fix** the swap-edge path reads the wrong end;
-**The button-drive work** drive page / start / end to completion; **the word-left fix** word-left and its remembered boundaries;
-**The handle-location defect** a handle inside a wrapped node; **the test-rig work** make the test rig a repo asset; **the Play distribution work** Play
-distribution, which ECM makes mandatory rather than optional; **the snap-back fix** one offset the app snaps back
-after the lift.
+Open work is split by shape, one item each: **the button-drive work** drive page / start / end to completion;
+**The word-left fix** word-left and its remembered boundaries; **the handle-location defect** a handle inside a wrapped node;
+**The test-rig work** make the test rig a repo asset; **the Play distribution work** Play distribution, which ECM makes mandatory
+rather than optional; **the snap-back fix** one offset the app snaps back after the lift.
 
 Nothing about this project's plan lives here — this file is build/run mechanics only.
 
