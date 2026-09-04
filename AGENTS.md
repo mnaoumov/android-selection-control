@@ -367,16 +367,20 @@ The pad appears as soon as the service connects. Its buttons take **real injecte
 `adb shell input tap <x> <y>` — which is the right way to test them: the service's own
 `dispatchGesture` is a different input path, and O1 was careful about that distinction.
 
-**Holding a direction button repeats it, chained off completion rather than on a timer.** A press is
-a closed loop costing 300 ms – 2.2 s, so a fixed-interval repeat would queue steps faster than they
-finish and the surplus would vanish on the `busy` guard. The next step therefore starts when the
-previous one *ends*, if the finger is still down — self-pacing, and no initial-delay constant is
-needed either, since a tap's finger has lifted long before step one completes.
+**A tap steps once; holding a direction button arms a run that starts when the finger LIFTS, and any
+touch stops it.** Nothing is dispatched while a finger is on the glass, and that is forced rather
+than chosen (the held-pointer fix): a real touch ends the target app's tracking of a held pointer, so stepping on
+`ACTION_DOWN` started a chain that the button's own `ACTION_UP` cancelled about 100 ms later, every
+single press. The stop gesture costs nothing to implement for the same reason — the touch would end
+the run's tracking regardless.
 
-A hold stops on the first step that does not move the selection. That is a **safety** rule: a failed
-step failed by dragging where no handle was, and a drag that misses lands on the page, which on a
-link navigates. It also stops when the handle is under the pad, because going non-touchable for the
-step cancels the in-flight touch — the step runs, the repeat does not.
+The run is still chained off completion rather than driven by a timer. A press is a closed loop, so a
+fixed-interval repeat would queue steps faster than they finish and the surplus would vanish on the
+`busy` guard; the next step starts when the previous one *ends*, which self-paces for free.
+
+A run stops on the first step that does not move the selection. That is a **safety** rule, and it
+matters more now that no finger is resting on a button to act as the brake: a failed step failed by
+dragging where no handle was, and a drag that misses lands on the page, which on a link navigates.
 
 **The ▤ menu button covers the target app's selection toolbar.** It cannot be suppressed — it is
 Chrome's own `PopupWindow`, put up by its `ActionMode`, and no accessibility API can stop another
