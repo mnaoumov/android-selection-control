@@ -250,31 +250,37 @@ class HeldPointer(
       Diag.log("held: a link ran with no position — the chain was forgotten under it")
       return
     }
-    val to = goal
+    val to = goal ?: PointF(from.x, from.y + idleNudge())
     goal = null
 
     /*
-     * An idle link moves half a pixel, alternating, and both halves of that matter.
+     * An idle link moves one pixel DOWN AND UP, never sideways. Three measurements shaped that.
      *
-     * **Not zero.** A continuation whose path has no length is refused by the framework, and the
-     * refusal arrives as a cancellation of the link rather than an exception: measured as
-     * `LOST after 1 link(s) — link cancelled` on every press, including during a repeat run with no
-     * finger anywhere near the screen, which is what ruled out a real touch as the cause.
+     * **It cannot be zero-length.** A continuation whose path has no length is refused, and the
+     * refusal arrives as a cancelled link rather than an exception — measured as
+     * `LOST after 1 link(s)` on every press, including during a repeat run with no finger anywhere
+     * near the screen, which is what ruled out a real touch as the cause.
      *
-     * **And not a whole pixel.** It used to wobble a full pixel each way, and when the handle sits
-     * near a character boundary that flips the offset back and forth for ever: the selection
-     * announces on every tick, the caller's settle never goes quiet, and its "did that move?" test
-     * stops meaning anything. Measured — a press that should have cost 330 ms took 3.2 s across 80
-     * links, all three corrections reported "nothing", and it landed two characters out.
+     * **It cannot be sub-pixel either.** Half a pixel was tried, and whether it lands on a new pixel
+     * depends on the fraction the handle happens to sit at — so chains died on about half the
+     * presses, seemingly at random, and the pattern followed the handle's x rather than anything
+     * about timing.
      *
-     * Half a pixel is long enough to be a path and far too short to cross a character, which is tens
-     * of pixels wide; alternating keeps the drift at zero over any number of links.
+     * **And it must not be sideways.** A whole pixel left-and-right keeps every chain alive, but
+     * when the handle sits near a character boundary it flips the offset back and forth: the
+     * selection announces on every tick, the settle never goes quiet, and "did that move?" stops
+     * meaning anything. Measured at a full pixel horizontally — two presses of eight hit the settle
+     * cap at 600 ms and one moved two characters instead of one.
+     *
+     * Vertically, none of that applies. The handle hangs below its line, one pixel of travel is
+     * nowhere near leaving its touch target, and a horizontal offset cannot be changed by a vertical
+     * move at all. Alternating keeps the drift at zero over any number of links.
      */
     val next = runCatching {
       previous.continueStroke(
         Path().apply {
           moveTo(from.x, from.y)
-          lineTo(to?.x ?: (from.x + idleNudge()), to?.y ?: from.y)
+          lineTo(to.x, to.y)
         },
         0,
         TICK_MS,
@@ -286,9 +292,17 @@ class HeldPointer(
       return
     }
     stroke = next
-    // An idle link went half a pixel; treat that as standing still, so the position a caller reads
-    // back is the one it asked for rather than one drifted by bookkeeping.
-    if (to != null) at = to
+    /*
+     * [at] follows the path's END, always — including an idle link's half pixel.
+     *
+     * This is the whole of the continuation contract and it is unforgiving: the next link's path
+     * must START where this one finished, or the framework refuses the continuation and reports it
+     * as a cancelled link. A version of this class deliberately left [at] alone for idle links, on
+     * the reasoning that standing still should not move the pointer — and every chain in the app
+     * then died two links after the grab, while the identical chain driven from `spike`, whose links
+     * always carry a real destination, ran ten and lifted cleanly.
+     */
+    at = to
     links++
     val accepted = dispatch(gestureOf(next)) { played -> if (played) link() else lost("link cancelled") }
     if (!accepted) lost("link refused")
@@ -353,12 +367,11 @@ class HeldPointer(
     const val LIFT_NUDGE_PX = 1f
 
     /**
-     * How far an idle link travels: enough to be a path, far too little to cross a character.
-     *
-     * A character is tens of pixels wide on every surface measured, so half a pixel cannot move the
-     * selection — and a zero-length continuation is refused outright. See [link].
+     * How far an idle link travels, VERTICALLY. A whole pixel, because a sub-pixel move may quantize
+     * away to nothing and a zero-length continuation is refused; vertical, because sideways moves
+     * the selection. See [link] for the three measurements behind both halves.
      */
-    const val IDLE_NUDGE_PX = 0.5f
+    const val IDLE_NUDGE_PX = 1f
 
     /**
      * The chain's own end, in links, if nothing releases it.

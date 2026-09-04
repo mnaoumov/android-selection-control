@@ -114,35 +114,53 @@ to seven gestures of read-and-correct rather than one. Do not rebuild the aim on
 it is a pure function; it is not.
 
 **A character step costs one gesture and about a third of a second (the held-pointer fix, 2026-09-03).** Measured on
-the OnePlus 15 against `TargetActivity`'s one-line block, ten presses, five each way, every one
-moving **exactly one character**: **324-694 ms and 1-2 gestures**, against 0.7-2.3 s and two to seven
-before. A long press starts a run that stepped twelve characters in about seven seconds. The
+the OnePlus 15 against `TargetActivity`'s one-line block: **sixteen consecutive presses, eight each
+way — 11 to 19 and back to 11 — every one moving exactly one character**, at **310-599 ms**, one
+gesture on thirteen of the sixteen. Before: 0.7-2.3 s and two to seven gestures. A long press starts
+a run that stepped sixteen characters in about six seconds, one per step, stopped by a tap. The
 zero-permission property survives (`aapt2 dump permissions` prints the package line and nothing).
+
+**The first travel aims at exactly ONE character, in both directions** — not at the released path's
+[`CHARS_PER_ATTEMPT`] overshoot and not backed off by `BOUNDARY_BIAS`. Both deviations were measured
+and both cost accuracy: 1.5 characters lands on +2 wherever growing is character-granular, and
+0.65 of a character lands too near the boundary to hold — every left press announced `21 -> 20` and
+the selection was back at 21 by the next press, ten times running. Aiming short is safe because a
+word-snapping target simply announces nothing and the step falls back to the released path, which
+escalates properly.
 
 **The pad steps on RELEASE, never while a finger is on the glass**, and that is forced by the
 mechanism rather than chosen: see the entry below. A tap is one step, a press held past the platform
 long-press timeout arms a run that starts when the finger lifts, and any touch stops a run — which
 costs nothing, because that touch would end the run's tracking anyway.
 
-**Two things about a continued stroke's idle link, both measured the hard way.** A chain has to keep
-dispatching to stay down, and while the loop waits for an announcement it has nowhere to go:
+**A chain's idle link: one pixel, VERTICAL, and the bookkeeping must follow it.** A chain has to keep
+dispatching to stay down, and while the loop waits for an announcement it has nowhere to go. Four
+measurements, in the order they were forced:
 
-- **A zero-length continuation is refused**, and the refusal arrives as a *cancellation of the link*
- rather than an exception — `LOST after 1 link(s) — link cancelled`, on every press. This retires
- the "a `moveTo`-only path is fine" note that a first reading of `spike`'s `point` suggested;
- that path is only ever used as a FINAL stroke, and `pressdrag`, which uses one as a continuation,
- is itself recorded as never having worked.
-- **A whole-pixel wobble is too much.** When the handle sits near a character boundary it flips the
- offset back and forth for ever, the settle never goes quiet, and "did that move?" stops meaning
- anything: one press took 3.2 s across 80 links and landed two characters out. Half a pixel,
- alternating, is a real path and cannot cross a character.
+- **The next link's path must START where the last one ended**, including an idle link's own nudge.
+ A version that moved the pointer but deliberately left its recorded position alone — "an idle link
+ stands still" — broke every chain in the app two links after the grab, while the identical chain
+ from `spike`, whose links always carry a real destination, ran ten and lifted cleanly. The
+ mismatch is reported as a cancelled link, never as an error.
+- **A zero-length continuation is refused**, with the same cancelled-link symptom. This narrows the
+ "a `moveTo`-only path is fine" note: fine to build and fine as a FINAL stroke, not as a
+ continuation — and `pressdrag`, which uses one as a continuation, is itself recorded as never
+ having worked.
+- **A sub-pixel nudge is unreliable.** Half a pixel lands on a new pixel or not depending on the
+ fraction the handle happens to sit at, so chains died on about half the presses, in a pattern that
+ followed the handle's x rather than anything about timing.
+- **A whole pixel SIDEWAYS is too much.** Near a character boundary it flips the offset back and
+ forth, the settle never goes quiet, and "did that move?" stops meaning anything — two presses of
+ eight hit the settle cap and one moved two characters. Vertically none of this applies: the handle
+ hangs below its line, a pixel is nowhere near leaving its touch target, and a vertical move cannot
+ change a horizontal offset.
 
-**Still open: a chain in the app is cancelled one or two links after the grab**, where the same chain
-driven from `spike` survives ten links and a clean lift. It is NOT the pad's touch — a repeat run's
-second and later steps happen with no finger anywhere near the screen and are cancelled identically,
-and a 250 ms delay before dispatching changed nothing. The grab itself always survives, which is why
-the step still works; only the held *corrections* fall back to the released path, which is the
-difference between the 330 ms presses and the 660 ms ones.
+**Held, a silent correction means WAIT, not move again.** Released, a gesture that announced nothing
+really did nothing, so retrying is right. Held, the pointer has already travelled and silence only
+means the announcement is late — correcting again applies the same reach to a pointer that already
+moved. Measured: two corrections of -18 px computed from one stale reading of `18`, landing on 16
+instead of 17. The settle also needs a total cap, not just a quiet one, or a flapping selection makes
+a press last for ever.
 
 **Continued strokes DO stay down. What stops is the target app's handle drag, and what stops it is
 the user's own finger.** Measured 2026-09-03 (the held-pointer fix) with `spike`'s `held` command, which is driven by

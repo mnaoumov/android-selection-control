@@ -306,7 +306,29 @@ class SelectionDriver(
     val start = before.high()
     val perChar = pixelsPerCharacter(before)
     val growing = (activeEdge == Edge.END) == command.toRight
-    val characters = if (growing) CHARS_PER_ATTEMPT else 1f - BOUNDARY_BIAS
+
+    /*
+     * Aim at ONE character, in either direction — not at [CHARS_PER_ATTEMPT].
+     *
+     * The released path overshoots by half a character on purpose, because on a word-snapping target
+     * the distance that matters is the width of the next WORD and a short reach simply fails. Held,
+     * that costs accuracy on the targets where growing is character-granular: 1.5 characters from
+     * mid-character lands on +2, and the press then needs a correction it should never have needed.
+     * Measured, repeatedly, as the one press in eight that moved two characters.
+     *
+     * Aiming at one is safe because failure is cheap here: a word-snapping target announces nothing
+     * for a reach this short, and [heldCharacterStep] falls back to the released path, which
+     * escalates properly.
+     *
+     * **A whole character in BOTH directions**, with no [BOUNDARY_BIAS] backed off the first travel.
+     * Shrinking was tried at `1 - BOUNDARY_BIAS`, on the released path's reasoning that a floor
+     * rounds down at a boundary — and it landed too close to that boundary to hold: every press
+     * announced `21 -> 20` and the selection was back at 21 by the next press, ten times running,
+     * while the growing direction with a full character was exact ten times running. The bias still
+     * applies to [heldCorrect], which aims from a pointer whose position is known rather than
+     * interpolated.
+     */
+    val characters = 1f
     val reach = (if (command.toRight) 1f else -1f) * (perChar * characters).coerceAtLeast(STEP_PX)
 
     gestureCount++
@@ -403,10 +425,17 @@ class SelectionDriver(
     // Shrinking the END edge means moving left; the START edge, right.
     val direction = if (activeEdge == Edge.END) -1f else 1f
     val toLose = current - target
-    // Aim AT the target and land INSIDE its cell, exactly as the released path does — the offset
-    // comes out as a floor, so a finger on the boundary rounds down. A negative toLose is an
-    // overshoot, and the same expression walks it back outwards.
-    val reach = direction * (toLose - BOUNDARY_BIAS) * perChar
+    /*
+     * Aim AT the target and land INSIDE its cell — the offset comes out as a floor, so a finger on
+     * the boundary rounds down and the bias backs off into the target's own cell.
+     *
+     * The bias has to point TOWARDS the target, which means following the sign of [toLose]. Written
+     * as a bare `toLose - BOUNDARY_BIAS` it is right when shrinking and wrong when correcting an
+     * overshoot: at `toLose = -1` it asks for 1.35 characters instead of 0.65 and sails straight
+     * past the target again. Measured, on the press that ended two characters out.
+     */
+    val bias = if (toLose >= 0) BOUNDARY_BIAS else -BOUNDARY_BIAS
+    val reach = direction * (toLose - bias) * perChar
 
     gestureCount++
     if (!gestures.moveHeld(PointF(at.x + reach, at.y))) {
@@ -423,6 +452,28 @@ class SelectionDriver(
       if (after != null && !locator.grabbedAHandle(before, after)) {
         gestures.releaseHeld()
         onDone(Outcome.HandleLost)
+        return@awaitChange
+      }
+      if (after == null) {
+        /*
+         * The move was made and the news has not arrived. **Wait; do not move again.**
+         *
+         * This is where the held path differs from the released one, and getting it wrong cost a
+         * character. Released, a silent gesture really did nothing, so trying again is right. Held,
+         * the pointer HAS travelled — silence only means the announcement is late — and correcting
+         * again recomputes the same reach from the same stale offset and applies it to a pointer
+         * that already moved. Measured: two corrections of -18 px on one reading of `18`, landing
+         * at 16 instead of 17, and the press finished two characters out.
+         */
+        Diag.log("  held: no news yet — waiting rather than correcting a second time")
+        awaitChange(before) { later ->
+          if (later == null) {
+            gestures.releaseHeld()
+            onDone(Outcome.Moved(origin, current))
+          } else {
+            heldCorrect(target, origin, command, onDone, guard + 1)
+          }
+        }
         return@awaitChange
       }
       heldCorrect(target, origin, command, onDone, guard + 1)
@@ -612,17 +663,27 @@ class SelectionDriver(
     last: SelectionObserver.Snapshot,
     quietFor: Long,
     onResult: (SelectionObserver.Snapshot?) -> Unit,
+    totalMs: Long = 0,
   ) {
     val now = observer.latest
     if (now != null && now.atMs != last.atMs) {
-      awaitQuiet(now, 0, onResult)
+      awaitQuiet(now, 0, onResult, totalMs)
       return
     }
-    if (quietFor >= QUIET_MS) {
+    /*
+     * A total cap as well as a quiet one, because "wait for silence" has no end if the silence never
+     * comes. A selection that flaps — a held pointer idling right on a character boundary will do it
+     * — announces a change every tick, resets [quietFor] every time, and the press never finishes:
+     * measured once at 3.2 s for a step that should have cost 330 ms. The flapping itself is fixed
+     * elsewhere; this is the guard that stops the next cause of it costing a press instead of a
+     * measurement.
+     */
+    if (quietFor >= QUIET_MS || totalMs >= MAX_QUIET_WAIT_MS) {
+      if (totalMs >= MAX_QUIET_WAIT_MS) Diag.log("  settle: never went quiet in ${totalMs}ms; taking the last")
       onResult(last)
       return
     }
-    handler.postDelayed({ awaitQuiet(last, quietFor + POLL_MS, onResult) }, POLL_MS)
+    handler.postDelayed({ awaitQuiet(last, quietFor + POLL_MS, onResult, totalMs + POLL_MS) }, POLL_MS)
   }
 
   /**
@@ -762,6 +823,12 @@ class SelectionDriver(
      * outlast the revision an app makes when the finger lifts, short enough not to be felt.
      */
     const val QUIET_MS = 130L
+
+    /**
+     * The longest a settle may take even if the announcements never go quiet. Several times
+     * [QUIET_MS], so an ordinarily chatty settle still completes on its own terms.
+     */
+    const val MAX_QUIET_WAIT_MS = 600L
 
     /** Must exceed the widest word on screen once multiplied by [STEP_PX]. */
     const val MAX_ATTEMPTS = 12
