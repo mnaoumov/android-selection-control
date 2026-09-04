@@ -43,14 +43,33 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   private var busy = false
 
   /**
-   * The direction button currently held down, which is what makes a hold repeat.
+   * The synthetic finger that does not lift between corrections (the held-pointer fix).
    *
-   * Note the one case where a hold stops early by design: when the handle sits under the pad, the
-   * pad is made non-touchable for the step, and losing touchability cancels the in-flight touch. The
-   * step still runs; only the repeat ends. Better than the alternative, which is a finger held over
-   * a window that is passing every touch through to the page.
+   * Built on the raw `dispatchGesture` rather than on [dispatch], because a chain needs the
+   * gesture-level `Boolean` — "accepted for dispatch" — to tell a refusal apart from a cancellation,
+   * and [dispatch] folds both into its callback.
    */
-  private var held: PadCommand? = null
+  private val heldPointer = HeldPointer { gesture, onFinished ->
+    val callback = object : GestureResultCallback() {
+      override fun onCompleted(gestureDescription: GestureDescription?) = finish(true)
+      override fun onCancelled(gestureDescription: GestureDescription?) = finish(false)
+      private fun finish(completed: Boolean) {
+        runCatching { onFinished(completed) }
+          .onFailure { Diag.log("held: a link's follow-up threw ${it::class.java.simpleName}: ${it.message}") }
+      }
+    }
+    dispatchGesture(gesture, callback, null)
+  }
+
+  /**
+   * The command a run is repeating, or null when nothing is running.
+   *
+   * A run continues with **no finger on the glass** (see [Pad.holdable]): the fast path holds a
+   * synthetic pointer down for the whole step, and any real touch ends the target app's tracking of
+   * it. So this is set when a long press is RELEASED and cleared by the next touch, rather than
+   * tracking a finger that is still down.
+   */
+  private var repeating: PadCommand? = null
 
   override fun onServiceConnected() {
     super.onServiceConnected()
@@ -72,12 +91,13 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     pad = Pad(
       context = this,
       windowManager = getSystemService(WindowManager::class.java),
-      onPressStart = ::onPressStart,
-      onPressEnd = ::onPressEnd,
+      onTap = ::onTap,
+      onRepeat = ::onRepeat,
+      onStopRepeat = ::onStopRepeat,
       onSwapEdge = ::onSwapEdge,
       onToggleMenu = ::onToggleMenu,
       onClose = {
-        held = null
+        repeating = null
         mask?.hide()
         pad?.hide()
       },
@@ -160,19 +180,46 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
   // ------------------------------------------------------------------ the pad
 
-  /**
-   * A direction button went down: one step now, and more while the finger stays on it.
-   *
-   * The repeat is chained off completion rather than driven by a timer — see [Pad.holdable] for why
-   * — so this only has to record what is held and start the first step.
-   */
-  private fun onPressStart(command: PadCommand) {
-    held = command
-    if (!busy) step(command)
+  /** A tap: exactly one step, started once the finger is off the glass. */
+  private fun onTap(command: PadCommand) {
+    repeating = null
+    startStep(command)
   }
 
-  private fun onPressEnd() {
-    held = null
+  /**
+   * Begin a step from a fresh loop turn, never from inside the touch handler that asked for it.
+   *
+   * Calling straight through would dispatch the grab while the button's own `ACTION_UP` is still
+   * being delivered, and a real touch is exactly what ends the target app's tracking of a held
+   * pointer. Posting costs one loop turn and lets the touch finish first.
+   *
+   * A delay of 250 ms was tried here and removed: the chain was still being cancelled one link after
+   * the grab, and a repeat run — whose second and later steps happen with no finger on the screen at
+   * all — was cancelled identically. That ruled the touch out as the cause, so the delay was buying
+   * nothing but latency.
+   */
+  private fun startStep(command: PadCommand) {
+    if (busy) return
+    handler.post { step(command) }
+  }
+
+  /**
+   * A long press, released: step until something stops it.
+   *
+   * The run is chained off completion rather than driven by a timer — see [Pad.holdable] — so this
+   * only has to record what is running and start the first step.
+   */
+  private fun onRepeat(command: PadCommand) {
+    repeating = command
+    pad?.showStatus("repeating — tap to stop")
+    startStep(command)
+  }
+
+  /** Any touch on a direction button stops a run. True when there was one to stop. */
+  private fun onStopRepeat(): Boolean {
+    val wasRunning = repeating != null
+    repeating = null
+    return wasRunning
   }
 
   private fun step(command: PadCommand) {
@@ -205,22 +252,23 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       refreshMask()
 
       /*
-       * Repeat only while the finger is down AND the last step actually got somewhere.
+       * Keep the run going only while it is still this command's run AND the last step actually got
+       * somewhere.
        *
        * Stopping on no progress is a safety property, not tidiness. A step that failed did so by
        * dragging somewhere that was not a handle, and a drag that misses lands on the page — on a
-       * link, that navigates. Hammering that at a few presses a second because a finger is resting
-       * on a button is the worst thing this app could do, so a hold ends the moment a step stops
-       * moving the selection, leaving the reason on the status line.
+       * link, that navigates. Hammering that at a few presses a second is the worst thing this app
+       * could do, and a run that nobody is touching has no finger to lift as a brake, so the brake
+       * has to be this: a run ends the moment a step stops moving the selection, leaving the reason
+       * on the status line.
        *
        * Posted rather than called, so each step starts from a fresh loop turn and the status line
        * gets drawn between them.
        */
-      val stillHeld = held == command && pad?.fingerStillDown(command) == true
-      if (stillHeld && madeProgress(outcome)) {
-        handler.post { if (held == command) step(command) }
+      if (repeating == command && madeProgress(outcome)) {
+        handler.post { if (repeating == command) step(command) }
       } else {
-        held = null
+        repeating = null
       }
     }
   }
@@ -257,7 +305,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   }
 
   private fun onSwapEdge() {
-    held = null
+    repeating = null
     driver.activeEdge = if (driver.activeEdge == Edge.END) Edge.START else Edge.END
     locator.forgetAnchor()
     pad?.showStatus("moving the ${if (driver.activeEdge == Edge.END) "end" else "start"}")
@@ -343,6 +391,25 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       dispatch(hold, onFinished)
     }
   }
+
+  /**
+   * The held route (the held-pointer fix). The grab travels past the touch slop for the same reason [drag] does — a
+   * miss that reads as a tap navigates — and [HeldPointer] adds the detour itself.
+   */
+  override fun grabAndHold(from: PointF, to: PointF, onGrabbed: (Boolean) -> Unit) {
+    // A chain from a previous press cannot be reused: the press itself is a real touch, and a real
+    // touch ends the target app's tracking of the handle even though the chain survives it
+    // (measured, the held-pointer fix). So start clean rather than inheriting a pointer the app has stopped
+    // following.
+    if (heldPointer.isHeld) heldPointer.releaseNow()
+    heldPointer.grab(from, to, onGrabbed)
+  }
+
+  override fun moveHeld(to: PointF): Boolean = heldPointer.moveTo(to)
+
+  override fun releaseHeld() = heldPointer.release()
+
+  override fun heldAt(): PointF? = heldPointer.position
 
   override fun screenWidth(): Int = resources.displayMetrics.widthPixels
 

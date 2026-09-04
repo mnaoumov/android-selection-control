@@ -31,6 +31,33 @@ interface GestureDispatcher {
   fun dragAndHold(from: PointF, to: PointF, dragMs: Long, holdMs: Long, onFinished: (Boolean) -> kotlin.Unit)
   fun screenWidth(): Int
   fun screenHeight(): Int
+
+  /**
+   * Press the handle at [from], travel to [to], and **do not lift** (the held-pointer fix).
+   *
+   * The whole reason this exists: a released drag's landed offset is a function of the final pixel
+   * AND the lift — the app snaps the handle somewhere of its own choosing when the finger comes up,
+   * which is what the released loop spends two to seven gestures undoing. Held, it does not snap
+   * (measured: three links landed `10..12` and it was still `10..12` after the lift and 900 ms), so
+   * a correction made while down is the last correction needed.
+   */
+  fun grabAndHold(from: PointF, to: PointF, onGrabbed: (Boolean) -> kotlin.Unit)
+  // [onGrabbed] reports when the grab has PLAYED, not when it was accepted — a caller that starts
+  // waiting for an announcement before the stroke has run always times out.
+
+  /**
+   * Move the pointer that [grabAndHold] pressed. False when nothing is held, which is a real answer
+   * and not a formality — a caller that ignores it goes on issuing moves to a chain that has died.
+   *
+   * Silent about the result: read that from the selection stream, as everything else here does.
+   */
+  fun moveHeld(to: PointF): Boolean
+
+  /** Lift, at the end of the link in flight. Harmless when nothing is held. */
+  fun releaseHeld()
+
+  /** Where the held pointer is, or null when nothing is down. */
+  fun heldAt(): PointF?
 }
 
 /**
@@ -105,7 +132,10 @@ class SelectionDriver(
     val growing = (activeEdge == Edge.END) == command.toRight
     when (command.unit) {
       PadCommand.Unit.WORD -> if (growing) growOneUnit(command, onDone = report) else shrinkByWord(command, report)
-      PadCommand.Unit.CHARACTER -> if (growing) growOneCharacter(command, report) else growOneUnit(command, onDone = report)
+      // Both directions go through the held chain now (the held-pointer fix): it is exact where the released path
+      // has to undo a snap, and it falls back to the released path by itself when a chain will not
+      // run. [releasedCharacterStep] is what it falls back to.
+      PadCommand.Unit.CHARACTER -> heldCharacterStep(command, report)
       PadCommand.Unit.PAGE -> sweepToEdge(command, PAGE_HOLD_MS, report)
       PadCommand.Unit.DOCUMENT -> sweepToEdge(command, DOCUMENT_HOLD_MS, report)
     }
@@ -215,6 +245,245 @@ class SelectionDriver(
       }
       walkBackTo(target, command, start, onDone, retriesLeft = retriesLeft)
     }
+  }
+
+  /**
+   * Where one character past [start] actually is, which is not always [start] + 1.
+   *
+   * Offsets are local to the source node, and a step can carry the edge into the NEXT node — after
+   * which `start + 1` is a number in a frame of reference that no longer exists. When the node has
+   * changed, one character past the old end is simply one character into the new one.
+   */
+  private fun targetOffset(
+    before: SelectionObserver.Snapshot,
+    after: SelectionObserver.Snapshot,
+    command: PadCommand,
+    start: Int,
+  ): Int {
+    val crossed = before.source != null && after.source != null && before.source != after.source
+    return when {
+      crossed -> if (command.toRight) 1 else after.sourceLength - 1
+      command.toRight -> start + 1
+      else -> start - 1
+    }
+  }
+
+  /**
+   * A character step whose finger never lifts — the fast path, and the point of the held-pointer fix.
+   *
+   * **Why this is faster, measured rather than hoped.** A released drag's landed offset is a
+   * function of the final pixel AND the lift: the app snaps the handle to a boundary of its own
+   * choosing when the finger comes up, and undoing that snap is what costs the released path two to
+   * seven gestures per character. Held, there is no snap — three links landed 10..12 and it was
+   * still 10..12 after the lift and 900 ms of settle — so a correction made while down is the last
+   * correction needed. Five whole grab-move-lift presses measured 318–329 ms against 0.7–2.3 s.
+   *
+   * **And the pointer IS the handle.** Once grabbed, its position is known rather than interpolated
+   * from node geometry, so every correction after the first is exact and needs no re-derivation.
+   * That is what removes the escalation, not a shorter timeout.
+   *
+   * The first travel differs by direction because the target app's granularity does:
+   * - **Shrinking** is character-granular everywhere measured, so aim at the target directly and one
+   *   link is usually the whole step.
+   * - **Growing** snaps to a word in Chrome even while held (measured: 8 to 10 to 18, straight
+   *   across a word boundary), though a plain `TextView` steps by character in both directions. So
+   *   overshoot as the released path does and let [heldCorrect] walk back — held, and therefore once.
+   *
+   * Falls back to the released path rather than failing whenever the chain will not start or does
+   * not survive: it is slower, it works, and a held pointer is not worth a regression.
+   */
+  private fun heldCharacterStep(command: PadCommand, onDone: (Outcome) -> Unit) {
+    val before = observer.latestWithFreshBounds()
+    if (before == null) {
+      onDone(Outcome.NoSelection)
+      return
+    }
+    val handle = locator.locate(before, activeEdge, toolbarCentre())
+    if (handle == null) {
+      acquireThenRetry(command, onDone)
+      return
+    }
+    val start = before.high()
+    val perChar = pixelsPerCharacter(before)
+    val growing = (activeEdge == Edge.END) == command.toRight
+
+    /*
+     * Aim at ONE character, in either direction — not at [CHARS_PER_ATTEMPT].
+     *
+     * The released path overshoots by half a character on purpose, because on a word-snapping target
+     * the distance that matters is the width of the next WORD and a short reach simply fails. Held,
+     * that costs accuracy on the targets where growing is character-granular: 1.5 characters from
+     * mid-character lands on +2, and the press then needs a correction it should never have needed.
+     * Measured, repeatedly, as the one press in eight that moved two characters.
+     *
+     * Aiming at one is safe because failure is cheap here: a word-snapping target announces nothing
+     * for a reach this short, and [heldCharacterStep] falls back to the released path, which
+     * escalates properly.
+     *
+     * **A whole character in BOTH directions**, with no [BOUNDARY_BIAS] backed off the first travel.
+     * Shrinking was tried at `1 - BOUNDARY_BIAS`, on the released path's reasoning that a floor
+     * rounds down at a boundary — and it landed too close to that boundary to hold: every press
+     * announced `21 -> 20` and the selection was back at 21 by the next press, ten times running,
+     * while the growing direction with a full character was exact ten times running. The bias still
+     * applies to [heldCorrect], which aims from a pointer whose position is known rather than
+     * interpolated.
+     */
+    val characters = 1f
+    val reach = (if (command.toRight) 1f else -1f) * (perChar * characters).coerceAtLeast(STEP_PX)
+
+    gestureCount++
+    gestures.grabAndHold(handle, PointF(handle.x + reach, handle.y)) { grabbed ->
+      if (!grabbed) {
+        Diag.log("  held: the grab was refused — falling back to the released path")
+        releasedCharacterStep(command, onDone)
+        return@grabAndHold
+      }
+      awaitChange(before) { after ->
+        Diag.log(
+          "  held grab: handle=(${handle.x}, ${handle.y}) reach=$reach -> " +
+            if (after == null) "nothing" else "${after.low()}..${after.high()}"
+        )
+        when {
+          /*
+           * Nothing announced, so the grab may have missed the handle and be resting on the page.
+           * Let go BEFORE deciding anything: a held pointer sitting on a page is worse than no
+           * pointer, and the released path re-derives the handle from scratch anyway.
+           */
+          after == null -> {
+            gestures.releaseHeld()
+            if (selectionStillOnScreen()) {
+              releasedCharacterStep(command, onDone)
+            } else {
+              Diag.log("  held: the selection is gone from screen — stopping rather than poking the page")
+              onDone(Outcome.HandleLost)
+            }
+          }
+          !locator.grabbedAHandle(before, after) -> {
+            gestures.releaseHeld()
+            onDone(Outcome.HandleLost)
+          }
+          else -> {
+            recordBoundary(after)
+            locator.rememberAnchor(handle.x - reach.coerceAtLeast(0f))
+            heldCorrect(targetOffset(before, after, command, start), start, command, onDone)
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Walk the HELD pointer onto [target], and lift only once it is there.
+   *
+   * The released [walkBackTo] has to re-locate the handle for every correction, because the last
+   * drag lifted and the app moved the handle afterwards. Here the pointer never lifted, so
+   * [GestureDispatcher.heldAt] IS the handle, and each correction is measured from a pixel that is
+   * known rather than inferred. That is why this is bounded at [MAX_HELD_CORRECTIONS] where the
+   * released path needs [MAX_CORRECTIONS].
+   *
+   * Every exit lifts. A chain left down would keep the target app in a drag for ever, and the next
+   * press would find a pointer the app has already stopped following.
+   */
+  private fun heldCorrect(
+    target: Int,
+    origin: Int,
+    command: PadCommand,
+    onDone: (Outcome) -> Unit,
+    guard: Int = 0,
+  ) {
+    val before = observer.latestWithFreshBounds()
+    // Mirrors [walkBackTo]: `high()` is read for both edges. That is wrong for the START edge and is
+    // tracked as the swap-edge fix; matching it here keeps one bug rather than two different ones.
+    val current = before?.high()
+    if (before == null || current == null) {
+      gestures.releaseHeld()
+      onDone(Outcome.NoSelection)
+      return
+    }
+    if (current == target) {
+      gestures.releaseHeld()
+      onDone(Outcome.Moved(origin, current))
+      return
+    }
+    if (guard >= MAX_HELD_CORRECTIONS) {
+      Diag.log("  held: out of corrections at $current, wanted $target")
+      gestures.releaseHeld()
+      onDone(Outcome.Moved(origin, current))
+      return
+    }
+
+    val at = gestures.heldAt()
+    if (at == null) {
+      // The chain died under us — which it now SAYS, under the same held: prefix as everything else.
+      // The released path can still finish from wherever the selection actually is.
+      Diag.log("  held: nothing is held any more — finishing on the released path")
+      walkBackTo(target, command, origin, onDone)
+      return
+    }
+
+    val perChar = pixelsPerCharacter(before)
+    // Shrinking the END edge means moving left; the START edge, right.
+    val direction = if (activeEdge == Edge.END) -1f else 1f
+    val toLose = current - target
+    /*
+     * Aim AT the target and land INSIDE its cell — the offset comes out as a floor, so a finger on
+     * the boundary rounds down and the bias backs off into the target's own cell.
+     *
+     * The bias has to point TOWARDS the target, which means following the sign of [toLose]. Written
+     * as a bare `toLose - BOUNDARY_BIAS` it is right when shrinking and wrong when correcting an
+     * overshoot: at `toLose = -1` it asks for 1.35 characters instead of 0.65 and sails straight
+     * past the target again. Measured, on the press that ended two characters out.
+     */
+    val bias = if (toLose >= 0) BOUNDARY_BIAS else -BOUNDARY_BIAS
+    val reach = direction * (toLose - bias) * perChar
+
+    gestureCount++
+    if (!gestures.moveHeld(PointF(at.x + reach, at.y))) {
+      Diag.log("  held: the move was refused — finishing on the released path")
+      walkBackTo(target, command, origin, onDone)
+      return
+    }
+    awaitChange(before) { after ->
+      Diag.log(
+        "  held correct ${guard + 1}: $current -> target $target, lose $toLose x ${perChar}px, " +
+          "at=${at.x} reach=$reach -> " +
+          if (after == null) "nothing" else "${after.low()}..${after.high()}"
+      )
+      if (after != null && !locator.grabbedAHandle(before, after)) {
+        gestures.releaseHeld()
+        onDone(Outcome.HandleLost)
+        return@awaitChange
+      }
+      if (after == null) {
+        /*
+         * The move was made and the news has not arrived. **Wait; do not move again.**
+         *
+         * This is where the held path differs from the released one, and getting it wrong cost a
+         * character. Released, a silent gesture really did nothing, so trying again is right. Held,
+         * the pointer HAS travelled — silence only means the announcement is late — and correcting
+         * again recomputes the same reach from the same stale offset and applies it to a pointer
+         * that already moved. Measured: two corrections of -18 px on one reading of `18`, landing
+         * at 16 instead of 17, and the press finished two characters out.
+         */
+        Diag.log("  held: no news yet — waiting rather than correcting a second time")
+        awaitChange(before) { later ->
+          if (later == null) {
+            gestures.releaseHeld()
+            onDone(Outcome.Moved(origin, current))
+          } else {
+            heldCorrect(target, origin, command, onDone, guard + 1)
+          }
+        }
+        return@awaitChange
+      }
+      heldCorrect(target, origin, command, onDone, guard + 1)
+    }
+  }
+
+  /** The pre-the held-pointer fix character step, kept as the fallback for whenever a chain will not run. */
+  private fun releasedCharacterStep(command: PadCommand, onDone: (Outcome) -> Unit) {
+    val growing = (activeEdge == Edge.END) == command.toRight
+    if (growing) growOneCharacter(command, onDone) else growOneUnit(command, onDone = onDone)
   }
 
   /**
@@ -394,17 +663,27 @@ class SelectionDriver(
     last: SelectionObserver.Snapshot,
     quietFor: Long,
     onResult: (SelectionObserver.Snapshot?) -> Unit,
+    totalMs: Long = 0,
   ) {
     val now = observer.latest
     if (now != null && now.atMs != last.atMs) {
-      awaitQuiet(now, 0, onResult)
+      awaitQuiet(now, 0, onResult, totalMs)
       return
     }
-    if (quietFor >= QUIET_MS) {
+    /*
+     * A total cap as well as a quiet one, because "wait for silence" has no end if the silence never
+     * comes. A selection that flaps — a held pointer idling right on a character boundary will do it
+     * — announces a change every tick, resets [quietFor] every time, and the press never finishes:
+     * measured once at 3.2 s for a step that should have cost 330 ms. The flapping itself is fixed
+     * elsewhere; this is the guard that stops the next cause of it costing a press instead of a
+     * measurement.
+     */
+    if (quietFor >= QUIET_MS || totalMs >= MAX_QUIET_WAIT_MS) {
+      if (totalMs >= MAX_QUIET_WAIT_MS) Diag.log("  settle: never went quiet in ${totalMs}ms; taking the last")
       onResult(last)
       return
     }
-    handler.postDelayed({ awaitQuiet(last, quietFor + POLL_MS, onResult) }, POLL_MS)
+    handler.postDelayed({ awaitQuiet(last, quietFor + POLL_MS, onResult, totalMs + POLL_MS) }, POLL_MS)
   }
 
   /**
@@ -545,6 +824,12 @@ class SelectionDriver(
      */
     const val QUIET_MS = 130L
 
+    /**
+     * The longest a settle may take even if the announcements never go quiet. Several times
+     * [QUIET_MS], so an ordinarily chatty settle still completes on its own terms.
+     */
+    const val MAX_QUIET_WAIT_MS = 600L
+
     /** Must exceed the widest word on screen once multiplied by [STEP_PX]. */
     const val MAX_ATTEMPTS = 12
 
@@ -553,6 +838,16 @@ class SelectionDriver(
      * characters. It should rarely go past the first.
      */
     const val MAX_CORRECTIONS = 8
+
+    /**
+     * The same bound for the HELD path, and much smaller on purpose.
+     *
+     * The released loop needs eight because every one of its corrections starts by guessing where
+     * the handle went after the last lift. A held correction starts from the pointer itself, so it
+     * is aiming from a pixel it knows; if three of those in a row have not landed on the target,
+     * something is wrong that a fourth will not fix, and each one costs a settle.
+     */
+    const val MAX_HELD_CORRECTIONS = 3
 
     /**
      * The last character is crept, not stepped: a fraction of the average width, so a narrow glyph
