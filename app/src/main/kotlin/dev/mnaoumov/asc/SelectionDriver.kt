@@ -685,7 +685,23 @@ class SelectionDriver(
    */
   private fun pixelsPerCharacter(snapshot: SelectionObserver.Snapshot): Float {
     val bounds = snapshot.bounds
-    if (!snapshot.sourceIsOneLine() || bounds == null || snapshot.sourceLength <= 0) return STEP_PX
+    if (!snapshot.sourceIsOneLine() || bounds == null || snapshot.sourceLength <= 0) {
+      /*
+       * A wrapped box divides ONE line's width by EVERY line's characters, so its average is a
+       * fraction of the truth and is not worth using. The platform's own rectangle for the moving
+       * character is, where it will give one — and it has to be used, or locating the handle inside
+       * a wrap buys nothing: the step would then aim [STEP_PX] = 12 px where a character is 28-64,
+       * announce nothing, and report the same `HandleLost` from one rung further on. That is exactly
+       * the under-aiming measured on the article title that was being misclassified as wrapped.
+       *
+       * Free next to [HandleLocator.locate], which has already asked for this same rectangle on this
+       * same snapshot and memoised the answer.
+       */
+      return locator.characterGeometry(snapshot, activeEdge)
+        ?.characterWidth
+        ?.coerceIn(MIN_CHAR_PX, MAX_CHAR_PX)
+        ?: STEP_PX
+    }
     return (bounds.width().toFloat() / snapshot.sourceLength).coerceIn(MIN_CHAR_PX, MAX_CHAR_PX)
   }
 
@@ -847,6 +863,24 @@ class SelectionDriver(
     val centre = toolbarCentre()
     val snapshot = observer.latestWithFreshBounds()
     if (centre == null || snapshot?.bounds == null || probe > HandleLocator.SCAN_MAX_PROBES) {
+      onDone(Outcome.HandleLost)
+      return
+    }
+    /*
+     * The scan hunts sideways along ONE row — the bottom of the source node's box. On a box measured
+     * to span wrapped lines that is the last line, and the moving edge is on it only by luck; every
+     * probe aimed at the wrong row is a touch on the page, which collapses the selection and on a
+     * link navigates. So this is the one place where "we cannot locate the handle" has to stay
+     * "we cannot locate the handle" rather than becoming a search.
+     *
+     * The rung that CAN reach inside a wrap is [HandleLocator.characterGeometry], which answers with
+     * the moving character's own line; when it has already declined there is nothing here to find.
+     */
+    if (!locator.scanRowIsKnown(snapshot)) {
+      Diag.log(
+        "  acquire: the source box spans wrapped lines, so the handle's row is unknown — " +
+          "refusing to probe rather than risk the selection"
+      )
       onDone(Outcome.HandleLost)
       return
     }

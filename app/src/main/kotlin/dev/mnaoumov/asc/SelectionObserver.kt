@@ -78,6 +78,22 @@ class SelectionObserver {
       val characterWidth = box.width().toFloat() / sourceLength
       return characterWidth / box.height() >= MIN_ONE_LINE_RATIO
     }
+
+    /**
+     * Whether the box is **known** to span wrapped lines — which is not the same as "not one line".
+     *
+     * The distinction is the whole of it: [sourceIsOneLine] answers false both for a box measured to
+     * wrap and for a box whose shape cannot be measured at all, because the ratio it tests needs a
+     * length and Gecko announces `srcLen = -1`. Anything that refuses to act on a wrap must ask THIS
+     * question, or it also refuses on every surface that simply declines to say how long its text is.
+     *
+     * What it is for: the handle's ROW. Every rung derives `y` from [bounds]`.bottom`, which on a
+     * union of line boxes is the LAST line — correct only if the moving edge happens to sit there.
+     */
+    fun isKnownMultiLine(): Boolean {
+      val box = bounds ?: return false
+      return box.height() > 0 && sourceLength > 0 && !sourceIsOneLine()
+    }
   }
 
   @Volatile
