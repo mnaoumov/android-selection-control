@@ -120,7 +120,18 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
   override fun onAccessibilityEvent(event: AccessibilityEvent?) {
     if (event == null) return
-    observer.onEvent(event)
+    /*
+     * The previous snapshot has to be taken BEFORE the observer overwrites it, because what the
+     * driver needs from an event is not its contents but how it differs from what came before: a
+     * selection whose BOTH edges changed is a new one, and a long-press snaps a whole word, so both
+     * of its edges are word boundaries the pad can have for nothing.
+     *
+     * Offered only between presses. Mid-press every announcement is ours, and our own steps are
+     * already accounted for where they are made.
+     */
+    val previous = observer.latest
+    val changed = observer.onEvent(event)
+    if (changed && !busy && ::driver.isInitialized) driver.noteSelectionEvent(previous)
     // The toolbar comes back on every selection change, so the mask has to follow it there rather
     // than only after a press of our own.
     refreshMask()
