@@ -394,6 +394,74 @@ Nothing is installed system-wide; the Gradle wrapper supplies Gradle (pinned by 
 `cmdline-tools` is **not** installed, so there is no `sdkmanager` / `avdmanager`. AVDs are managed
 through Android Studio's Device Manager.
 
+## The test rig
+
+**`scripts\rig.ps1` is the whole loop in one command.** It boots this project's own emulator, builds,
+installs, rebinds the accessibility service, launches the debug target, reports every rectangle the
+app logged, and takes a screenshot:
+
+```powershell
+.\scripts\rig.ps1 go # the lot, cold; -NoBuild to skip Gradle
+.\scripts\rig.ps1 press 'char/right'
+.\scripts\rig.ps1 log 40
+```
+
+Each step is also an action of its own — `up`, `down`, `build`, `install`, `rebind`, `target`, `pad`,
+`buttons`, `blocks`, `press`, `tap`, `shot`, `log`, `status`, `avd`.
+
+**It exists because a measurement should not wait on a phone being unlocked.** Almost everything
+measured here before it was measured on the owner's handset, which meant every run waited on a
+device being awake, unlocked and parked on the right page; twice a session stalled outright on a
+locked screen, which still lists the overlay window and still swallows every injected tap, so the
+run looked broken when it was only asleep. It also replaces the same six adb calls retyped a dozen
+times a sitting, each one a transcription away from a wrong conclusion.
+
+**The serial is pinned, and that is the safety property.** There is no device auto-discovery in the
+script at all: it talks to `emulator-5570` and refuses everything else unless a serial is passed
+deliberately. See *Never touch* — a bare adb with several devices attached picks one for you, and
+"picks one for you" is how a run lands in another project's suite.
+
+**Drive by the rectangles the app logs, never by numbers read off a screenshot.** The pad logs where
+each button landed (`pad button '<label>' at x,y WxH`) and the debug target logs where each text
+block landed (`target '<name>' at x,y WxH len=N`), both in raw screen pixels at layout time; `press`
+and `blocks` read those lines back. Computing a coordinate from a picture instead is how a tap once
+missed the pad by 11 px, landed on the page, and was written down as "gestures pass through the
+overlay" — which is the opposite of the truth and cost a whole round of measurement.
+
+### The AVD
+
+`asc_test`, console port **5570**, **720x1520 at 320 dpi with 2560 MB**, x86_64 on a Play-Store
+system image. `.\scripts\rig.ps1 avd` says whether this machine has it and whether its shape still
+matches; the image is ~8.7 GB and so lives outside the repo, but the recipe and the check do not.
+
+Both numbers were paid for:
+
+- **The size.** At the phone's own 1344x2992, with Chrome under a software renderer, the guest
+ wedged three times in an hour and once took the whole VM down with it. 720x1520 is stable.
+- **The port.** Nothing technical forces 5570. It is simply far enough from the 5554 that the first
+ emulator on a machine takes that a serial typed from memory cannot reach another project's
+ emulator.
+
+**There is no `avdmanager` here and a hand-written `config.ini` boots to a hung QEMU** rather than to
+an error, so the AVD is made by cloning a provisioned one: create any x86_64 AVD in Android Studio's
+Device Manager, close Studio, copy its directory and `.ini` under `~/.android/avd` while skipping
+`snapshots/` and the `*.img.qcow2` backing files, repoint `path` / `path.rel`, then set the shape
+above plus `fastboot.forceColdBoot=yes`. `rig.ps1 avd` prints this recipe verbatim when the AVD is
+missing, which is where it belongs — the reader who needs it is at a console, not in this file.
+
+Cold boot is ~40 s on an unloaded machine. **On a loaded one it is much worse, and adb goes with
+it**: with several other projects' emulators and builds running, `adb devices` itself has been
+measured taking over a minute, and an `adb install` that normally takes seconds does not return.
+That is contention, not a broken rig — check what else is running before believing a hang.
+
+### The debug target
+
+`app/src/debug/.../TargetActivity.kt` — three selectable blocks with **known offsets**, so an
+expected result is a number rather than a guess, and it cannot reach a release build. Its blocks
+must stay `WRAP_CONTENT`: left at `MATCH_PARENT` a 30-character node reported itself 1208 px wide,
+every derived handle landed hundreds of pixels right of the real one, and every press failed — which
+read exactly like a gesture problem and was a fixture problem.
+
 ## Build
 
 **The app** (repo root):
@@ -674,4 +742,21 @@ receive touches and still never fire a click, and which of the two happens is th
 ## Never touch
 
 `emulator-5554` / the `obsidian_test` and `obsidian_screenshots` AVDs belong to the Obsidian projects'
-integration suites, which are worked in other sessions. This project uses a physical device.
+integration suites, which are worked in other sessions. They are started and stopped by those
+suites while this project is working, so their presence in `adb devices` comes and goes — do not
+read that churn as anything to do with this project, and never reach for one because it happens to
+be the only device attached.
+
+**This project's own emulator is `asc_test` on `emulator-5570`, and `scripts\rig.ps1` talks to that
+serial alone.** Everything else needs a serial passed by hand. A physical device is still the right
+target for anything about a real ROM's Enhanced Confirmation Mode, real handle geometry, or a real
+browser — the rig is for everything else.
+
+**The emulator does not survive a busy machine, and the failure does not look like one.** Measured
+2026-09-20 with seven other jobs pinning every core: the guest boots fine, answers `adb shell` three
+times, and then stops answering it at all — while its process stays alive and `adb devices` still
+reports it. The control is what makes this worth writing down: **the probe was run on a guest with
+nothing installed and no accessibility service enabled**, so it is neither this app nor the rebind,
+both of which the earlier runs looked like they had caught. `.\scripts\rig.ps1 down` gets out of
+that state (it kills by AVD command line and clears the locks a dead emulator leaves); nothing
+short of a quieter machine prevents it.
