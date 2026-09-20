@@ -11,10 +11,11 @@ character step now costs one gesture), and **the swap-edge fix** (the swap butto
 the moving edge is" that both edges now share). Read the gesture spike for the mechanism, the pad build for what the pad
 does, and the held-pointer fix for everything a continued stroke will and will not tolerate.
 
-Open work is split by shape, one item each: **the button-drive work** drive page / start / end to completion;
-**The word-left fix** word-left and its remembered boundaries; **the handle-location defect** a handle inside a wrapped node;
-**The test-rig work** make the test rig a repo asset; **the Play distribution work** Play distribution, which ECM makes mandatory
-rather than optional; **the snap-back fix** one offset the app snaps back after the lift.
+Open work is split by shape, one item each in that same store, and named there rather than here:
+driving the page / start / end buttons to completion; a handle inside a wrapped node; making the test
+rig a repo asset (a project-owned AVD and a one-command deploy-and-drive script); Play distribution,
+which ECM makes mandatory rather than optional; one offset the app snaps back after the lift; and
+verifying the boundary rework below on a device, which the sitting that wrote it had none for.
 
 Nothing about this project's plan lives here — this file is build/run mechanics only.
 
@@ -302,6 +303,44 @@ action-mode window and say which evidence you actually have.
 
 **Handle geometry is per-app.** Chrome draws teardrops below the baseline; Google Keep draws circles at
 the selection's top-left and bottom-right. Do not hardcode one offset pair.
+
+**Nothing can tell you whether an offset is a word boundary. Only a SNAP can, and a snap reports a
+destination rather than classifying an origin.** This is the reasoning behind
+`SelectionDriver.knownBoundaries`, and it is worth having in full, because every route out of it was
+considered and each one is closed:
+
+- *Ask the app.* Growing snaps to a boundary — but growing from a boundary and growing from mid-word
+ both land on one, so the landing says nothing about where it started. The probe also moves the
+ selection, so answering "is the edge on a boundary?" requires performing the step being asked
+ about.
+- *Ask the geometry.* There are no per-character rects on page content:
+ `refreshWithExtraData(EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY)` returns the node's own bounds
+ repeated, as the gotcha above records. A space is not distinguishable from a narrow glyph by width
+ even where rects exist, and trying would be reading the text by another route.
+- *Ask the granularity actions.* `ACTION_NEXT_AT_MOVEMENT_GRANULARITY` with the WORD mask returns
+ `true` and moves nothing on page content — one of the earliest NO-GO measurements here.
+- *Ask the toolbar.* Its centre tracks the selection's centre, which gives a width in pixels and no
+ word structure at all.
+- *Ask a screenshot.* Ruled out by the project's premise, and `screencap` is black on `FLAG_SECURE`
+ apps anyway.
+
+So there are exactly **two** sources of boundary knowledge, both of them landings rather than
+classifications: an offset a **grow** snapped to, and both edges of a selection the user has just
+**long-pressed**. A shrink reveals nothing whatsoever — it is character-granular, so where it stops
+says only where the finger was. Recording a shrink's landing as a boundary is therefore not an
+approximation but a falsehood, and it was one: every character step wrote its landing into the set,
+and `word ←` then jumped to a mid-word offset and the pad announced it as a word.
+
+**A fresh selection is distinguishable from a moved handle with no text and no timer** — a long-press
+replaces BOTH edges, while a handle drag moves one and leaves the anchor. That is what lets the two
+free boundaries be harvested, and it fails safe: an unrecognised long-press seeds nothing, which is
+the old behaviour.
+
+**`word ←` onto the anchor collapses the selection, and that is correct.** A one-word selection's only
+boundary in the shrinking direction is its own anchor, so the first `word ←` after a long-press moves
+the end onto the start — exactly what `Ctrl+Shift+Left` does on a desktop. The target app then
+dismisses its handles and toolbar, so the pad goes blind and the user must long-press again; a char
+step from a one-character selection has always done the same.
 
 ## The no-INTERNET property
 

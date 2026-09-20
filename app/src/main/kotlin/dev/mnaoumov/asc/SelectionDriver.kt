@@ -116,10 +116,41 @@ class SelectionDriver(
    */
   private val towardAnchor: Int get() = if (activeEdge == Edge.END) -1 else 1
 
+  /** The edge that is NOT being moved, in the source node's frame. A shrink stops here at the latest. */
+  private fun SelectionObserver.Snapshot.anchorOffset(): Int =
+    if (activeEdge == Edge.START) high() else low()
+
   /**
-   * Offsets the selection has been seen to land on while GROWING, which are exactly word boundaries,
-   * because a grow snaps to one. This is how `word ←` finds the previous boundary **without reading
-   * any text**: retrace to the nearest remembered boundary in the shrinking direction.
+   * Whether [command] makes the selection BIGGER on the edge currently being moved — the one fact
+   * that decides whether a landing is evidence of a word boundary, because the measured granularity
+   * rule is directional: growing snaps a whole word, shrinking moves one character.
+   *
+   * Computed from the command and the active edge rather than remembered per call site, because the
+   * call sites do not divide along that line: [growOneUnit] is reached by `word →` (a grow), by
+   * `shrinkByWord`'s degradation (a shrink) and by [releasedCharacterStep]'s shrinking branch, and
+   * [heldCharacterStep] serves `char ←` and `char →` alike. Asking which button was pressed is
+   * therefore not the same question as asking which way the selection travelled, and answering the
+   * first is what filled [knownBoundaries] with mid-word offsets.
+   */
+  private fun growsSelection(command: PadCommand): Boolean = (activeEdge == Edge.END) == command.toRight
+
+  /**
+   * Offsets that something has SHOWN to be word boundaries. This is how `word ←` finds the previous
+   * boundary **without reading any text**: retrace to the nearest remembered one in the shrinking
+   * direction.
+   *
+   * Two sources feed it, and between them they are the whole of what this mechanism can ever know
+   * about where words begin and end — see [recordBoundary] and [noteSelectionEvent]:
+   *
+   *  - an offset a GROW landed on, because growing snaps a whole word;
+   *  - both edges of a selection the user has just made, because a long-press snaps a whole word too.
+   *
+   * There is no third source, and in particular **a shrink reveals nothing**. Shrinking is
+   * character-granular, so where it stops says only where the finger was; the target app's word
+   * knowledge is expressed exclusively by SNAPPING, and a snap reports a destination rather than
+   * classifying an origin. Every offset in here is therefore a landing of one of the two kinds
+   * above, never merely an offset the selection has been seen at — a distinction this used to lose,
+   * with the result below.
    *
    * Cleared whenever the source node changes, since offsets are local to it and mean nothing across
    * a boundary.
@@ -140,7 +171,7 @@ class SelectionDriver(
       onDone(Outcome.NoSelection)
       return
     }
-    rememberBoundaryContext(snapshot)
+    syncBoundaryContext(snapshot)
     Diag.log(
       "$command edge=$activeEdge at ${snapshot.low()}..${snapshot.high()} " +
         "moving=${snapshot.movingOffset()} " +
@@ -156,7 +187,7 @@ class SelectionDriver(
       onDone(outcome)
     }
 
-    val growing = (activeEdge == Edge.END) == command.toRight
+    val growing = growsSelection(command)
     when (command.unit) {
       PadCommand.Unit.WORD -> if (growing) growOneUnit(command, onDone = report) else shrinkByWord(command, report)
       // Both directions go through the held chain now (the held-pointer fix): it is exact where the released path
@@ -206,7 +237,7 @@ class SelectionDriver(
         )
         when {
           after != null && locator.grabbedAHandle(before, after) -> {
-            recordBoundary(after)
+            recordBoundary(before, after, command)
             locator.rememberAnchor(handle.x - reach.coerceAtLeast(0f))
             onDone(Outcome.Moved(before.movingOffset(), after.movingOffset()))
           }
@@ -389,7 +420,12 @@ class SelectionDriver(
             onDone(Outcome.HandleLost)
           }
           else -> {
-            recordBoundary(after)
+            // The FIRST landing of a held character step is worth recording even though the press
+            // will walk back off it: aimed at one character in the growing direction, a target that
+            // snaps words lands on the next boundary instead (measured 8 -> 10 -> 18, straight
+            // across one). That is a boundary learned by the `char →` button, which is exactly the
+            // kind this set used to miss because only `word →` was thought to teach it anything.
+            recordBoundary(before, after, command)
             locator.rememberAnchor(handle.x - reach.coerceAtLeast(0f))
             heldCorrect(targetOffset(before, after, command, start), start, command, onDone)
           }
@@ -723,19 +759,37 @@ class SelectionDriver(
    * is built on. So use the boundaries we have already been shown: every grow landed on one.
    */
   private fun shrinkByWord(command: PadCommand, onDone: (Outcome) -> Unit) {
-    val current = observer.latest?.movingOffset() ?: run {
+    val snapshot = observer.latest ?: run {
       onDone(Outcome.NoSelection)
       return
     }
-    // The nearest boundary in the SHRINKING direction, which is below the END edge and above the
-    // START one. Taking the largest below for both put `word ⇥` on the START edge behind itself.
+    val current = snapshot.movingOffset()
+    /*
+     * The nearest boundary in the SHRINKING direction, which is below the END edge and above the
+     * START one. Taking the largest below for both put `word ⇥` on the START edge behind itself.
+     *
+     * Bounded at the anchor as well, because the set outlives a `⇄ swap`: the boundaries it holds
+     * were learned while the OTHER edge travelled, so they lie on the far side of the anchor from
+     * the edge now moving, and one of them as a target would drag the moving handle straight past
+     * the anchor. `from`/`to` then arrive reversed, [movingOffset] starts answering for the wrong
+     * end, and the loop corrects against it. Reaching the anchor exactly is fine and is what a
+     * desktop keyboard does — the selection collapses to a caret.
+     */
+    val anchor = snapshot.anchorOffset()
     val target = if (towardAnchor < 0) {
-      knownBoundaries.filter { it < current }.maxOrNull()
+      knownBoundaries.filter { it in anchor until current }.maxOrNull()
     } else {
-      knownBoundaries.filter { it > current }.minOrNull()
+      knownBoundaries.filter { it in (current + 1)..anchor }.minOrNull()
     }
     if (target == null) {
-      // Honest degradation: one character, and say so rather than pretend it was a word.
+      /*
+       * Honest degradation: one character, and say so rather than pretend it was a word.
+       *
+       * Much rarer than it was, because the set no longer starts empty — a long-press seeds both of
+       * its edges (see [noteSelectionEvent]) and every grow adds one. What is left here is the case
+       * that cannot be fixed at all: an edge that has travelled into ground no grow has covered, on
+       * a target whose word knowledge is only ever expressed by snapping. See [knownBoundaries].
+       */
       growOneUnit(command) { outcome ->
         onDone(if (outcome is Outcome.Moved) Outcome.Degraded("no known word boundary yet") else outcome)
       }
@@ -772,7 +826,12 @@ class SelectionDriver(
           !completed -> onDone(Outcome.HandleLost)
           after == null -> onDone(Outcome.Moved(before.movingOffset(), before.movingOffset()))
           after.isEmpty() -> onDone(Outcome.HandleLost)
-          else -> onDone(Outcome.Moved(before.movingOffset(), after.movingOffset()))
+          else -> {
+            // A sweep that grew landed where the app snapped it, same as any other grow. It will
+            // usually have crossed into another node, which [recordBoundary] handles by re-keying.
+            recordBoundary(before, after, command)
+            onDone(Outcome.Moved(before.movingOffset(), after.movingOffset()))
+          }
         }
       }
     }
@@ -817,12 +876,76 @@ class SelectionDriver(
     }
   }
 
-  private fun recordBoundary(snapshot: SelectionObserver.Snapshot) {
-    knownBoundaries += snapshot.movingOffset()
+  /**
+   * Remember an offset the target app SNAPPED to, which is the only boundary evidence a step ever
+   * produces. Two conditions, both of which the old unconditional version failed.
+   *
+   * **The step must have GROWN the selection.** The measured granularity rule is directional:
+   * growing snaps a whole word, shrinking moves one character. Every call site here is reached by
+   * both — see [growsSelection] — so recording on arrival filled the set with the landings of
+   * character steps, which `word ←` then jumped to and the pad announced as a word. That is a
+   * correctness bug rather than an imprecision: the set's whole claim is that everything in it is a
+   * boundary, and `word ←` has nothing else to check it against.
+   *
+   * **It must have moved more than one character.** A plain `TextView` steps by character in BOTH
+   * directions, unlike Chrome, so a one-character grow there proves nothing at all; on a snapping
+   * target it means a word one character wide, which the set can afford to miss. Across a node
+   * change the comparison is meaningless — the offsets are in different frames — and the grow is
+   * believed, because a grow that crossed a node did so by snapping.
+   */
+  private fun recordBoundary(
+    before: SelectionObserver.Snapshot,
+    after: SelectionObserver.Snapshot,
+    command: PadCommand,
+  ) {
+    if (!growsSelection(command)) return
+    /*
+     * Re-key HERE and not only at the top of the next press.
+     *
+     * A grow can carry the moving end into the next node, and the boundary it lands on is a
+     * boundary OF THAT NODE. Syncing the context only in [perform] meant the next press noticed the
+     * change and cleared the set — discarding the one boundary that had just been paid a gesture
+     * for, on the node the loop had only just arrived in, which is precisely where the set is
+     * emptiest.
+     */
+    syncBoundaryContext(after)
+    val crossed = before.source != null && after.source != null && before.source != after.source
+    if (!crossed && kotlin.math.abs(after.movingOffset() - before.movingOffset()) <= 1) return
+    knownBoundaries += after.movingOffset()
+  }
+
+  /**
+   * A selection change the pad did not cause, offered by the service so a **fresh selection can seed
+   * the set for free**.
+   *
+   * A long-press is the only way a user starts a selection on a page, and it snaps a whole word — so
+   * both of its edges are word boundaries, and neither costs a gesture to learn. Without this a
+   * fresh long-press followed by `word ←` had nothing remembered at all and degraded to a single
+   * character, which is the honest answer to an empty set and a poor one to the commonest state
+   * there is.
+   *
+   * **Telling a fresh selection from a moved handle takes no text and no timer**: a long-press
+   * replaces both edges, while a handle drag — the user's finger, or a late snap announced after one
+   * of our own presses finished — moves one edge and leaves the anchor exactly where it was. So
+   * "both edges differ" is the test, and it fails safe: an unrecognised long-press seeds nothing,
+   * which is where this started.
+   *
+   * Offsets stay valid across a long-press within the same node, so a second one adds to the set
+   * rather than replacing it; [syncBoundaryContext] clears only when the node itself changes.
+   */
+  fun noteSelectionEvent(before: SelectionObserver.Snapshot?) {
+    val now = observer.latest ?: return
+    if (now.isEmpty()) return
+    val freshSelection = before == null || (now.low() != before.low() && now.high() != before.high())
+    if (!freshSelection) return
+    syncBoundaryContext(now)
+    knownBoundaries += now.low()
+    knownBoundaries += now.high()
+    Diag.log("seeded from a fresh selection at ${now.low()}..${now.high()}: boundaries=$knownBoundaries")
   }
 
   /** Offsets are local to the source node, so a change of node invalidates every remembered one. */
-  private fun rememberBoundaryContext(snapshot: SelectionObserver.Snapshot) {
+  private fun syncBoundaryContext(snapshot: SelectionObserver.Snapshot) {
     val key = "${snapshot.packageName}|${snapshot.bounds}|${snapshot.sourceLength}"
     if (key != boundariesNodeKey) {
       knownBoundaries.clear()
