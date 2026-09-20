@@ -87,8 +87,21 @@ treat an advertised action, or a `true` return, as evidence that anything happen
 
 **`refreshWithExtraData(EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY)` lies the same way for page content.** It
 returns `true` with a correctly-sized array in which every `RectF` is just the whole node's bounds. The
-control: on Chrome's own editable omnibox it returns real per-character rects. Do not build on it for
+control: on Chrome's own editable omnibox it returns real per-character rects. Never *rely* on it for
 non-editable text.
+
+**But the lie is DETECTABLE, which is a different thing from useless.** A rectangle that is both as wide
+and as tall as the node it came from is the node's bounds repeated, and a rectangle that is genuinely one
+character is smaller than its node by whole characters *and* whole lines — nothing real sits in between.
+So a rung may *ask*, *check*, and fall through when the answer is the box; the worst case is one wasted
+round trip. `HandleLocator.characterGeometry` is that rung, and it is the only one that answers with the
+handle's **row** rather than assuming one, which is why it is worth the IPC on the one path — a wrapped
+node — where every other rung is guessing. Whether Chrome is among the surfaces that answer honestly is
+not yet measured on a device; the code is written so that "no" costs nothing.
+
+**Asking it for rectangles is not reading text.** It is asked with indices and answers with `RectF`s, so
+it has the same standing as `text?.length` — a measurement of the glyphs, never a look at them. Worth
+saying out loud, because the name sits close enough to the trust property to read as a breach.
 
 **A selection event is a change notification, not a state query.** `TYPE_VIEW_TEXT_SELECTION_CHANGED` only
 fires when the range CHANGES — re-selecting the same word is silent — and nothing lets you *ask* what is
@@ -274,6 +287,19 @@ text, but a phrase running across three lines reports one box covering all three
 2507` for 63 characters), and interpolating an offset across that is meaningless. This is a *different*
 failure from Obsidian's, where a 4-character node reports the full content width — two causes, one
 symptom, and a fix for one need not fix the other.
+
+**What a wrapped node actually denies you is the ROW, not the column.** Every rung takes `y` from
+`bounds.bottom`, which on a union of line boxes is the **last** line — right only when the moving edge
+happens to be sitting there. An x can be estimated and corrected by the loop; a row cannot, because a
+handle one line out is not a near miss but a touch on the page. That is why `SelectionDriver`'s scan now
+*refuses* on a box measured to wrap (`HandleLocator.scanRowIsKnown`) instead of hunting sideways along a
+row it has no reason to believe: a sideways search is only ever as good as the row it searches, and a
+miss there costs the user their selection.
+
+That refusal is deliberately narrow — it fires only where the wrap is **measured**
+(`sourceLength > 0 && !sourceIsOneLine`). A surface that announces no length at all (Gecko sends
+`srcLen = -1`) cannot be classified either way, and keeps the behaviour it had, so nothing that might be
+working is taken away to fix something that is not.
 
 **Do not read node identity off bounds alone.** Neighbouring nodes on the same line have plausible
 bounds and entirely different text: a probe's caret landed on the node holding `" for editing text

@@ -2,10 +2,21 @@ package dev.mnaoumov.asc
 
 import android.graphics.PointF
 import android.graphics.Rect
+import android.graphics.RectF
+import android.os.Bundle
+import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 
 /** Which end of the selection the pad is currently moving. */
 enum class Edge { START, END }
+
+/**
+ * One character of the source node as the platform itself measures it.
+ *
+ * The point of this over interpolation is [lineBottom]: it is the moving edge's **own line**, not the
+ * bottom of a box that may cover four of them. A caret x can be estimated; a row cannot.
+ */
+data class CharacterGeometry(val caretX: Float, val lineBottom: Float, val characterWidth: Float)
 
 /**
  * Where on screen the handle being moved is.
@@ -18,16 +29,31 @@ enum class Edge { START, END }
  *    hugs its text, which is Chrome's per-phrase inline nodes. Only valid when the box is one line:
  *    a phrase that wraps reports the union of its line boxes, and interpolating across that put the
  *    handle ~130 px out in x and ~76 px in y.
- * 2. **Mirror about the floating toolbar's centre** — the toolbar tracks the selection's centre to
+ * 2. **Ask the platform for the character's own rectangle** — the only rung that answers with a ROW
+ *    rather than assuming one, and therefore the only one that can reach inside a wrap. It is also
+ *    the only rung that can be caught lying, which is what makes it safe to try. See
+ *    [characterGeometry].
+ * 3. **Mirror about the floating toolbar's centre** — the toolbar tracks the selection's centre to
  *    ~6 px, and the handles are symmetric about it, so the moving one is `2·centre − anchor`. Needs
  *    a known anchor, and holds only while both handles are on the same row.
- * 3. **Acquire by scanning** outward from that centre — one probe found a word's handle in 454 ms,
- *    but a miss destroys the selection, so this is the last resort, never the first guess.
+ * 4. **Acquire by scanning** outward from that centre — one probe found a word's handle in 454 ms,
+ *    but a miss destroys the selection, so this is the last resort, never the first guess. It is
+ *    driven from `SelectionDriver`, and gated on [scanRowIsKnown].
  */
 class HandleLocator {
 
-  /** The last anchor-handle x we were confident about, for rung 2. */
+  /** The last anchor-handle x we were confident about, for the mirror rung. */
   private var knownAnchorX: Float? = null
+
+  /**
+   * One remembered answer from [characterGeometry], so a step that needs both the caret and the
+   * character's width pays one IPC rather than two.
+   *
+   * Keyed on the announcement's timestamp, which is unique per event, so it cannot outlive the
+   * geometry it describes: the next announcement is a different key and the memo simply misses.
+   */
+  private var memoKey: String? = null
+  private var memoValue: CharacterGeometry? = null
 
   fun forgetAnchor() {
     knownAnchorX = null
@@ -36,6 +62,98 @@ class HandleLocator {
   fun rememberAnchor(x: Float) {
     knownAnchorX = x
   }
+
+  /**
+   * The moving edge's character as the platform measures it, or null where it will not say.
+   *
+   * **Why this is worth an IPC.** A wrapped node's bounds are the union of its line boxes, so every
+   * other rung here puts the handle on the LAST line whatever line the edge is actually on — which
+   * is the whole of the wrapped-node defect, and why a probe along that row destroys the selection
+   * rather than finding anything. A character rectangle carries the row.
+   *
+   * **It reads rectangles, never characters.** `EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY` is answered
+   * with `RectF`s and asked for with indices, so the project's trust property is untouched — the
+   * same standing as `text?.length`, which is a count rather than a look.
+   *
+   * **And it lies, detectably, which is what makes trying it safe.** On Chrome page content it
+   * returns `true` with a correctly-sized array in which every rectangle is just the node's own
+   * bounds (AGENTS.md records the control: the editable omnibox returns real per-character rects).
+   * A rectangle the size of the whole node is therefore discarded and the caller falls through to
+   * the rungs that exist today — so the worst case is one wasted round trip on a path that fails
+   * outright without it.
+   *
+   * Asked for exactly ONE character on purpose. The array is as long as the requested span, and
+   * Docs announces a single 12,997-character node.
+   */
+  fun characterGeometry(snapshot: SelectionObserver.Snapshot, edge: Edge): CharacterGeometry? {
+    val source = snapshot.source ?: return null
+    val bounds = snapshot.bounds ?: return null
+    val length = snapshot.sourceLength
+    if (length <= 0) return null
+
+    val offset = if (edge == Edge.START) snapshot.low() else snapshot.high()
+    val key = "${snapshot.atMs}|$edge|$offset"
+    if (key == memoKey) return memoValue
+    memoKey = key
+    memoValue = null
+
+    /*
+     * An offset's caret sits at the LEFT edge of the character it indexes — offset 3 is "before the
+     * fourth character". At `offset == length` there is no such character, so the caret is the RIGHT
+     * edge of the last one instead. Getting this wrong is a whole character of error at exactly the
+     * end of a node, which is where a growing selection spends its time.
+     */
+    val index = offset.coerceIn(0, length - 1)
+    val caretIsRightEdge = offset >= length
+
+    val args = Bundle().apply {
+      putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX, index)
+      putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_LENGTH, 1)
+    }
+    val refreshed = runCatching {
+      source.refreshWithExtraData(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY, args)
+    }.getOrDefault(false)
+    if (!refreshed) return null
+
+    val rects = runCatching {
+      source.extras?.getParcelableArray(
+        AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY,
+        RectF::class.java,
+      )
+    }.getOrNull()
+    // Entries are null for characters the app has not laid out — off-screen, or scrolled away.
+    val rect: RectF? = rects?.firstOrNull()
+    if (rect == null || rect.isEmpty) return null
+
+    // The lie. A single character is never the width AND the height of the box that holds it; a
+    // wrapped node's box is several lines tall and a one-line node's is many characters wide, so
+    // either comparison alone would also reject an honest rect on a one-character node.
+    if (rect.width() >= bounds.width() - LIE_TOLERANCE && rect.height() >= bounds.height() - LIE_TOLERANCE) {
+      Diag.log("  locate: per-character rects are the node's own bounds here — the platform is not answering")
+      return null
+    }
+
+    memoValue = CharacterGeometry(
+      caretX = if (caretIsRightEdge) rect.right else rect.left,
+      lineBottom = rect.bottom,
+      characterWidth = rect.width(),
+    )
+    return memoValue
+  }
+
+  /**
+   * Whether a scan may probe along [SelectionObserver.Snapshot.bounds]`.bottom`.
+   *
+   * The scan hunts sideways from the toolbar's centre at that one row, so it is only ever as good as
+   * the row — and on a box measured to span wrapped lines the row is the LAST line's, which the
+   * moving edge is on only by luck. A miss there is not a wasted probe: it lands on the page,
+   * collapses the selection, and on a link navigates.
+   *
+   * Narrow on purpose. This refuses only where the wrap is **measured**, so a surface that declines
+   * to announce a length (Gecko) keeps exactly the behaviour it has today rather than losing a rung
+   * to a shape nobody has established. See [SelectionObserver.Snapshot.isKnownMultiLine].
+   */
+  fun scanRowIsKnown(snapshot: SelectionObserver.Snapshot): Boolean = !snapshot.isKnownMultiLine()
 
   /**
    * The moving handle's pixel, or null when nothing trustworthy is available and the caller should
@@ -51,6 +169,22 @@ class HandleLocator {
       val anchorX = bounds.left + (offset.toFloat() / snapshot.sourceLength) * bounds.width()
       val x = if (edge == Edge.START) anchorX - HANDLE_INSET else anchorX + HANDLE_INSET
       return PointF(x, bounds.bottom + HANDLE_DROP)
+    }
+
+    /*
+     * Only reached once interpolation is out, so the fast path — Chrome's one-line inline nodes,
+     * which is most presses — never pays the round trip. This is the case where every remaining
+     * rung is guessing at a row, so an IPC that answers with one is cheap by comparison.
+     */
+    val character = characterGeometry(snapshot, edge)
+    if (character != null) {
+      val x =
+        if (edge == Edge.START) character.caretX - HANDLE_INSET else character.caretX + HANDLE_INSET
+      Diag.log(
+        "  locate: character rect gave the $edge handle its own row — " +
+          "caret=${character.caretX} lineBottom=${character.lineBottom} charPx=${character.characterWidth}"
+      )
+      return PointF(x, character.lineBottom + HANDLE_DROP)
     }
 
     val centre = toolbarCentreX
@@ -136,6 +270,14 @@ class HandleLocator {
      */
     const val HANDLE_INSET = 30f
     const val HANDLE_DROP = 57f
+
+    /**
+     * How near a character's rectangle may come to the whole node's box before it is read as the
+     * platform repeating those bounds rather than measuring anything. A pixel of rounding either
+     * way, no more: a rect that is genuinely a character is smaller than its node by whole
+     * characters and whole lines, so there is nothing in between for a tolerance to arbitrate.
+     */
+    const val LIE_TOLERANCE = 1f
 
     /** Scanning: the step is the handle's own touch radius; finer only buys duplicate hits. */
     const val SCAN_STEP = 48f
