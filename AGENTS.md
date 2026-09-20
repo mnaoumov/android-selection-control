@@ -12,10 +12,11 @@ the moving edge is" that both edges now share). Read the gesture spike for the m
 does, and the held-pointer fix for everything a continued stroke will and will not tolerate.
 
 Open work is split by shape, one item each in that same store, and named there rather than here:
-driving the page / start / end buttons to completion; a handle inside a wrapped node; making the test
-rig a repo asset (a project-owned AVD and a one-command deploy-and-drive script); Play distribution,
-which ECM makes mandatory rather than optional; one offset the app snaps back after the lift; and
-verifying the boundary rework below on a device, which the sitting that wrote it had none for.
+driving the page / start / end buttons to completion; a handle inside a wrapped node; Play
+distribution, which ECM makes mandatory rather than optional; one offset the app snaps back after
+the lift; and verifying the boundary rework below on a device, which the sitting that wrote it had
+none for. The test rig is now a repo asset — see *The test rig* below — though the half of it that
+needs a live guest is still to be run.
 
 Nothing about this project's plan lives here — this file is build/run mechanics only.
 
