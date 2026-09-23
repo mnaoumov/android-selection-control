@@ -13,10 +13,9 @@ does, and the held-pointer fix for everything a continued stroke will and will n
 
 Open work is split by shape, one item each in that same store, and named there rather than here:
 driving the page / start / end buttons to completion; a handle inside a wrapped node; Play
-distribution, which ECM makes mandatory rather than optional; one offset the app snaps back after
-the lift; and verifying the boundary rework below on a device, which the sitting that wrote it had
-none for. The test rig is now a repo asset — see *The test rig* below — though the half of it that
-needs a live guest is still to be run.
+distribution, which ECM makes mandatory rather than optional; and verifying the boundary rework below
+on a device, which the sitting that wrote it had none for. The test rig is now a repo asset — see
+*The test rig* below.
 
 Nothing about this project's plan lives here — this file is build/run mechanics only.
 
@@ -137,10 +136,41 @@ a run that stepped sixteen characters in about six seconds, one per step, stoppe
 zero-permission property survives (`aapt2 dump permissions` prints the package line and nothing).
 
 Re-measured 2026-09-03 for the START edge and it holds there too: **sixteen presses, 12 to 4 and back
-to 12, one character and one gesture each, 320-361 ms** (the swap-edge fix). But **"held, it does not snap" is not
+to 12, one character and one gesture each, 320-361 ms**. But **"held, it does not snap" is not
 universal** — on the same fixture the END edge at offset 24 lands on 23, reports it, and is snapped
-back to 24 by the app *after* the lift, so that one press can never get past it. The snap-back fix has the trace;
-do not treat the no-snap property as a law when reading the loop.
+back to 24 by the app *after* the lift, so that one press can never get past it. See the two entries
+below; do not treat the no-snap property as a law when reading the loop.
+
+**A step is sized by the character it CROSSES, not by the node's average — and the platform will
+measure that character for you.** `pixelsPerCharacter` used to divide a one-line node's width by its
+length, which describes the string rather than the glyph in front of the handle, and proportional
+text puts those a long way apart. Measured against `TargetActivity`'s `alpha bravo charlie delta
+echo`, whose average is 27.73 px on the phone and 16.03 px on the rig: a reach of one *average*
+character left from offset 24 crosses the `t` at index 23 and moved **two real characters** on both
+devices. The correction that follows then travels most of an average character to cross a narrow one,
+which parks the pointer in the far half of the target's cell — and the app, which follows the pointer
+while the finger is down and finalises to the nearest boundary when it lifts, rounds it back. That is
+the whole of the "one offset the press can never get past" above.
+
+`refreshWithExtraData(EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY)` answers honestly on a `TextView`, so
+the one-line path now asks it and keeps the average only where it declines — which includes Chrome
+page content, where the answer is the node's own bounds and is detected. It must be asked for the
+character the step CROSSES: leftward that is the one BEFORE the caret (`offset - 1`), and asking the
+other way measures the glyph the step is walking away from. Measured on the rig, same fixture, back
+to back: leftward from 25, the average sized every reach at 16.03 and needed a correction at the
+`t`; the real widths came back 20, 12, 12, 19 px and every step was exact in one gesture. Twelve
+rightward presses from `6..11` net **+9 characters** against **+4** for the average, with one
+`HandleLost` against two and one backwards press against three.
+
+**Read the selection back AFTER the lift — the held path's answer is not final until then.** A
+release is asynchronous: the chain notices it at the end of the link in flight and then plays a lift,
+so `releaseHeld` followed by reporting in the same breath answers before the target app has
+finalised its own drag. Five presses in a row announced `24 → 23`, each true when it was said, and
+the selection was back at 24 every time — a dead button the pad could not see, because it had stopped
+looking. Every held exit now lifts, settles and reports the offset that survived; the log shows it as
+`held: lifting` BEFORE the `-> Moved(...)` line rather than after. Nothing downstream needed
+changing: `madeProgress` already treats an unchanged offset as no progress and stops a repeat run,
+and the status line already says "didn't move".
 
 **The first travel aims at exactly ONE character, in both directions** — not at the released path's
 [`CHARS_PER_ATTEMPT`] overshoot and not backed off by `BOUNDARY_BIAS`. Both deviations were measured
@@ -149,6 +179,11 @@ and both cost accuracy: 1.5 characters lands on +2 wherever growing is character
 the selection was back at 21 by the next press, ten times running. Aiming short is safe because a
 word-snapping target simply announces nothing and the step falls back to the released path, which
 escalates properly.
+
+That `21 -> 20` measurement is the same defect as the entry above, seen from the other end: what put
+the pointer too near the boundary to hold was a fraction of an AVERAGE character, and the app's
+lift-time finalisation rounded it back. The first travel is a whole character for that reason too,
+and now a whole *real* character wherever the platform will measure one.
 
 **The pad steps on RELEASE, never while a finger is on the glass**, and that is forced by the
 mechanism rather than chosen: see the entry below. A tap is one step, a press held past the platform
@@ -429,6 +464,13 @@ and `blocks` read those lines back. Computing a coordinate from a picture instea
 missed the pad by 11 px, landed on the page, and was written down as "gestures pass through the
 overlay" — which is the opposite of the truth and cost a whole round of measurement.
 
+**`buttons` and `blocks` can answer "(none logged)" about lines that are demonstrably in the log.**
+They read it with `logcat -s ASC:I -d -t <n>`, and `-t` takes the last *n* lines of the WHOLE buffer
+before the tag filter is applied — so on a chatty guest the app's own lines fall out of the window
+and the answer is empty rather than stale. Measured 2026-09-23: the pad's twelve rectangles sat in
+`logcat -d` at 17:30:31 while `-s ASC:I -d -t 80` returned nothing at 17:31:08. Drop the `-t` and the
+whole tagged buffer comes back. Worth knowing before concluding the pad never came up.
+
 ### The AVD
 
 `asc_test`, console port **5570**, **720x1520 at 320 dpi with 2560 MB**, x86_64 on a Play-Store
@@ -454,6 +496,32 @@ Cold boot is ~40 s on an unloaded machine. **On a loaded one it is much worse, a
 it**: with several other projects' emulators and builds running, `adb devices` itself has been
 measured taking over a minute, and an `adb install` that normally takes seconds does not return.
 That is contention, not a broken rig — check what else is running before believing a hang.
+
+**But a hang on an IDLE machine is the windowed GPU path, and `-no-window` is the way round it.**
+Measured 2026-09-23 with nothing else running and 19 GB free: booted windowed, the guest answered
+`getprop` and took a keyevent, then stopped dead during the first `adb install` — `adb devices` still
+listed it while every `adb shell` timed out and the qemu process took **0 s of CPU over 12 s**. Taken
+down and rebooted, it died again a minute later, this time with the process gone outright. The
+emulator's own log names the cause both times:
+
+```
+Critical: Failed to load opengl32sw (The specified module could not be found.)
+Warning: Software OpenGL failed. Falling back to system OpenGL.
+detected a hanging thread 'QEMU2 main loop'. No response for 15024 ms
+Showing crashdialog to get consent.
+```
+
+`-gpu swiftshader_indirect` alone does NOT help — it is the Qt UI window that needs `opengl32sw`, and
+without a window nothing does. Launched as
+
+```
+emulator -avd asc_test -port 5570 -no-snapshot-save -no-boot-anim -no-window -gpu swiftshader_indirect -no-metrics
+```
+
+it booted in 30 s and then survived an install, four rebinds, six activity launches and about sixty
+injected presses without a wobble. `screencap` works headless, so nothing the rig does is lost. The
+crash dialog is the reason a wedge looks like a hang rather than a crash: the emulator is waiting for
+consent nobody can give, on a window that is minimised. `scripts\rig.ps1` still boots windowed.
 
 ### The debug target
 
