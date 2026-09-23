@@ -53,8 +53,14 @@ interface GestureDispatcher {
    */
   fun moveHeld(to: PointF): Boolean
 
-  /** Lift, at the end of the link in flight. Harmless when nothing is held. */
-  fun releaseHeld()
+  /**
+   * Lift, at the end of the link in flight. Harmless when nothing is held.
+   *
+   * [onLifted] fires once the lift has PLAYED — the only moment from which the target app's own
+   * finalisation of the drag can be read. It fires on every path, including the ones with nothing to
+   * lift and the ones whose chain died first, so a caller may wait on it unconditionally.
+   */
+  fun releaseHeld(onLifted: () -> kotlin.Unit = {})
 
   /** Where the held pointer is, or null when nothing is down. */
   fun heldAt(): PointF?
@@ -222,7 +228,7 @@ class SelectionDriver(
     // Escalate in characters rather than in a fixed pixel count: the distance that matters is the
     // width of the next word, and the node's own geometry says how wide a character is here. A
     // constant step wastes attempts on wide text and overshoots on narrow.
-    val step = (pixelsPerCharacter(before) * CHARS_PER_ATTEMPT).coerceAtLeast(STEP_PX)
+    val step = (pixelsPerCharacter(before, crossingOf(command)) * CHARS_PER_ATTEMPT).coerceAtLeast(STEP_PX)
     val reach = step * (attempt + 1) * (if (command.toRight) 1 else -1)
     gestureCount++
     gestures.drag(handle, PointF(handle.x + reach, handle.y), DRAG_MS) { completed ->
@@ -362,7 +368,7 @@ class SelectionDriver(
       return
     }
     val start = before.movingOffset()
-    val perChar = pixelsPerCharacter(before)
+    val perChar = pixelsPerCharacter(before, crossingOf(command))
 
     /*
      * Aim at ONE character, in either direction — not at [CHARS_PER_ATTEMPT].
@@ -446,6 +452,54 @@ class SelectionDriver(
    * Every exit lifts. A chain left down would keep the target app in a drag for ever, and the next
    * press would find a pointer the app has already stopped following.
    */
+  /**
+   * Lift, let the target app finish, and report the offset that SURVIVED the lift.
+   *
+   * Every held exit that has an offset to report goes through here, and the reason is the one thing
+   * the held path had no way to see. A release is asynchronous — the chain notices it at the end of
+   * the link in flight and then plays a lift — so `releaseHeld(); onDone(...)` answers before the
+   * app has finalised its own drag. Held, the app follows the pointer; on the lift it revises. Five
+   * presses in a row announced `24 → 23`, each one true when it was said, and the selection was back
+   * at 24 every time. To the user that is a dead button, and the pad could not tell, because it had
+   * already stopped looking.
+   *
+   * So the lift is now part of the step that is read back. What comes out is what the user can see,
+   * which costs a settle and buys three things: the announcement matches the screen; `madeProgress`
+   * can see a press that achieved nothing and stop a repeat run on it, as it does for every other
+   * kind of failure; and a revision that nothing yet explains shows up in the log as itself rather
+   * than as a step that mysteriously has to be repeated.
+   *
+   * A lift that collapses the selection is [Outcome.HandleLost], not a move: there is no longer an
+   * edge to have moved, and the run must stop rather than press on against a caret.
+   */
+  private fun releaseThenReport(origin: Int, landed: Int, onDone: (Outcome) -> Unit) {
+    gestures.releaseHeld {
+      val atLift = observer.latest
+      if (atLift == null) {
+        onDone(Outcome.Moved(origin, landed))
+        return@releaseHeld
+      }
+      awaitQuiet(
+        atLift,
+        0,
+        onResult = { settled ->
+          when {
+            settled == null -> onDone(Outcome.Moved(origin, landed))
+            settled.isEmpty() -> {
+              Diag.log("  held: the lift collapsed the selection — a lost handle, not a move")
+              onDone(Outcome.HandleLost)
+            }
+            else -> {
+              val after = settled.movingOffset()
+              if (after != landed) Diag.log("  held: the app revised $landed -> $after after the lift")
+              onDone(Outcome.Moved(origin, after))
+            }
+          }
+        },
+      )
+    }
+  }
+
   private fun heldCorrect(
     target: Int,
     origin: Int,
@@ -465,14 +519,12 @@ class SelectionDriver(
       return
     }
     if (current == target) {
-      gestures.releaseHeld()
-      onDone(Outcome.Moved(origin, current))
+      releaseThenReport(origin, current, onDone)
       return
     }
     if (guard >= MAX_HELD_CORRECTIONS) {
       Diag.log("  held: out of corrections at $current, wanted $target")
-      gestures.releaseHeld()
-      onDone(Outcome.Moved(origin, current))
+      releaseThenReport(origin, current, onDone)
       return
     }
 
@@ -485,7 +537,7 @@ class SelectionDriver(
       return
     }
 
-    val perChar = pixelsPerCharacter(before)
+    val perChar = pixelsPerCharacter(before, crossingToward(current, target))
     val direction = towardAnchor.toFloat()
     // Characters still to travel, counted in the SHRINKING direction — `current - target` on the END
     // edge, its mirror on the START one. Written the old way round it came out negative on every
@@ -534,8 +586,7 @@ class SelectionDriver(
         Diag.log("  held: no news yet — waiting rather than correcting a second time")
         awaitChange(before) { later ->
           if (later == null) {
-            gestures.releaseHeld()
-            onDone(Outcome.Moved(origin, current))
+            releaseThenReport(origin, current, onDone)
           } else {
             heldCorrect(target, origin, command, onDone, guard + 1)
           }
@@ -606,7 +657,7 @@ class SelectionDriver(
       return
     }
 
-    val perChar = pixelsPerCharacter(before)
+    val perChar = pixelsPerCharacter(before, crossingToward(current, target))
     val direction = towardAnchor.toFloat()
     val handle = locator.locate(before, activeEdge, toolbarCentre())
     if (handle == null) {
@@ -683,7 +734,7 @@ class SelectionDriver(
    * look at the characters. Only meaningful where the box is a single line; elsewhere fall back to
    * the probe step and let the correction loop do the work.
    */
-  private fun pixelsPerCharacter(snapshot: SelectionObserver.Snapshot): Float {
+  private fun pixelsPerCharacter(snapshot: SelectionObserver.Snapshot, crossing: Crossing): Float {
     val bounds = snapshot.bounds
     if (!snapshot.sourceIsOneLine() || bounds == null || snapshot.sourceLength <= 0) {
       /*
@@ -697,13 +748,49 @@ class SelectionDriver(
        * Free next to [HandleLocator.locate], which has already asked for this same rectangle on this
        * same snapshot and memoised the answer.
        */
-      return locator.characterGeometry(snapshot, activeEdge)
+      return locator.characterGeometry(snapshot, activeEdge, crossing)
         ?.characterWidth
         ?.coerceIn(MIN_CHAR_PX, MAX_CHAR_PX)
         ?: STEP_PX
     }
-    return (bounds.width().toFloat() / snapshot.sourceLength).coerceIn(MIN_CHAR_PX, MAX_CHAR_PX)
+    /*
+     * A one-line box's average is a good enough ESTIMATE and a bad MEASUREMENT, and a held step
+     * needs the measurement.
+     *
+     * The average is the node's width over its length, so it describes the string rather than the
+     * character in front of the handle — and proportional text puts those a long way apart. Measured
+     * on `alpha bravo charlie delta echo`, whose average is 27.73 px: stepping left from offset 24
+     * crosses the `t` at index 23, one of the narrowest glyphs in the string, and a reach of one
+     * *average* character moved **two real ones** (24 → 22). The correction then travelled
+     * `(1 - BOUNDARY_BIAS)` of an average character to cross that same narrow glyph, which parked
+     * the pointer in the FAR half of the target's cell — and the target app, which floors while the
+     * finger is down and finalises to the nearest boundary when it lifts, rounded it back. Five
+     * presses in a row announced the step and left the selection where it started: to the user, a
+     * dead button.
+     *
+     * So ask the platform for the character this step is actually about to cross, and keep the
+     * average only for the surfaces that will not answer. Chrome's page content is one of them — it
+     * returns the node's own bounds, which [HandleLocator.characterGeometry] detects — so this costs
+     * a round trip there and changes nothing, and it corrects the step wherever the platform is
+     * honest.
+     */
+    val average = (bounds.width().toFloat() / snapshot.sourceLength).coerceIn(MIN_CHAR_PX, MAX_CHAR_PX)
+    val measured = locator.characterGeometry(snapshot, activeEdge, crossing)?.characterWidth ?: return average
+    return measured.coerceIn(MIN_CHAR_PX, MAX_CHAR_PX)
   }
+
+  /**
+   * Which character a step is about to cross, from the direction the pointer will travel.
+   *
+   * [PadCommand.toRight] is the pointer's direction on both edges — the reach is applied straight to
+   * the handle's x — so it answers this directly. See [Crossing] for why it has to be asked.
+   */
+  private fun crossingOf(command: PadCommand): Crossing =
+    if (command.toRight) Crossing.RIGHTWARD else Crossing.LEFTWARD
+
+  /** The same question where the travel is a correction onto [target] rather than a button press. */
+  private fun crossingToward(current: Int, target: Int): Crossing =
+    if (target >= current) Crossing.RIGHTWARD else Crossing.LEFTWARD
 
   /**
    * Wait for the next announcement rather than sleeping a fixed span.

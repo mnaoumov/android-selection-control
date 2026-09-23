@@ -11,10 +11,27 @@ import android.view.accessibility.AccessibilityWindowInfo
 enum class Edge { START, END }
 
 /**
+ * Which of the caret's two neighbouring characters a step is about to cross.
+ *
+ * A caret at offset *k* has a character on each side and they are **different widths**, so "how wide
+ * is the character here?" has no answer until the direction of travel is known. Asked the wrong way
+ * round it measures the character the step is walking away from: a leftward step from offset 24 of
+ * `alpha bravo charlie delta echo` crosses the `t` at index 23 and would be sized by the `a` at 24 —
+ * which is most of a character of error in the one place a step cannot afford it.
+ *
+ * The caret's own x is the same number either way — the left edge of the next character is the right
+ * edge of the previous one — so this changes which width comes back, never where the handle is.
+ */
+enum class Crossing { RIGHTWARD, LEFTWARD }
+
+/**
  * One character of the source node as the platform itself measures it.
  *
  * The point of this over interpolation is [lineBottom]: it is the moving edge's **own line**, not the
  * bottom of a box that may cover four of them. A caret x can be estimated; a row cannot.
+ *
+ * [characterWidth] is the character on the side named by the [Crossing] that was asked for, which is
+ * the one a step of one character has to travel across.
  */
 data class CharacterGeometry(val caretX: Float, val lineBottom: Float, val characterWidth: Float)
 
@@ -84,15 +101,23 @@ class HandleLocator {
    *
    * Asked for exactly ONE character on purpose. The array is as long as the requested span, and
    * Docs announces a single 12,997-character node.
+   *
+   * [crossing] names which side of the caret the answer's width should describe — see [Crossing].
+   * It defaults to the character after the caret, which is what a caller that only wants the caret's
+   * x and row gets either way.
    */
-  fun characterGeometry(snapshot: SelectionObserver.Snapshot, edge: Edge): CharacterGeometry? {
+  fun characterGeometry(
+    snapshot: SelectionObserver.Snapshot,
+    edge: Edge,
+    crossing: Crossing = Crossing.RIGHTWARD,
+  ): CharacterGeometry? {
     val source = snapshot.source ?: return null
     val bounds = snapshot.bounds ?: return null
     val length = snapshot.sourceLength
     if (length <= 0) return null
 
     val offset = if (edge == Edge.START) snapshot.low() else snapshot.high()
-    val key = "${snapshot.atMs}|$edge|$offset"
+    val key = "${snapshot.atMs}|$edge|$offset|$crossing"
     if (key == memoKey) return memoValue
     memoKey = key
     memoValue = null
@@ -102,9 +127,15 @@ class HandleLocator {
      * fourth character". At `offset == length` there is no such character, so the caret is the RIGHT
      * edge of the last one instead. Getting this wrong is a whole character of error at exactly the
      * end of a node, which is where a growing selection spends its time.
+     *
+     * A LEFTWARD crossing wants the character BEFORE the caret, which is the same rectangle read
+     * from its other side: index `offset - 1`, caret at its right edge. At offset 0 there is no such
+     * character, so that case keeps the rightward reading rather than clamping onto index 0 and
+     * reporting its right edge as the caret — which would be a whole character out.
      */
-    val index = offset.coerceIn(0, length - 1)
-    val caretIsRightEdge = offset >= length
+    val previous = offset >= length || (crossing == Crossing.LEFTWARD && offset > 0)
+    val index = (if (previous) offset - 1 else offset).coerceIn(0, length - 1)
+    val caretIsRightEdge = previous
 
     val args = Bundle().apply {
       putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX, index)
