@@ -719,18 +719,34 @@ refuses a grow whose origin is not a known boundary, and logs `not recording <n>
 
 **`word →` from such an edge walks the HELD pointer one character at a time until the handle holds
 still** (`growToWordEnd`). Once it reaches the word's end, `mInWord` turns false and the handle waits
-for the finger to pass the middle of the next word. So two silent pushes in a row mean the edge is on
-a word's end, and that is recorded. Same fixture, same sitting: 21 walked 22, 23, 24, 25, then two
-silent pushes, so the step ends on 25 in 2.0 s and 6 gestures. `⇤ word` from there then retraced to
-19 in one gesture. From 13 inside `charlie` the walk ended on 19.
+for the finger to pass the middle of the next word. So a silent push means the edge is on a word's
+end, and that is recorded. It takes ONE silent push when the push was sized by a glyph the platform
+measured, which cannot stay inside its own cell, and two when it was sized by an average. Same
+fixture, same sitting: 21 walked 22, 23, 24, 25, then two silent pushes, so the step ends on 25 in
+2.0 s and 6 gestures; with the one-push rule (2026-09-24) the same walk ends on 25 in 2.1 s and 5.
+`⇤ word` from there then retraced to 19 in one gesture. From 13 inside `charlie` the walk ended on 19.
 
 **Chrome does not hold at the word's end: it steps on through the space and holds at the next
 word's START.** Measured 2026-09-24 on the error page, from 19 inside `temporarily` (10..21): the walk
 went 20, 21, 22 one character a push, was silent once at 22, and then jumped to 26, the end of
 `down`. So on Chrome the walk stops on a boundary the set already KNOWS, which after a long-press is
 the word's own end: three presses of three landed on 21 in 2 gestures. A jump of more than one is
-still taken as the step and recorded nowhere. Where the set knows no end, Chrome's walk goes past the
-next word's start, and that case is not solved.
+still taken as the step and recorded nowhere.
+
+**Where the set knows no end, Chrome's walk stops on the next word's START**, at the first silent
+push, which is the one-push rule above. Measured 2026-09-24 on a served copy of the error page's
+sentence, Chrome force-stopped each run: long-press `temporarily` (21..32), three `char ←` to 29, then
+`word →` with the known-boundary stop switched off for the measurement, which is the only way to get a
+mid-word Chrome edge with no known end (see below). Before: 30, 31, 32, 33, silent once, then a jump
+to 37, the end of `down`. After: stopped on 33 in 5 gestures and 1.8 s, three runs of three, recording
+33. The next `word →` then grew from 33 to 37 in 2. The stop is a word's start, so the step includes the
+space. Shrinking one more to the word's end would assume one space between words, and nothing measures
+that.
+
+**On Chrome no pad sequence reaches a mid-word edge whose word end the set does not know.** A long-press
+seeds both ends of its word, and a `char` step from a word boundary, in the direction of travel, does
+not move: `char →` from 21 (the start of `temporarily`) snapped to 32, and the shrink back aimed at 22
+landed on 21, three times, 23 gestures in 12 s. `char ←` from 32 on the START edge did the mirror.
 
 **Two things made that walk look like a granularity problem when it was not.** It used to land on 22
 in one push from 20, which read as Chrome jumping the end. It was the `STEP_PX` = 12 floor on the
