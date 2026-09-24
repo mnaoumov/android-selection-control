@@ -492,9 +492,15 @@ class SelectionDriver(
      * while the growing direction with a full character was exact ten times running. The bias still
      * applies to [heldCorrect], which aims from a pointer whose position is known rather than
      * interpolated.
+     *
+     * **And no [STEP_PX] floor.** [pixelsPerCharacter] already bounds its answer, and a floor of
+     * 12 px over a glyph the platform measured narrower aims past it: measured 2026-09-24 on Chrome
+     * across `oil`, whose `i` and `l` are 8 px each, 6 -> 8 in one grab, and the held correction back
+     * to 7 announced nothing, so the press ended two characters on. Without the floor the same run
+     * of ten presses each moved exactly one.
      */
     val characters = 1f
-    val reach = (if (command.toRight) 1f else -1f) * (perChar * characters).coerceAtLeast(STEP_PX)
+    val reach = (if (command.toRight) 1f else -1f) * perChar * characters
 
     gestureCount++
     gestures.grabAndHold(handle, PointF(handle.x + reach, handle.y)) { grabbed ->
@@ -610,6 +616,37 @@ class SelectionDriver(
     }
   }
 
+  /**
+   * [releaseThenReport] for a GROW that is on its target: move the held pointer back towards the
+   * anchor by [LIFT_PULLBACK_PX] first, so the last move before the lift is not a growing one.
+   *
+   * Chrome finalises a handle drag on the lift, and a drag whose last move GREW the selection is
+   * finalised one character further on. Measured 2026-09-24 on the rig against a centred 13 px
+   * `Google LLC`, the `chrome://version` shape, where one `char →` from `0..6` held at 7 with the
+   * pointer 2 px into the `L`: seven presses of seven announced `7`, and the lift turned every one
+   * into `8`. Nearest-boundary rounding cannot explain it, since 2 px into a 16 px glyph rounds to
+   * 7. The direction does, and three controls separate the two:
+   *
+   * - A press whose held correction ended with a SHRINKING move (grab to 8, correct back to 7) was
+   *   never revised, with the pointer in the same cell.
+   * - A 1 px push FORWARD before the lift, with the same wait, was revised to 8 three times in three.
+   * - A 1 px pull BACK before the lift was never revised: 4 of 4, then 25 of 26 Chrome presses over
+   *   three nodes, the one miss being a correction that stalled rather than a revision.
+   *
+   * A `TextView` needs none of this, and is not hurt by it: 16 of 16 presses over `bravo`, crossing
+   * the word snap, landed exactly one character on. Shrinks keep the plain release, since nothing
+   * revises them.
+   */
+  private fun pullBackThenRelease(origin: Int, landed: Int, onDone: (Outcome) -> Unit) {
+    val at = gestures.heldAt()
+    if (at == null || !gestures.moveHeld(PointF(at.x + towardAnchor * LIFT_PULLBACK_PX, at.y))) {
+      releaseThenReport(origin, landed, onDone)
+      return
+    }
+    Diag.log("  held: pulling back ${LIFT_PULLBACK_PX}px before the lift")
+    handler.postDelayed({ releaseThenReport(origin, landed, onDone) }, LIFT_PULLBACK_MS)
+  }
+
   private fun heldCorrect(
     target: Int,
     origin: Int,
@@ -629,7 +666,10 @@ class SelectionDriver(
       return
     }
     if (current == target) {
-      releaseThenReport(origin, current, onDone)
+      when {
+        grownBy(origin, target) > 0 -> pullBackThenRelease(origin, current, onDone)
+        else -> releaseThenReport(origin, current, onDone)
+      }
       return
     }
     if (guard >= MAX_HELD_CORRECTIONS) {
@@ -1598,6 +1638,17 @@ class SelectionDriver(
      * something is wrong that a fourth will not fix, and each one costs a settle.
      */
     const val MAX_HELD_CORRECTIONS = 3
+
+    /**
+     * How far [pullBackThenRelease] moves the held pointer back towards the anchor before a grow
+     * lifts. The distance is not what matters, the DIRECTION of the last move is, so this is the
+     * smallest move there is: a pixel, well inside the target's cell. See that function for the
+     * measurement.
+     */
+    const val LIFT_PULLBACK_PX = 1f
+
+    /** How long the pull-back is given to play before the lift, about one link. */
+    const val LIFT_PULLBACK_MS = 150L
 
     /**
      * How many pushes [heldSnapThrough] may make towards a word's middle. Each is [CHARS_PER_ATTEMPT]
