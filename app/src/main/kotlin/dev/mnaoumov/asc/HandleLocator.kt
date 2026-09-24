@@ -38,22 +38,25 @@ data class CharacterGeometry(val caretX: Float, val lineBottom: Float, val chara
 /**
  * Where on screen the handle being moved is.
  *
- * Three rungs, in the order the pad build measured them to be reliable. Each is used only where it is known
- * to hold, because the failure mode is not a wrong number but a **destroyed selection**: a drag that
- * misses a handle lands on the page and collapses the range.
+ * Five rungs, in the order the pad build measured them to be reliable. Each is used only where it
+ * is known to hold, because the failure mode is not a wrong number but a **destroyed selection**:
+ * a drag that misses a handle lands on the page and collapses the range.
  *
  * 1. **Interpolate** across the source node's bounds — accurate to about a character where the node
  *    hugs its text, which is Chrome's per-phrase inline nodes. Only valid when the box is one line:
  *    a phrase that wraps reports the union of its line boxes, and interpolating across that put the
  *    handle ~130 px out in x and ~76 px in y.
  * 2. **Ask the platform for the character's own rectangle** — the only rung that answers with a ROW
- *    rather than assuming one, and therefore the only one that can reach inside a wrap. It is also
- *    the only rung that can be caught lying, which is what makes it safe to try. See
- *    [characterGeometry].
- * 3. **Mirror about the floating toolbar's centre** — the toolbar tracks the selection's centre to
+ *    rather than assuming one. It is also the only rung that can be caught lying, which is what
+ *    makes it safe to try; Chrome page content is measured to lie. See [characterGeometry].
+ * 3. **Descend the tree for a child that hugs one line** — the same row, from the node tree instead
+ *    of from the platform's refused answer, for the surfaces that expose a text node finer than the
+ *    paragraph. Guarded by a partition check, so a child list that is not a map of the parent's
+ *    offsets refuses instead of aiming into the wrong node. See [lineNodeGeometry].
+ * 4. **Mirror about the floating toolbar's centre** — the toolbar tracks the selection's centre to
  *    ~6 px, and the handles are symmetric about it, so the moving one is `2·centre − anchor`. Needs
  *    a known anchor, and holds only while both handles are on the same row.
- * 4. **Acquire by scanning** outward from that centre — one probe found a word's handle in 454 ms,
+ * 5. **Acquire by scanning** outward from that centre — one probe found a word's handle in 454 ms,
  *    but a miss destroys the selection, so this is the last resort, never the first guess. It is
  *    driven from `SelectionDriver`, and gated on [scanRowIsKnown].
  */
@@ -71,6 +74,14 @@ class HandleLocator {
    */
   private var memoKey: String? = null
   private var memoValue: CharacterGeometry? = null
+
+  /**
+   * The same one-remembered-answer trick for [lineNodeGeometry], which `locate` and the driver's
+   * step sizing both ask for on the same snapshot. Its walk is several IPCs rather than one, so the
+   * memo matters more here than it does above.
+   */
+  private var lineMemoKey: String? = null
+  private var lineMemoValue: CharacterGeometry? = null
 
   fun forgetAnchor() {
     knownAnchorX = null
@@ -119,7 +130,7 @@ class HandleLocator {
     val offset = if (edge == Edge.START) snapshot.low() else snapshot.high()
     val key = "${snapshot.atMs}|$edge|$offset|$crossing"
     if (key == memoKey) return memoValue
-    memoKey = key
+    memoKey = null
     memoValue = null
 
     /*
@@ -164,12 +175,146 @@ class HandleLocator {
       return null
     }
 
+    memoKey = key
     memoValue = CharacterGeometry(
       caretX = if (caretIsRightEdge) rect.right else rect.left,
       lineBottom = rect.bottom,
       characterWidth = rect.width(),
     )
     return memoValue
+  }
+
+  /**
+   * The moving edge's own line, taken from a **finer node in the tree** — or null where the tree has
+   * none to give.
+   *
+   * **Why the tree is the place left to look.** [characterGeometry] is the direct question and
+   * Chrome refuses it: asked for ONE character at a known index on page content it still answers
+   * with the node's own box (measured 2026-09-23, recorded in `AGENTS.md`). The tree is the only
+   * other source of a ROW — and it has to be asked through the live node, not through a dump:
+   * `uiautomator dump` showed the wrapped paragraphs of `chrome://version` as leaves on the same
+   * guest where a selection inside one announced a source node of 7 characters that the dump never
+   * listed. So "the dump says leaf" is not an answer to this question; only a walk is.
+   *
+   * **How a child is trusted.** Two conditions, both mechanical, both refusing rather than guessing:
+   *
+   * - the children's lengths must sum to the parent's. That is what makes a prefix sum a map from
+   *   the parent's offsets onto theirs, and Chrome does expose children that are not a partition of
+   *   the text — a copy button beside a value — over which a prefix sum lands the caret in the
+   *   wrong node entirely;
+   * - the chosen child's own box must hug ONE line, by [SelectionObserver.boxIsOneLine], the same
+   *   ratio the source is tested with. A child that is itself wrapped carries its parent's defect
+   *   and is no better to interpolate across.
+   *
+   * **Lengths and rectangles only.** `text?.length` is a count, never a look — the same standing the
+   * parent's own length has. See [SelectionObserver].
+   */
+  fun lineNodeGeometry(snapshot: SelectionObserver.Snapshot, edge: Edge): CharacterGeometry? {
+    val source = snapshot.source ?: return null
+    val parentLength = snapshot.sourceLength
+    if (parentLength <= 0) return null
+
+    val offset = (if (edge == Edge.START) snapshot.low() else snapshot.high())
+      .coerceIn(0, parentLength)
+    val key = "${snapshot.atMs}|$edge|$offset"
+    if (key == lineMemoKey) return lineMemoValue
+    lineMemoKey = null
+    lineMemoValue = null
+
+    val count = runCatching { source.childCount }.getOrDefault(0)
+    if (count <= 0) {
+      Diag.log("  locate: the wrapped source is a leaf ($parentLength chars) — the tree has nothing finer")
+      return null
+    }
+
+    val boxes = ArrayList<Rect>(count)
+    val lengths = ArrayList<Int>(count)
+    var covered = 0
+    for (i in 0 until count) {
+      val child = runCatching { source.getChild(i) }.getOrNull() ?: return null
+      // A count of the glyphs, not a read of them.
+      val length = child.text?.length ?: 0
+      boxes += Rect().also { child.getBoundsInScreen(it) }
+      lengths += length
+      covered += length
+    }
+    if (covered != parentLength) {
+      Diag.log(
+        "  locate: the source's $count child(ren) hold $covered of its $parentLength characters — " +
+          "not a partition, so a prefix sum would aim into the wrong node"
+      )
+      return null
+    }
+
+    /*
+     * The caret at `offset` belongs to the child holding the character at that index. At
+     * `offset == parentLength` there is no such character, so it belongs to the END of the last
+     * non-empty child instead — the same right-edge case [characterGeometry] handles one level down,
+     * and the same whole character of error at a node's end if it is got wrong.
+     */
+    var start = 0
+    var chosen = -1
+    var chosenStart = 0
+    for (i in 0 until count) {
+      val length = lengths[i]
+      if (length <= 0) continue
+      chosen = i
+      chosenStart = start
+      if (offset < start + length) break
+      start += length
+    }
+    if (chosen == -1) return null
+
+    val box = boxes[chosen]
+    val length = lengths[chosen]
+    if (!SelectionObserver.boxIsOneLine(box, length)) {
+      Diag.log(
+        "  locate: the child carrying offset $offset ($length chars, ${box.width()}x${box.height()}) " +
+          "wraps too — the tree is finer than the paragraph but not finer than a line"
+      )
+      return null
+    }
+
+    val within = (offset - chosenStart).coerceIn(0, length)
+    val geometry = CharacterGeometry(
+      caretX = box.left + (within.toFloat() / length) * box.width(),
+      lineBottom = box.bottom.toFloat(),
+      characterWidth = box.width().toFloat() / length,
+    )
+    Diag.log(
+      "  locate: child $chosen of $count carries offset $offset (its $within of $length) — " +
+        "row=${geometry.lineBottom} caret=${geometry.caretX} charPx=${geometry.characterWidth}"
+    )
+    lineMemoKey = key
+    lineMemoValue = geometry
+    return geometry
+  }
+
+  /**
+   * Ask for the moving character's rectangle and throw the answer away, because **the first ask is
+   * what makes Chrome measure**.
+   *
+   * This is the whole of the wrapped-node fix, and it reverses a conclusion this project held from
+   * the first spike onwards. `EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY` on Chrome page content is not
+   * a query that lies — it is a *request to load*. The first call returns `true` with every
+   * rectangle set to the node's own bounds and, as a side effect, makes Chrome compute that node's
+   * inline text boxes; a later call returns real per-character rectangles, each carrying its own
+   * line's bottom. Measured on the guest 2026-09-23 against a three-line, 81-character Chrome
+   * paragraph: press one reported the node's box, press two — **80 ms later**, nothing else changed —
+   * answered `caret=320.0 lineBottom=863.0 charPx=8.0`, the caret's own row on the third line.
+   *
+   * So the ask is moved off the press and onto the announcement that precedes it, which buys the
+   * gap for free: a human takes hundreds of milliseconds to reach a button, and a repeat run's own
+   * steps are ~400 ms apart. [characterGeometry] deliberately does not memoise a refusal, so the
+   * press that follows re-asks rather than being handed this call's null.
+   *
+   * Narrow on purpose: only where the box is **measured** to wrap, which is the only case that
+   * cannot be served by interpolating across the node. Everywhere else the press pays nothing and
+   * this costs no IPC at all.
+   */
+  fun primeCharacterRects(snapshot: SelectionObserver.Snapshot, edge: Edge) {
+    if (!snapshot.isKnownMultiLine()) return
+    characterGeometry(snapshot, edge)
   }
 
   /**
@@ -208,11 +353,12 @@ class HandleLocator {
      * rung is guessing at a row, so an IPC that answers with one is cheap by comparison.
      */
     val character = characterGeometry(snapshot, edge)
+      ?: lineNodeGeometry(snapshot, edge)
     if (character != null) {
       val x =
         if (edge == Edge.START) character.caretX - HANDLE_INSET else character.caretX + HANDLE_INSET
       Diag.log(
-        "  locate: character rect gave the $edge handle its own row — " +
+        "  locate: a measured rect gave the $edge handle its own row — " +
           "caret=${character.caretX} lineBottom=${character.lineBottom} charPx=${character.characterWidth}"
       )
       return PointF(x, character.lineBottom + HANDLE_DROP)

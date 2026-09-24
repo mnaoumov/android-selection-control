@@ -22,6 +22,22 @@ sealed interface Outcome {
   data class Moved(val fromOffset: Int, val toOffset: Int) : Outcome
   data object NoSelection : Outcome
   data object HandleLost : Outcome
+
+  /**
+   * The selection is intact and visible, and its row still cannot be established — so nothing was
+   * touched at all.
+   *
+   * Distinct from [HandleLost] because the two need opposite things said to the user and one of them
+   * is a lie here: nothing was lost, the selection is exactly where it was, and "reselect" is advice
+   * that cannot work — the same long-press on the same wrapped paragraph produces the same refusal.
+   *
+   * It is the honest ending of a measured dead end rather than a failure to try. On a paragraph that
+   * wraps, Chrome refuses a per-character rectangle (it answers with the node's own box) and exposes
+   * no child finer than the paragraph (the node is a leaf), so there is no signal left that says
+   * which LINE the moving edge is on — and a drag at the wrong line lands on the page, collapsing
+   * the selection and, on a link, navigating. Both refusals are measured; see `AGENTS.md`.
+   */
+  data object RowUnknown : Outcome
   data class Degraded(val reason: String) : Outcome
 }
 
@@ -748,7 +764,13 @@ class SelectionDriver(
        * Free next to [HandleLocator.locate], which has already asked for this same rectangle on this
        * same snapshot and memoised the answer.
        */
-      return locator.characterGeometry(snapshot, activeEdge, crossing)
+      return (
+        locator.characterGeometry(snapshot, activeEdge, crossing)
+          // And where the platform will not measure a character, a child node that hugs ONE line
+          // will — its width over its length is one line's pitch rather than the parent's average
+          // over every line. Same memoised walk `locate` has already paid for on this snapshot.
+          ?: locator.lineNodeGeometry(snapshot, activeEdge)
+        )
         ?.characterWidth
         ?.coerceIn(MIN_CHAR_PX, MAX_CHAR_PX)
         ?: STEP_PX
@@ -960,15 +982,17 @@ class SelectionDriver(
      * link navigates. So this is the one place where "we cannot locate the handle" has to stay
      * "we cannot locate the handle" rather than becoming a search.
      *
-     * The rung that CAN reach inside a wrap is [HandleLocator.characterGeometry], which answers with
-     * the moving character's own line; when it has already declined there is nothing here to find.
+     * The two rungs that CAN reach inside a wrap both answer with a row rather than assuming one —
+     * [HandleLocator.characterGeometry], the platform's own rectangle for the moving character, and
+     * [HandleLocator.lineNodeGeometry], a child node that hugs one line. Chrome is measured to refuse
+     * both on page content, and when they have declined there is nothing here left to find.
      */
     if (!locator.scanRowIsKnown(snapshot)) {
       Diag.log(
         "  acquire: the source box spans wrapped lines, so the handle's row is unknown — " +
           "refusing to probe rather than risk the selection"
       )
-      onDone(Outcome.HandleLost)
+      onDone(Outcome.RowUnknown)
       return
     }
     val ring = (probe + 1) / 2

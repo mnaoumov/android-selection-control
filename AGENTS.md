@@ -12,10 +12,14 @@ the moving edge is" that both edges now share). Read the gesture spike for the m
 does, and the held-pointer fix for everything a continued stroke will and will not tolerate.
 
 Open work is split by shape, one item each in that same store, and named there rather than here:
-driving the page / start / end buttons to completion; locating a handle that the aimed-at drop misses,
-and a handle inside a wrapped node; Play distribution, which ECM makes mandatory rather than optional;
-and the one boundary claim a node crossing is needed to measure. The test rig is now a repo asset —
-see *The test rig* below.
+driving the page / start / end buttons to completion; locating a handle that the aimed-at drop misses;
+Play distribution, which ECM makes mandatory rather than optional; and the one boundary claim a node
+crossing is needed to measure. The test rig is now a repo asset — see *The test rig* below.
+
+A handle inside a **wrapped** node was on that list and is no longer: the row it needs comes from the
+platform's own per-character rectangle, which Chrome does supply for page content once the node has
+been asked twice. The gotcha that said otherwise had stood since the first spike and was the costliest
+thing in this file; it is rewritten under *Gotchas*, with the measurement.
 
 The boundary rework itself was measured on the rig on 2026-09-23: the long-press seed, the retrace and
 both halves of the no-poisoning guard all hold, and the `word ←`-collapses-onto-the-anchor claim that
@@ -89,27 +93,57 @@ the user can already select by touch" rather than "anywhere there is an editable
 while producing no selection at all (`textSelectionStart/End` stays `-1..-1`, nothing on screen). Never
 treat an advertised action, or a `true` return, as evidence that anything happened.
 
-**`refreshWithExtraData(EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY)` lies the same way for page content.** It
-returns `true` with a correctly-sized array in which every `RectF` is just the whole node's bounds. The
-control: on Chrome's own editable omnibox it returns real per-character rects. Never *rely* on it for
-non-editable text.
+**`refreshWithExtraData(EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY)` on page content is a request to LOAD,
+not a query that lies — and that is the single most expensive mistake recorded in this file.** From the
+first spike onwards it was written down as "it lies": it returns `true` with a correctly-sized array in
+which every `RectF` is just the whole node's bounds, against a control (Chrome's own editable omnibox)
+that returns real per-character rects. Every word of that is true of the **first** call. What nobody had
+done was ask twice. The first request is what makes Chrome compute the node's inline text boxes;
+**a later request on the same node returns real per-character rectangles**, each carrying its own line's
+bottom — which is the ROW that a wrapped node's bounds cannot supply and the whole of the wrapped-handle
+defect.
 
-**Asked for ONE character at a known index, it lies too — so there is no narrower ask left to try.**
-That was the open question: the original measurement covered the whole node, which leaves room for the
-hope that a single index is cheaper for the platform to answer honestly. Measured 2026-09-23 on the rig
-against a 15-character Chrome inline node, `HandleLocator`'s rung asked for the character at the moving
-offset, got the node's own box back, detected it and fell through:
-`locate: per-character rects are the node's own bounds here — the platform is not answering`. What
-remains untried is descending the node tree for a finer child that hugs its own text.
+Measured on the rig 2026-09-23, against the three-line 81-character paragraph of the `ERR_INVALID_URL`
+page, Chrome force-stopped first so nothing was warm:
 
-**But the lie is DETECTABLE, which is a different thing from useless.** A rectangle that is both as wide
-and as tall as the node it came from is the node's bounds repeated, and a rectangle that is genuinely one
+```
+press 1  locate: per-character rects are the node's own bounds here — the platform is not answering
+press 2  locate: a measured rect gave the END handle its own row — caret=320.0 lineBottom=863.0 charPx=8.0
+```
+
+**80 ms apart**, same selection, nothing else touched — and 863 is the third line's bottom, not the
+node's. Dragging the handle at that x with the row it derived grew the selection `new` → `new web`,
+on the third line of a wrapped paragraph, which is the thing this project had concluded was impossible.
+
+So the rule is: **ask once to make it measure, ask again to be answered.** `HandleLocator.primeCharacterRects`
+does the first ask on the selection ANNOUNCEMENT rather than on the press, which buys the gap for free —
+a human takes hundreds of milliseconds to reach a button — and `characterGeometry` deliberately does not
+memoise a refusal, so the press that follows re-asks instead of being handed the primer's null.
+
+**A second trap sits on top of it: do not cache the "no".** The rung memoises per announcement so a step
+pays one IPC rather than two, and the first version cached the refusal too. That is invisible and total:
+the second press on an unchanged selection returned the memo without asking, so the answer Chrome was by
+then ready to give could never arrive, and the whole thing read as a permanent refusal. Only a successful
+answer is cached now.
+
+**The lie is DETECTABLE, and that is what makes the priming safe.** A rectangle that is both as wide and
+as tall as the node it came from is the node's bounds repeated, and a rectangle that is genuinely one
 character is smaller than its node by whole characters *and* whole lines — nothing real sits in between.
-So a rung may *ask*, *check*, and fall through when the answer is the box; the worst case is one wasted
-round trip. `HandleLocator.characterGeometry` is that rung, and it is the only one that answers with the
-handle's **row** rather than assuming one, which is why it is worth the IPC on the one path — a wrapped
-node — where every other rung is guessing. Whether Chrome is among the surfaces that answer honestly is
-not yet measured on a device; the code is written so that "no" costs nothing.
+So the rung *asks*, *checks*, and falls through when the answer is the box; the worst case is one wasted
+round trip, and the primer throws its answer away by design.
+
+**Descending the node tree for something finer than the paragraph does NOT work on Chrome — measured,
+and it is the rung that stays unproven.** A wrapped Chrome text node is a **leaf**: `childCount` is 0 on
+an 81-character three-line paragraph and on a 55-character one on `chrome://version`, so there is no
+per-line or per-word child to interpolate across. `HandleLocator.lineNodeGeometry` is that rung and it
+reports the negative itself (`the wrapped source is a leaf (81 chars) — the tree has nothing finer`); it
+is kept for the surfaces whose trees are not Chrome's, with the caveat that **its success path has never
+once fired on a measured surface**, so it is a guarded fallback rather than something proven.
+
+**And `uiautomator dump` is NOT how to answer that question.** The dump shows Chrome's paragraphs as
+leaves — and it also never listed the 7-character node that a selection inside one of them announced as
+its source, so the two disagree in the direction that matters. Only a walk of the live
+`AccessibilityNodeInfo` says what the service can see.
 
 **Asking it for rectangles is not reading text.** It is asked with indices and answers with `RectF`s, so
 it has the same standing as `text?.length` — a measurement of the glyphs, never a look at them. Worth
@@ -165,8 +199,9 @@ while the finger is down and finalises to the nearest boundary when it lifts, ro
 the whole of the "one offset the press can never get past" above.
 
 `refreshWithExtraData(EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY)` answers honestly on a `TextView`, so
-the one-line path now asks it and keeps the average only where it declines — which includes Chrome
-page content, where the answer is the node's own bounds and is detected. It must be asked for the
+the one-line path now asks it and keeps the average only where it declines. On Chrome page content
+it declines on the FIRST ask and answers on a later one (the gotcha above), so a one-line node warmed
+by a press or by the primer is sized by a real glyph there too. It must be asked for the
 character the step CROSSES: leftward that is the one BEFORE the caret (`offset - 1`), and asking the
 other way measures the glyph the step is walking away from. Measured on the rig, same fixture, back
 to back: leftward from 25, the average sized every reach at 16.03 and needed a correction at the
@@ -387,10 +422,10 @@ considered and each one is closed:
  both land on one, so the landing says nothing about where it started. The probe also moves the
  selection, so answering "is the edge on a boundary?" requires performing the step being asked
  about.
-- *Ask the geometry.* There are no per-character rects on page content:
- `refreshWithExtraData(EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY)` returns the node's own bounds
- repeated, as the gotcha above records. A space is not distinguishable from a narrow glyph by width
- even where rects exist, and trying would be reading the text by another route.
+- *Ask the geometry.* Per-character rects on page content DO exist, once the node has been asked
+ twice (the gotcha above), so this reason has changed — but the conclusion has not. A space is not
+ distinguishable from a narrow glyph by width, so a rectangle cannot say whether the edge sits on a
+ word boundary, and trying to make it would be reading the text by another route.
 - *Ask the granularity actions.* `ACTION_NEXT_AT_MOVEMENT_GRANULARITY` with the WORD mask returns
  `true` and moves nothing on page content — one of the earliest NO-GO measurements here.
 - *Ask the toolbar.* Its centre tracks the selection's centre, which gives a width in pixels and no
@@ -641,6 +676,17 @@ Two practical notes for driving it:
  buy elsewhere: `uiautomator dump` gives each inline node's bounds, and the character pitch across a
  node whose box hugs its text is `width / text.length`. `chrome://` URLs are rejected from an intent,
  so the address is typed — `input tap` the omnibox, `input text`, `keyevent 66`.
+
+**The same page is also the WRAPPED target**, which matters because no `TextView` in the debug target
+can be one: its third node, `" might be temporarily down or it may have moved permanently to a new web
+address."`, is 81 characters over three lines at `[48,731][584,863]`. Long-press its third line at about
+`(300, 845)` and the selection lands at offsets 65..68. `chrome://version` gives several more — the
+`useragent` row is 110 characters over eight lines — and the two pages together are how the
+character-rect priming above was measured.
+
+**Force-stop Chrome between runs of that measurement.** Inline text boxes, once loaded for a node,
+stay loaded, so a second run against a warm Chrome is answered honestly on the FIRST ask and proves
+nothing: `adb shell am force-stop com.android.chrome` is what makes the measurement mean anything.
 
 ## Build
 
