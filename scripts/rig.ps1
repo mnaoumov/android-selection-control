@@ -45,7 +45,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('go', 'up', 'down', 'build', 'install', 'rebind', 'target', 'pad', 'blocks', 'buttons', 'press', 'tap', 'shot', 'log', 'status', 'avd')]
+    [ValidateSet('go', 'up', 'down', 'build', 'install', 'rebind', 'target', 'pad', 'blocks', 'buttons', 'press', 'tap', 'shot', 'log', 'status', 'avd', 'watchdog')]
     [string] $Action = 'status',
 
     # Positional arguments for the action: `press <label>`, `tap <x> <y>`, `log [lines]`, `shot [path]`.
@@ -56,7 +56,11 @@ param(
     [string] $Serial,
 
     # `go` without the Gradle build, for when the APK on disk is already the one you want.
-    [switch] $NoBuild
+    [switch] $NoBuild,
+
+    # Minutes with no rig command before the emulator is taken down, for `up` and `go`. 0 = never.
+    # Negative means "the default"; see $DefaultIdleMinutes.
+    [int] $IdleMinutes = -1
 )
 
 $ErrorActionPreference = 'Stop'
@@ -94,6 +98,19 @@ $JbrPath = 'C:\Program Files\Android\Android Studio\jbr'
 $SdkRoot = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { $env:LOCALAPPDATA | Join-Path -ChildPath 'Android\Sdk' }
 $EmulatorExe = $SdkRoot | Join-Path -ChildPath 'emulator\emulator.exe'
 $AvdHome = $env:USERPROFILE | Join-Path -ChildPath '.android\avd'
+
+# The idle watchdog's two files. Under build\, which git ignores, and per checkout, so two clones
+# of this repo cannot keep each other's emulator alive.
+$HeartbeatPath = $ShotDir | Join-Path -ChildPath 'last-used'
+$WatchdogPidPath = $ShotDir | Join-Path -ChildPath 'watchdog.pid'
+
+# How long the emulator may sit with no rig command before the watchdog takes it down. Generous,
+# because a measurement sitting also runs adb by hand (am start, adb reverse, uiautomator dump),
+# which the heartbeat cannot see. `-IdleMinutes 0` on `up` or `go` starts no watchdog.
+$DefaultIdleMinutes = 60
+
+# netsimd's log level. See Start-Rig for why this is the only lever there is.
+$NetsimLogFilter = 'error'
 
 # How long to wait for a cold boot. Measured at ~30 s headless on this machine for this AVD; the
 # ceiling is generous because a machine running several other emulators is where 30 s becomes 90.
@@ -339,6 +356,7 @@ function Wait-RigReady([int] $TimeoutSeconds) {
 function Start-Rig {
     if (Test-RigAttached) {
         Write-Host -Object "$RigSerial is already up."
+        Start-Watchdog
         return
     }
 
@@ -350,6 +368,7 @@ function Start-Rig {
         Write-Host -Object "$RigAvdName is already running (pid $(($running | ForEach-Object -Process { $_.ProcessId }) -join ', ')) but adb reports it '$state'. Waiting for it."
         if (Wait-RigReady -TimeoutSeconds $BootTimeoutSeconds) {
             Write-Host -Object "$RigSerial is up."
+            Start-Watchdog
             return
         }
         throw "$RigAvdName has been running for a while and is still '$state'. It is wedged, usually because the machine has no CPU left for it — check what else is running, then `".\scripts\rig.ps1 down`" and start over."
@@ -383,8 +402,25 @@ function Start-Rig {
       window, so `shot` loses nothing.
 
       -no-metrics keeps a first boot on a fresh machine from stopping on the usage-stats question.
+
+      RUST_LOG=error is what keeps the emulator from filling the drive. The emulator starts
+      netsimd, its network simulator, and netsimd has a loop that never checks its hostapd socket
+      for end-of-file: once that socket closes, every pass decodes an empty Wi-Fi frame and logs
+      `wifi\stats.rs:121 - Frame error: ... needed length of 1 but got 0`, with no rate limit, to
+      %TEMP%\netsimd\netsim_stderr.log. On 2026-09-24 an emulator this script booted at 06:01 had
+      written 254 GB of that one line by 11:34, and F: was at 0 bytes free. netsimd has no flag to
+      quiet it; its level is RUST_LOG, read from the environment the emulator hands down. The Obsidian
+      integration harness hit the same flood (278 GB, 2026-09-10) and caps it the same way.
+
+      One limit: netsimd is shared between emulators and reads its environment once, so if another
+      project's emulator already started one, ours joins it at that netsimd's level.
     #>
-    Write-Host -Object "Booting $RigAvdName headless on port $RigConsolePort ..."
+    $sharedNetsim = @(Get-NetsimProcesses)
+    if ($sharedNetsim.Count -gt 0) {
+        Write-Warning -Message "netsimd is already running (pid $(($sharedNetsim | ForEach-Object -Process { $_.ProcessId }) -join ', ')), started by another emulator. This one will join it at ITS log level, not RUST_LOG=$NetsimLogFilter."
+    }
+
+    Write-Host -Object "Booting $RigAvdName headless on port $RigConsolePort (RUST_LOG=$NetsimLogFilter) ..."
     Start-Process -FilePath $EmulatorExe -ArgumentList @(
         '-avd', $RigAvdName,
         '-port', "$RigConsolePort",
@@ -393,13 +429,97 @@ function Start-Rig {
         '-no-window',
         '-gpu', 'swiftshader_indirect',
         '-no-metrics'
-    ) -WindowStyle Hidden
+    ) -Environment @{ RUST_LOG = $NetsimLogFilter } -WindowStyle Hidden
 
     if (Wait-RigReady -TimeoutSeconds $BootTimeoutSeconds) {
         Write-Host -Object "$RigSerial is up."
+        Start-Watchdog
         return
     }
     throw "$RigAvdName did not finish booting within $BootTimeoutSeconds s."
+}
+
+function Get-NetsimProcesses {
+    return @(Get-CimInstance -ClassName Win32_Process -Filter "Name = 'netsimd.exe'")
+}
+
+<#
+  Every emulator on the machine, this project's or not. Only ever used to decide that there are NONE.
+
+  Only processes running an AVD count. Killing a guest leaves a short-lived `emulator -kill <pid>
+  -sleep 20` helper behind, seen on 2026-09-24, and counting that as a live emulator would keep
+  netsimd running after every `down`.
+#>
+function Get-AnyEmulatorProcesses {
+    return @(
+        Get-CimInstance -ClassName Win32_Process -Filter "Name = 'emulator.exe' OR Name LIKE 'qemu-system%'" |
+            Where-Object -FilterScript { $_.CommandLine -and $_.CommandLine -match '-avd\s' }
+    )
+}
+
+function Update-Heartbeat {
+    if (-not (Test-Path -Path $ShotDir)) { New-Item -ItemType Directory -Path $ShotDir | Out-Null }
+    Set-Content -Path $HeartbeatPath -Value (Get-Date -Format 'o') -NoNewline
+}
+
+<#
+  Start the idle watchdog, unless one is already watching or it was switched off.
+
+  The rig is a set of separate commands against an emulator that stays up between them, so there
+  is no "end" at which to stop it — and a session that ends, or simply forgets, left it running for
+  hours. That is what made the 2026-09-24 flood possible: the log grew while nobody was using the
+  guest. So every rig command stamps a heartbeat, and a detached watchdog takes the emulator (and
+  a netsimd nothing else needs) down once the heartbeat is older than the idle limit.
+#>
+function Start-Watchdog {
+    $minutes = if ($IdleMinutes -ge 0) { $IdleMinutes } else { $DefaultIdleMinutes }
+    if ($minutes -eq 0) {
+        Write-Host -Object 'Idle watchdog: off (-IdleMinutes 0). Take the emulator down yourself with "rig.ps1 down".'
+        return
+    }
+
+    $existing = Get-WatchdogProcess
+    if ($existing) {
+        Write-Host -Object "Idle watchdog: already watching (pid $($existing.ProcessId))."
+        return
+    }
+
+    Update-Heartbeat
+    $arguments = @('-NoProfile', '-NonInteractive', '-File', $PSCommandPath, 'watchdog', '-IdleMinutes', "$minutes")
+    if ($Serial) { $arguments += @('-Serial', $Serial) }
+    $process = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $arguments -WindowStyle Hidden -PassThru
+    Set-Content -Path $WatchdogPidPath -Value "$($process.Id)" -NoNewline
+    Write-Host -Object "Idle watchdog: pid $($process.Id) takes $RigAvdName down after $minutes min with no rig command."
+}
+
+function Get-WatchdogProcess {
+    if (-not (Test-Path -Path $WatchdogPidPath)) { return $null }
+    $watchdogPid = "$(Get-Content -Path $WatchdogPidPath -Raw)".Trim()
+    if (-not $watchdogPid) { return $null }
+    # Checked by command line, because a pid file outlives its process and pids are recycled.
+    $process = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $watchdogPid" -ErrorAction SilentlyContinue
+    if ($process -and $process.CommandLine -and $process.CommandLine -match '\bwatchdog\b' -and $process.CommandLine.Contains($PSCommandPath)) {
+        return $process
+    }
+    return $null
+}
+
+function Invoke-Watchdog {
+    $minutes = if ($IdleMinutes -gt 0) { $IdleMinutes } else { $DefaultIdleMinutes }
+    while ($true) {
+        Start-Sleep -Seconds 60
+
+        # Superseded, or the emulator went away by other means: nothing left to watch.
+        if ("$(Get-Content -Path $WatchdogPidPath -Raw -ErrorAction SilentlyContinue)".Trim() -ne "$PID") { return }
+        if (@(Get-AvdProcesses).Count -eq 0) { break }
+
+        $lastUsed = (Get-Item -Path $HeartbeatPath -ErrorAction SilentlyContinue).LastWriteTime
+        if ($lastUsed -and ((Get-Date) - $lastUsed).TotalMinutes -lt $minutes) { continue }
+
+        Stop-Rig
+        break
+    }
+    Remove-Item -Path $WatchdogPidPath -Force -ErrorAction SilentlyContinue
 }
 
 <#
@@ -436,6 +556,21 @@ function Stop-Rig {
                 Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
                 if (-not (Test-Path -Path $_.FullName)) { Write-Host -Object "Cleared stale $($_.Name)" }
             }
+    }
+
+    <#
+      netsimd outlives the emulator that started it, and it is the process that writes the log, so
+      a `down` that leaves it running has not stopped the flood. But it is shared by every emulator
+      on the machine, including the Obsidian suites' ones this project must never touch, so it is
+      stopped only when no emulator of any kind is left for it to serve.
+    #>
+    if (@(Get-AnyEmulatorProcesses).Count -eq 0) {
+        @(Get-NetsimProcesses) | ForEach-Object -Process {
+            Write-Host -Object "Killing pid $($_.ProcessId) (netsimd.exe; no emulator is left to use it)"
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+    } elseif (@(Get-NetsimProcesses).Count -gt 0) {
+        Write-Host -Object 'netsimd left running: another emulator on this machine still uses it.'
     }
 
     Write-Host -Object "$RigSerial is down."
@@ -697,6 +832,9 @@ function Save-Shot([string] $Path) {
 function Show-Status {
     Write-Host -Object "Serial        : $RigSerial (adb says '$(Get-RigState)')"
     Write-Host -Object "AVD processes : $((@(Get-AvdProcesses) | ForEach-Object -Process { "$($_.Name) $($_.ProcessId)" }) -join ', ')"
+    $watchdog = Get-WatchdogProcess
+    Write-Host -Object "Idle watchdog : $(if ($watchdog) { "pid $($watchdog.ProcessId)" } else { 'none' })"
+    Write-Host -Object "netsimd       : $((@(Get-NetsimProcesses) | ForEach-Object -Process { "pid $($_.ProcessId)" }) -join ', ')"
     Write-Host -Object "Also attached : $(((Get-AttachedSerials) | Where-Object -FilterScript { $_ -ne $RigSerial }) -join ', ')"
     if (-not (Test-RigAttached)) { return }
 
@@ -734,6 +872,9 @@ function Show-Rects([string] $Heading, $Rects) {
 
 if ($MyInvocation.InvocationName -eq '.') { return }
 
+# Every command but the watchdog's own loop counts as using the rig.
+if ($Action -ne 'watchdog') { Update-Heartbeat }
+
 switch ($Action) {
     'avd' { Show-AvdState }
     'up' { Start-Rig }
@@ -746,6 +887,7 @@ switch ($Action) {
     'blocks' { Show-Rects -Heading 'Target blocks:' -Rects (Get-TargetBlocks) }
     'buttons' { Show-Rects -Heading 'Pad buttons:' -Rects (Get-PadButtons) }
     'status' { Show-Status }
+    'watchdog' { Invoke-Watchdog }
 
     'press' {
         if ($Rest.Count -lt 1) { throw 'press needs a button label, e.g. rig.ps1 press ''→/char''' }

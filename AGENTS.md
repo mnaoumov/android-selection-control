@@ -1099,6 +1099,30 @@ consent nobody can give, on a window that is minimised. **`scripts\rig.ps1 up` b
 those flags now**, so the rig is headless by default; boot by hand only to look at the guest, and
 expect the wedge above if you do.
 
+**An idle emulator filled F: with one log line. `rig.ps1` now boots it with `RUST_LOG=error` and takes
+it down when nobody uses it.** The emulator starts `netsimd`, and netsimd has a loop that, once its
+hostapd socket closes, logs `wifi\stats.rs:121 - Frame error: ... needed length of 1 but got 0` with
+no rate limit to `%TEMP%\netsimd\netsim_stderr.log`. On 2026-09-24 an emulator `up` had started at
+06:01 had written **254 GB** of it by 11:34, and F: was at 0 bytes free. Nothing had used the guest
+for hours. netsimd has no flag to quiet it. Its level is `RUST_LOG`, inherited from the emulator's
+environment, which is how the Obsidian integration harness capped the same flood. Three parts:
+
+- **The cap.** `Start-Rig` launches the emulator with `RUST_LOG=error`. Measured 2026-09-24: 10
+  minutes of a rig session with a press a minute left the log at 585 B, with 0 Rust info/warn lines.
+  The control, the same AVD booted by hand without it, wrote 33 in its first minute. netsimd is shared
+  and reads its environment once, so an emulator that joins a netsimd another project started gets
+  that one's level. `up` warns when it finds a netsimd already running.
+- **The idle watchdog.** Every rig command stamps `build\rig\last-used`. `up` and `go` start one
+  hidden `rig.ps1 watchdog` process (pid in `build\rig\watchdog.pid`). It runs `down` once the stamp is
+  older than 60 minutes, and exits by itself when the emulator goes. `-IdleMinutes <n>` changes the limit,
+  and `-IdleMinutes 0` starts none. Adb run by hand does not stamp, so a long hand-driven sitting should
+  touch the rig now and then (`rig.ps1 status`). Measured with `-IdleMinutes 2`: down after 2.1 min,
+  netsimd gone, pid file removed.
+- **`down` stops netsimd too**, but only when no emulator running an AVD is left on the machine,
+  because the Obsidian suites' emulators share it. netsimd can outlive its emulator: in the incident,
+  qemu restarted it at 11:37 after it was killed, with no `RUST_LOG`. Killing a guest leaves a short-lived
+  `emulator -kill <pid> -sleep 20` helper behind, so the helper is not counted as an emulator.
+
 ### The debug target
 
 `app/src/debug/.../TargetActivity.kt` — three selectable blocks with **known offsets**, so an
