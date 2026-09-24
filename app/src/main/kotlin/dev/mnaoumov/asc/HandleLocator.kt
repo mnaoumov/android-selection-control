@@ -55,7 +55,8 @@ data class CharacterGeometry(val caretX: Float, val lineBottom: Float, val chara
  *    offsets refuses instead of aiming into the wrong node. See [lineNodeGeometry].
  * 4. **Mirror about the floating toolbar's centre** — the toolbar tracks the selection's centre to
  *    ~6 px, and the handles are symmetric about it, so the moving one is `2·centre − anchor`. Needs
- *    a known anchor, and holds only while both handles are on the same row.
+ *    a known anchor, and holds only while both handles are on the same row. Its row is the scan's,
+ *    so it is gated on [scanRowIsKnown] too.
  * 5. **Acquire by scanning** outward from that centre — one probe found a word's handle in 454 ms,
  *    but a miss destroys the selection, so this is the last resort, never the first guess. It is
  *    driven from `SelectionDriver`, and gated on [scanRowIsKnown].
@@ -454,9 +455,17 @@ class HandleLocator(private val density: () -> Float) {
       return PointF(x, character.lineBottom + handleDrop)
     }
 
+    /*
+     * The mirror answers with a column and takes its row from `bounds.bottom`, which is the scan's
+     * row and wrong for the same reason: on a box measured to wrap it is the LAST line, and a
+     * cold wrapped node reaches here with the moving edge on its first. Measured on the rig
+     * 2026-09-24: an END edge at offset 1 of an 81-character three-line paragraph, whose first line
+     * ends at 767, was grabbed at y 891 under the third, and the drag landed on the page. Refuse
+     * exactly where the scan refuses, so the press ends with the selection intact.
+     */
     val centre = toolbarCentreX
     val anchor = knownAnchorX
-    if (centre != null && anchor != null) {
+    if (centre != null && anchor != null && scanRowIsKnown(snapshot)) {
       return PointF(2 * centre - anchor, bounds.bottom + handleDrop)
     }
 
