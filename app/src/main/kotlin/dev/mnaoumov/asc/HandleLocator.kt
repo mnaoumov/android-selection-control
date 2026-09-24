@@ -502,6 +502,41 @@ class HandleLocator(private val density: () -> Float) {
   }
 
   /**
+   * [aim], moved off the floating toolbar when the toolbar covers it, or null when no part of the
+   * handle the toolbar leaves bare is within reach.
+   *
+   * Near the top of a page Chrome puts its toolbar BELOW the selection, over the handle, and a grab
+   * there presses a toolbar button instead: measured on the rig as **Select all**, which the pad then
+   * read as a successful move, and the overflow menu. The mask cannot stop that, because it must not
+   * take touches. Touch goes to whichever window owns the pixel of the down, so the fix is to put
+   * the down on a pixel the toolbar does not own.
+   *
+   * The toolbar does not always cover the whole handle. Measured 2026-09-24 after a long-press on the
+   * first line of a served page: the line bottom was 415, the handle centre ~443 and the toolbar's
+   * touchable top 431, so the handle's top 16 px were bare, and a drag started at y 425 grabbed the
+   * end handle and pressed nothing. So the aim moves to just outside the toolbar's nearer horizontal
+   * edge, when that is still within [HANDLE_REACH_DP] of the handle's centre and still below the
+   * text line, where a down would be a touch on the text instead.
+   */
+  fun clearOfToolbar(aim: PointF, toolbar: Rect?): PointF? {
+    if (toolbar == null || toolbar.isEmpty) return aim
+    val margin = TOOLBAR_MARGIN_DP * density()
+    val covered = aim.x >= toolbar.left - margin && aim.x <= toolbar.right + margin &&
+      aim.y >= toolbar.top - margin && aim.y <= toolbar.bottom + margin
+    if (!covered) return aim
+
+    val reach = HANDLE_REACH_DP * density()
+    val lineBottom = aim.y - handleDrop
+    val above = toolbar.top - margin
+    val below = toolbar.bottom + margin
+    return when {
+      aim.y - above <= reach && above >= lineBottom + TEXT_CLEARANCE_DP * density() -> PointF(aim.x, above)
+      below - aim.y <= reach -> PointF(aim.x, below)
+      else -> null
+    }
+  }
+
+  /**
    * Did that drag move a handle, or wreck the selection?
    *
    * A grab keeps the anchor: one edge holds while the other moves, and the range stays non-empty. A
@@ -554,6 +589,16 @@ class HandleLocator(private val density: () -> Float) {
      */
     const val HANDLE_INSET_DP = 9f
     const val HANDLE_DROP_DP = 14f
+
+    /**
+     * How far from the handle's centre a down may land and still grab it: about the radius of
+     * Chrome's ~25 px handle on the rig (2x). Used only to move an aim off the toolbar.
+     */
+    const val HANDLE_REACH_DP = 12f
+
+    /** Clearance kept between a moved aim and the toolbar, and between it and the text line. */
+    const val TOOLBAR_MARGIN_DP = 2f
+    const val TEXT_CLEARANCE_DP = 2f
 
     /**
      * How near a character's rectangle may come to the whole node's box before it is read as the

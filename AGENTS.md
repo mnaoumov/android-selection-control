@@ -283,7 +283,32 @@ The reported shape now reads `reach=10.0 -> 0..7`, pulls back, and stays on 7.
 **`chrome://version` itself cannot show any of this on the rig.** Its header sits right under the
 omnibox, so Chrome puts the floating toolbar BELOW the selection, over the handle, and every grab there
 lands on the toolbar and ends `HandleLost` (eight of eight). Measure the lift on a served page that
-reproduces the header's shape lower down, as above.
+reproduces the header's shape lower down, as above. That count predates the toolbar-aware aim below
+and has not been re-taken.
+
+**A grab under the floating toolbar presses a toolbar BUTTON, which is worse than a miss: it acts.**
+Near the top of the viewport Chrome puts the toolbar below the selection, over the handle. The mask
+cannot help, because it must not take touches. Measured on the rig against a served paragraph on the
+first lines of the page: a `word →` grab landed on **Select all**, and the pad read the whole-page
+selection as `Moved(12 -> 24)`; another opened the overflow menu. A touch goes to the window that owns
+the pixel of the down, and the toolbar does not always cover the whole handle. After a long-press on
+line 1 the toolbar's touchable region was `(32,431)-(515,527)`, the line bottom 409..415 and the aim
+437, so the handle's top band was bare. `HandleLocator.clearOfToolbar` moves the aim to just outside
+the toolbar's nearer edge (2 dp), when that stays within 12 dp of the handle's centre and below the
+text line. Otherwise it returns null, and the press ends `HandleCovered` with nothing touched.
+Measured 2026-09-24, Chrome force-stopped each time, all three of the original repros:
+
+| selection | toolbar top | aim | outcome |
+|---|---|---|---|
+| `reader`, line 1 | 431 | 437 -> 427 | `12..13`, 1 gesture, no button pressed |
+| `selecting`, line 2 | 491 | 495 -> 487 | `53..54`, 1 gesture, no button pressed |
+| `phrase`, end of line 2 | 491 | 495 -> 487 | nothing pressed; ends `HandleLost` at the line end, selection intact |
+
+The third one's `HandleLost` is the end-of-line step failure, not the toolbar. The window list's
+bounds for the toolbar are its touchable region. `dumpsys window` shows the PopupWindow's frame as the
+much larger `(0,415)-(547,831)`, so do not read the toolbar's extent off the frame. The toolbar also
+moves after the first drag, lower or sideways, so every grab re-checks it. The refusal path has not
+fired on the rig, because every measured toolbar left a band within reach.
 
 **A `TextView` snaps a grow that starts on a word boundary, and the grab can land BACKWARDS. The
 platform's source says why.** The framework source is on this machine
@@ -871,7 +896,8 @@ came back as a Google search twice (2026-09-24). What works: a PowerShell `HttpL
 `http://127.0.0.1:<port>/` on the host, `adb -s emulator-5570 reverse tcp:<port> tcp:<port>`, and an
 `am start -a android.intent.action.VIEW -d http://127.0.0.1:<port>/page.html -p com.android.chrome`.
 The guest has no network, but a reversed port is not network. **Keep the text away from the top of
-the page**: a selection near the top gets its floating toolbar BELOW it, on top of the handle.
+the page** unless the toolbar is what you are measuring: a selection near the top gets its floating
+toolbar BELOW it, on top of the handle, and the pad then aims at the handle's bare band.
 
 **Force-stop Chrome between runs of that measurement.** Inline text boxes, once loaded for a node,
 stay loaded, so a second run against a warm Chrome is answered honestly on the FIRST ask and proves

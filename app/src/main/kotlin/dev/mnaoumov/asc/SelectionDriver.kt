@@ -1,6 +1,7 @@
 package dev.mnaoumov.asc
 
 import android.graphics.PointF
+import android.graphics.Rect
 import android.os.Handler
 
 /** A press on the pad: move the active edge, by this much, in this direction. */
@@ -38,6 +39,15 @@ sealed interface Outcome {
    * the selection and, on a link, navigating. Both refusals are measured; see `AGENTS.md`.
    */
   data object RowUnknown : Outcome
+
+  /**
+   * The target app's floating toolbar sits over the handle, so nothing was touched.
+   *
+   * Chrome puts the toolbar BELOW a selection near the top of the page, and a down there presses a
+   * toolbar button rather than grabbing the handle. The selection is intact; scrolling it lower on
+   * screen moves the toolbar above it.
+   */
+  data object HandleCovered : Outcome
   data class Degraded(val reason: String) : Outcome
 }
 
@@ -94,8 +104,37 @@ class SelectionDriver(
   private val observer: SelectionObserver,
   private val locator: HandleLocator,
   private val handler: Handler,
-  private val toolbarCentre: () -> Float?,
+  private val toolbarBounds: () -> Rect?,
 ) {
+
+  /** The floating toolbar's horizontal centre, which tracks the selection's. */
+  private fun toolbarCentre(): Float? = toolbarBounds()?.exactCenterX()
+
+  /**
+   * [handle], or an aim moved off the floating toolbar, or null — having ended the press through
+   * [onRefused] — when the toolbar covers every part of the handle in reach.
+   *
+   * A down on the toolbar presses a toolbar button, and that is worse than a miss on the page: it
+   * ACTS. Measured on the rig as Select all, which the pad then read as a successful move. See
+   * [HandleLocator.clearOfToolbar].
+   */
+  private fun uncovered(handle: PointF, onRefused: (Outcome) -> Unit): PointF? {
+    val toolbar = toolbarBounds()
+    val aim = locator.clearOfToolbar(handle, toolbar)
+    when {
+      aim == null -> {
+        Diag.log(
+          "  grab: the toolbar at $toolbar covers the handle at (${handle.x}, ${handle.y}) " +
+            "and leaves none of it in reach — refusing to touch"
+        )
+        onRefused(Outcome.HandleCovered)
+      }
+      aim !== handle -> Diag.log(
+        "  grab: the toolbar at $toolbar covers (${handle.x}, ${handle.y}) — aiming at y ${aim.y} instead"
+      )
+    }
+    return aim
+  }
 
   /**
    * Whether a selection still appears to exist on screen, independently of anything announced.
@@ -275,11 +314,12 @@ class SelectionDriver(
       return
     }
     val origin = first ?: before
-    val handle = locator.locate(before, activeEdge, toolbarCentre())
-    if (handle == null) {
+    val located = locator.locate(before, activeEdge, toolbarCentre())
+    if (located == null) {
       acquireThenRetry(command, onDone)
       return
     }
+    val handle = uncovered(located, onDone) ?: return
 
     // Escalate in characters rather than in a fixed pixel count: the distance that matters is the
     // width of the next word, and the node's own geometry says how wide a character is here. A
@@ -464,11 +504,12 @@ class SelectionDriver(
       onDone(Outcome.NoSelection)
       return
     }
-    val handle = locator.locate(before, activeEdge, toolbarCentre())
-    if (handle == null) {
+    val located = locator.locate(before, activeEdge, toolbarCentre())
+    if (located == null) {
       acquireThenRetry(command, onDone)
       return
     }
+    val handle = uncovered(located, onDone) ?: return
     val start = before.movingOffset()
     val perChar = pixelsPerCharacter(before, crossingOf(command))
 
@@ -885,11 +926,12 @@ class SelectionDriver(
       onDone(Outcome.NoSelection)
       return
     }
-    val handle = locator.locate(before, activeEdge, toolbarCentre())
-    if (handle == null) {
+    val located = locator.locate(before, activeEdge, toolbarCentre())
+    if (located == null) {
       acquireThenRetry(command, onDone)
       return
     }
+    val handle = uncovered(located, onDone) ?: return
     val origin = before.movingOffset()
     val reach = (if (command.toRight) 1f else -1f) *
       pixelsPerCharacter(before, crossingOf(command)).coerceAtLeast(STEP_PX)
@@ -1101,11 +1143,14 @@ class SelectionDriver(
 
     val perChar = pixelsPerCharacter(before, crossingToward(current, target))
     val direction = towardAnchor.toFloat()
-    val handle = locator.locate(before, activeEdge, toolbarCentre())
-    if (handle == null) {
+    val located = locator.locate(before, activeEdge, toolbarCentre())
+    if (located == null) {
       onDone(Outcome.HandleLost)
       return
     }
+    // A walk that has already moved reports that move, not the refusal: the selection did change.
+    val handle = uncovered(located) { onDone(if (current != origin) Outcome.Moved(origin, current) else it) }
+      ?: return
 
     /*
      * Aim AT the target, not short of it.
@@ -1385,10 +1430,11 @@ class SelectionDriver(
       onDone(Outcome.NoSelection)
       return
     }
-    val handle = locator.locate(before, activeEdge, toolbarCentre()) ?: run {
+    val located = locator.locate(before, activeEdge, toolbarCentre()) ?: run {
       acquireThenRetry(command, onDone)
       return
     }
+    val handle = uncovered(located, onDone) ?: return
     val target = PointF(
       if (command.toRight) (gestures.screenWidth() - EDGE_INSET).toFloat() else EDGE_INSET.toFloat(),
       if (command.toRight) (gestures.screenHeight() - EDGE_INSET).toFloat() else EDGE_INSET.toFloat(),
@@ -1446,8 +1492,8 @@ class SelectionDriver(
     }
     val ring = (probe + 1) / 2
     val x = if (probe % 2 == 1) centre + ring * HandleLocator.SCAN_STEP else centre - ring * HandleLocator.SCAN_STEP
-    val y = snapshot.bounds.bottom + locator.handleDrop
-    val from = PointF(x, y)
+    val from = uncovered(PointF(x, snapshot.bounds.bottom + locator.handleDrop), onDone) ?: return
+    val y = from.y
 
     gestureCount++
 

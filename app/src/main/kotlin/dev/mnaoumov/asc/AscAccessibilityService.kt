@@ -79,8 +79,8 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       observer = observer,
       locator = locator,
       handler = handler,
-      toolbarCentre = {
-        locator.toolbarCentreX(
+      toolbarBounds = {
+        locator.toolbarBounds(
           windows = windows.orEmpty(),
           packageName = observer.latest?.packageName,
           screenWidth = screenWidth(),
@@ -308,7 +308,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   private fun madeProgress(outcome: Outcome): Boolean = when (outcome) {
     is Outcome.Moved -> outcome.fromOffset != outcome.toOffset
     is Outcome.Degraded -> true
-    Outcome.NoSelection, Outcome.HandleLost, Outcome.RowUnknown -> false
+    Outcome.NoSelection, Outcome.HandleLost, Outcome.RowUnknown, Outcome.HandleCovered -> false
   }
 
   /**
@@ -352,6 +352,8 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     // Deliberately NOT "reselect": nothing was lost and nothing was touched, and the same long-press
     // on the same wrapped paragraph refuses again. Selecting inside ONE line is the thing that works.
     Outcome.RowUnknown -> "this block wraps — select within one line"
+    // Also not "reselect": the selection is untouched. Lower on screen, the toolbar goes above it.
+    Outcome.HandleCovered -> "the menu covers the handle — scroll the text lower"
     is Outcome.Degraded -> "one character (${outcome.reason})"
   }
 
