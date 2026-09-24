@@ -348,7 +348,18 @@ The third one's `HandleLost` is the end-of-line step failure, not the toolbar. T
 bounds for the toolbar are its touchable region. `dumpsys window` shows the PopupWindow's frame as the
 much larger `(0,415)-(547,831)`, so do not read the toolbar's extent off the frame. The toolbar also
 moves after the first drag, lower or sideways, so every grab re-checks it. The refusal path has not
-fired on the rig, because every measured toolbar left a band within reach.
+fired on the rig against a real toolbar, because every measured toolbar left a band within reach.
+
+**A `TextView`'s selection handles are windows too, and they are smaller than the toolbar.** Each
+handle is a `PopupWindow` of its own in the target's package, 88x80 on the rig and centred on the
+handle, so a lookup that took the smallest non-full-screen window found the handle and refused every
+`TextView` step as `HandleCovered` in ~10 ms, with 0 gestures. `HandleLocator.toolbarBounds` now keeps
+only a window whose node tree holds a clickable node. The toolbar's buttons are clickable, and the
+handle's bare `View` is not. Measured 2026-09-24 on the rig: the two handle windows read
+`clickable=false` and the toolbar `(80,384)-(482,480)` read `clickable=true`. `char →` and `char ←`
+from `charlie` and from `bravo` all moved again. On Chrome's served page the toolbar below `reader`
+was still found and the aim still moved off it (y 419 -> 403), `10 -> 11` in 1 gesture. Chrome draws
+its handles inside the page, so there the toolbar was always the only candidate.
 
 **A `TextView` snaps a grow that starts on a word boundary, and the grab can land BACKWARDS. The
 platform's source says why.** The framework source is on this machine
@@ -754,9 +765,9 @@ of the last fresh selection (`anchorNodeKey`). After a grow into the next node, 
 legitimately crosses the seam, so it is left alone: from `terms` grown into the paragraph, `word ←`
 from `0..1` still crossed back to `9..14`.
 
-Not re-measured: the `TextView` END edge. Every press there ended `HandleCovered` on the rig, because
-the toolbar lookup took that `TextView`'s own handle window for the toolbar, a separate open defect.
-`char ←` from a one-character selection is not guarded either. The anchor it would need is the same
+The `TextView` END edge does the same, measured 2026-09-24 once the toolbar lookup stopped taking
+the handle's own window for the toolbar: from `6..11` (`bravo`), `word ←` went `11 -> 7` in 1 gesture,
+and the next one ended `AtFloor` with 0 gestures. `char ←` from a one-character selection is not guarded either. The anchor it would need is the same
 unknown across a node seam.
 
 **The handle aim is in dp: `HANDLE_DROP_DP` = 14 and `HANDLE_INSET_DP` = 9. It was once raw pixels
