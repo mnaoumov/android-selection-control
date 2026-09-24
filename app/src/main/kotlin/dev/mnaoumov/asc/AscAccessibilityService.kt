@@ -131,7 +131,16 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
      */
     val previous = observer.latest
     val changed = observer.onEvent(event)
-    if (changed && !busy && ::driver.isInitialized) driver.noteSelectionEvent(previous)
+    if (changed && !busy && ::driver.isInitialized) {
+      driver.noteSelectionEvent(previous)
+      /*
+       * Ask Chrome to measure the new selection's characters NOW, so that the press which follows
+       * can be answered at all. On page content the first such request only starts the work — see
+       * [HandleLocator.primeCharacterRects], which is the whole of the wrapped-node fix — and this
+       * announcement is the one moment reliably hundreds of milliseconds ahead of a press.
+       */
+      observer.latest?.let { locator.primeCharacterRects(it, driver.activeEdge) }
+    }
     // The toolbar comes back on every selection change, so the mask has to follow it there rather
     // than only after a press of our own.
     refreshMask()
@@ -291,7 +300,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   private fun madeProgress(outcome: Outcome): Boolean = when (outcome) {
     is Outcome.Moved -> outcome.fromOffset != outcome.toOffset
     is Outcome.Degraded -> true
-    Outcome.NoSelection, Outcome.HandleLost -> false
+    Outcome.NoSelection, Outcome.HandleLost, Outcome.RowUnknown -> false
   }
 
   /**
@@ -332,6 +341,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     Outcome.NoSelection ->
       if (aSelectionSeemsToExist()) "tap elsewhere, then long-press to re-select" else "select some text first"
     Outcome.HandleLost -> "lost the handle — reselect"
+    // Deliberately NOT "reselect": nothing was lost and nothing was touched, and the same long-press
+    // on the same wrapped paragraph refuses again. Selecting inside ONE line is the thing that works.
+    Outcome.RowUnknown -> "this block wraps — select within one line"
     is Outcome.Degraded -> "one character (${outcome.reason})"
   }
 

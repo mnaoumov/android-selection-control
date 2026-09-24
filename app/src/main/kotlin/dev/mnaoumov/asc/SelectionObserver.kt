@@ -72,12 +72,7 @@ class SelectionObserver {
      * AND multiplies the height by it, so the ratio falls quadratically: 0.05 for a four-line
      * paragraph, 0.10 for the three-line phrase on record. Nothing sits near the threshold.
      */
-    fun sourceIsOneLine(): Boolean {
-      val box = bounds ?: return false
-      if (box.height() <= 0 || sourceLength <= 0) return false
-      val characterWidth = box.width().toFloat() / sourceLength
-      return characterWidth / box.height() >= MIN_ONE_LINE_RATIO
-    }
+    fun sourceIsOneLine(): Boolean = boxIsOneLine(bounds, sourceLength)
 
     /**
      * Whether the box is **known** to span wrapped lines — which is not the same as "not one line".
@@ -186,8 +181,8 @@ class SelectionObserver {
     return null
   }
 
-  private companion object {
-    const val MAX_DEPTH = 60
+  companion object {
+    private const val MAX_DEPTH = 60
 
     /**
      * Below this ratio of character width to box height, the box spans wrapped lines and
@@ -195,6 +190,20 @@ class SelectionObserver {
      * measurements; the gap between one line (0.33-0.44) and wrapped (0.05-0.10) is wide enough that
      * the exact threshold does not matter.
      */
-    const val MIN_ONE_LINE_RATIO = 0.2f
+    private const val MIN_ONE_LINE_RATIO = 0.2f
+
+    /**
+     * The one-line test itself, over a box and the length of the text it holds.
+     *
+     * It lives here rather than inside [Snapshot] because the same question has to be asked of a
+     * node that is **not** the snapshot's source: [HandleLocator.lineNodeGeometry] descends into the
+     * source's children looking for one that hugs a single line, and a second copy of this ratio is
+     * a second place for the threshold to drift.
+     */
+    fun boxIsOneLine(box: Rect?, length: Int): Boolean {
+      if (box == null || box.height() <= 0 || length <= 0) return false
+      val characterWidth = box.width().toFloat() / length
+      return characterWidth / box.height() >= MIN_ONE_LINE_RATIO
+    }
   }
 }
