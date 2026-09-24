@@ -394,10 +394,28 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
    * meant to end. A miss now reads as a scroll — recoverable, and it does not take the page with it
    * — while a hit still finishes at the intended pixel, because the selection follows the finger and
    * the loop reads the state only once the announcements go quiet.
+   *
+   * "Comes back" is not free, though: the target app sees the visit. With [pastTarget] false the
+   * detour goes no further than [to], and only as far as one pixel past the touch slop, so a reach
+   * longer than the slop is a straight drag. The miss still reads as a scroll. See
+   * `SelectionDriver.growOneUnit` for what the visit cost a word grow on Chrome.
    */
-  override fun drag(from: PointF, to: PointF, durationMs: Long, onFinished: (Boolean) -> Unit) {
-    val slop = ViewConfiguration.get(this).scaledTouchSlop * SLOP_MULTIPLE
-    val away = if (to.x >= from.x) slop.toFloat() else -slop.toFloat()
+  override fun drag(
+    from: PointF,
+    to: PointF,
+    durationMs: Long,
+    pastTarget: Boolean,
+    onFinished: (Boolean) -> Unit,
+  ) {
+    val touchSlop = ViewConfiguration.get(this).scaledTouchSlop
+    val forward = to.x >= from.x
+    // Not past [to]: only as far as the slop needs, which a reach longer than the slop already is.
+    val distance = if (pastTarget) {
+      (touchSlop * SLOP_MULTIPLE).toFloat()
+    } else {
+      maxOf(kotlin.math.abs(to.x - from.x), touchSlop + 1f)
+    }
+    val away = if (forward) distance else -distance
     val start = onScreen(from)
     val detour = onScreen(PointF(from.x + away, from.y))
     val end = onScreen(to)
@@ -405,7 +423,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     val path = Path().apply {
       moveTo(start.x, start.y)
       lineTo(detour.x, detour.y)
-      lineTo(end.x, end.y)
+      if (end.x != detour.x || end.y != detour.y) lineTo(end.x, end.y)
     }
     dispatch(GestureDescription.StrokeDescription(path, 0, durationMs), onFinished)
   }

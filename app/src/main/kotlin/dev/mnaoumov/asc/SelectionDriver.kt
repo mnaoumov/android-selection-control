@@ -63,7 +63,15 @@ sealed interface Outcome {
 
 /** The gestures the driver needs, kept behind an interface so it does not depend on the service. */
 interface GestureDispatcher {
-  fun drag(from: PointF, to: PointF, durationMs: Long, onFinished: (Boolean) -> kotlin.Unit)
+  fun drag(
+    from: PointF,
+    to: PointF,
+    durationMs: Long,
+    pastTarget: Boolean = true,
+    onFinished: (Boolean) -> kotlin.Unit,
+  )
+  // [pastTarget] false keeps the slop detour from travelling beyond [to]: a drag that already
+  // crosses the slop goes straight there. See `SelectionDriver.growOneUnit`.
   fun dragAndHold(from: PointF, to: PointF, dragMs: Long, holdMs: Long, onFinished: (Boolean) -> kotlin.Unit)
   fun screenWidth(): Int
   fun screenHeight(): Int
@@ -391,8 +399,26 @@ class SelectionDriver(
     }
     val to = PointF((from + reach).coerceIn(0f, width - 1), base.y)
 
+    /*
+     * A word grow's drag must not detour PAST where it is aimed. The usual slop detour travels 32 px
+     * beyond the handle before coming back, and on Chrome that visit passes the middle of a short next
+     * word, snaps to its end, and the return then shrinks one character at a time to the finger:
+     * measured 2026-09-24 on the served seven-line paragraph, `word →` from 40, the end of
+     * `frustration`, landed on 42 inside `of` (41..43) three cold runs of three, and 42 went into
+     * [knownBoundaries] as a snap. Aimed straight at the reach, the same press lands on 41, the hold
+     * on the next word's start, and [landedOnNextWordStart] escalates it to 43: nine presses of nine
+     * over `of`, `selecting` and `a`, in 0.7 s instead of 1.0-1.2 s for the first. A detour toward
+     * the anchor was measured and refused: on a `TextView` it puts the handle back inside the word it
+     * started at the end of, and from mid-word the grow is character-granular (11 -> 12 -> 14).
+     */
+    val wordGrow = command.unit == PadCommand.Unit.WORD && growsSelection(command)
     gestureCount++
-    gestures.drag(handle, to, DRAG_MS) { completed ->
+    gestures.drag(
+      handle,
+      to,
+      DRAG_MS,
+      pastTarget = !wordGrow,
+    ) { completed ->
       if (!completed) {
         onDone(Outcome.HandleLost)
         return@drag
