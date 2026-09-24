@@ -27,7 +27,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
   private val handler = Handler(Looper.getMainLooper())
   private val observer = SelectionObserver()
-  private val locator = HandleLocator()
+  private val locator = HandleLocator { resources.displayMetrics.density }
 
   private lateinit var driver: SelectionDriver
   private var pad: Pad? = null
@@ -313,7 +313,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   private fun handleIsUnderThePad(): Boolean {
     val snapshot = observer.latest ?: return false
     val bounds = snapshot.bounds ?: return false
-    val handleY = bounds.bottom + HandleLocator.HANDLE_DROP
+    val handleY = bounds.bottom + locator.handleDrop
     val padBounds = windows.orEmpty()
       .firstOrNull {
         it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY &&

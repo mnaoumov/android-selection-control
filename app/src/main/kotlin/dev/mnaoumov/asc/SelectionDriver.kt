@@ -1183,7 +1183,7 @@ class SelectionDriver(
     }
     val ring = (probe + 1) / 2
     val x = if (probe % 2 == 1) centre + ring * HandleLocator.SCAN_STEP else centre - ring * HandleLocator.SCAN_STEP
-    val y = snapshot.bounds.bottom + HandleLocator.HANDLE_DROP
+    val y = snapshot.bounds.bottom + locator.handleDrop
     val from = PointF(x, y)
 
     gestureCount++

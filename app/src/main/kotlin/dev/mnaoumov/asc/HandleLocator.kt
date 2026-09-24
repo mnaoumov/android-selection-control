@@ -60,7 +60,16 @@ data class CharacterGeometry(val caretX: Float, val lineBottom: Float, val chara
  *    but a miss destroys the selection, so this is the last resort, never the first guess. It is
  *    driven from `SelectionDriver`, and gated on [scanRowIsKnown].
  */
-class HandleLocator {
+class HandleLocator(private val density: () -> Float) {
+
+  /**
+   * How far below the text's bottom the moving handle's centre sits, in raw screen pixels. Read
+   * through [density] on every call, so a display-density change is followed rather than cached.
+   */
+  val handleDrop: Float get() = HANDLE_DROP_DP * density()
+
+  /** How far outside the caret the moving handle's centre sits, in raw screen pixels. */
+  val handleInset: Float get() = HANDLE_INSET_DP * density()
 
   /** The last anchor-handle x we were confident about, for the mirror rung. */
   private var knownAnchorX: Float? = null
@@ -389,8 +398,8 @@ class HandleLocator {
     if (snapshot.sourceIsOneLine() && snapshot.sourceLength > 0) {
       val offset = if (edge == Edge.START) snapshot.low() else snapshot.high()
       val anchorX = bounds.left + (offset.toFloat() / snapshot.sourceLength) * bounds.width()
-      val x = if (edge == Edge.START) anchorX - HANDLE_INSET else anchorX + HANDLE_INSET
-      return PointF(x, bounds.bottom + HANDLE_DROP)
+      val x = if (edge == Edge.START) anchorX - handleInset else anchorX + handleInset
+      return PointF(x, bounds.bottom + handleDrop)
     }
 
     /*
@@ -402,18 +411,18 @@ class HandleLocator {
       ?: lineNodeGeometry(snapshot, edge)
     if (character != null) {
       val x =
-        if (edge == Edge.START) character.caretX - HANDLE_INSET else character.caretX + HANDLE_INSET
+        if (edge == Edge.START) character.caretX - handleInset else character.caretX + handleInset
       Diag.log(
         "  locate: a measured rect gave the $edge handle its own row — " +
           "caret=${character.caretX} lineBottom=${character.lineBottom} charPx=${character.characterWidth}"
       )
-      return PointF(x, character.lineBottom + HANDLE_DROP)
+      return PointF(x, character.lineBottom + handleDrop)
     }
 
     val centre = toolbarCentreX
     val anchor = knownAnchorX
     if (centre != null && anchor != null) {
-      return PointF(2 * centre - anchor, bounds.bottom + HANDLE_DROP)
+      return PointF(2 * centre - anchor, bounds.bottom + handleDrop)
     }
 
     return null
@@ -484,15 +493,23 @@ class HandleLocator {
 
   companion object {
     /**
-     * the gesture spike's measured Chrome geometry: an end handle announced at offset 15 of a 16-character node
-     * with bounds 378..721 x ..1341 was grabbed at (729, 1398) — 29.4 px outside the interpolated
-     * anchor and 57 px below the text's bottom, against a ~48 px-radius touch target.
+     * Where Chrome's moving handle sits relative to the caret, in dp — the one unit both measured
+     * devices agree in.
+     *
+     * The gesture spike measured it on the handset (560 dpi, 3.5x): an end handle announced at
+     * offset 15 of a 16-character node with bounds 378..721 x ..1341 was grabbed at (729, 1398) —
+     * 29.4 px outside the interpolated anchor and 57 px below the text's bottom, with the centre
+     * generally 50..57 px down: 8.4 dp and 14..16 dp. The rig (320 dpi, 2x) measured the centre
+     * 27..29 px below and ~21 px outside: 14 dp and ~10 dp. These were once the handset's raw
+     * pixels, 57 and 30, which put the rig's aim ~30 px below a ~25 px-radius handle, so every
+     * press on page content landed on the page and collapsed the selection. A `TextView` hid it,
+     * because the platform's own handle takes touches well past its drawn circle.
      *
      * These are **Chrome's** numbers. Keep draws circles at the selection's corners instead, so
      * treat them as a starting point to be corrected by the loop, never as a constant.
      */
-    const val HANDLE_INSET = 30f
-    const val HANDLE_DROP = 57f
+    const val HANDLE_INSET_DP = 9f
+    const val HANDLE_DROP_DP = 14f
 
     /**
      * How near a character's rectangle may come to the whole node's box before it is read as the
