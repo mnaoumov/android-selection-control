@@ -49,7 +49,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
    * gesture-level `Boolean` — "accepted for dispatch" — to tell a refusal apart from a cancellation,
    * and [dispatch] folds both into its callback.
    */
-  private val heldPointer = HeldPointer { gesture, onFinished ->
+  private val heldPointer = HeldPointer(::onScreen) { gesture, onFinished ->
     val callback = object : GestureResultCallback() {
       override fun onCompleted(gestureDescription: GestureDescription?) = finish(true)
       override fun onCancelled(gestureDescription: GestureDescription?) = finish(false)
@@ -262,10 +262,10 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
      * beneath the button: measured, it opened an image viewer and spare browser tabs. Most of the
      * time the handle is nowhere near the pad, and then the pad should keep absorbing taps.
      */
-    val inTheWay = handleIsUnderThePad()
-    if (inTheWay) pad?.setTransparentToTouch(true)
+    padCleared = false
     driver.perform(command) { outcome ->
-      if (inTheWay) pad?.setTransparentToTouch(false)
+      if (padCleared) pad?.setTransparentToTouch(false)
+      padCleared = false
       pad?.showStatus(describe(outcome))
       busy = false
       // The press just moved the selection, so the toolbar has just moved too. After `busy` clears,
@@ -311,25 +311,37 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     Outcome.NoSelection, Outcome.HandleLost, Outcome.RowUnknown, Outcome.HandleCovered, Outcome.AtFloor -> false
   }
 
+  /** Whether this press has made the pad transparent to touch, so its end must make it solid again. */
+  private var padCleared = false
+
   /**
-   * Whether the handle we are about to drag lies inside the pad's own footprint.
+   * Makes the pad transparent to touch when a gesture is about to touch down inside it, and leaves it
+   * so until the press ends.
+   *
+   * Asked of every touch-down point rather than once per press, because the press itself can carry
+   * the handle under the pad. Measured 2026-09-24 on the rig: a `word →` from the end of a wrapped
+   * line changed row onto a line at y 1193, inside the pad's footprint (y 1152-1470), and the seven
+   * drags of the walk back and the fourteen of the next press all landed on the pad, announcing
+   * nothing. The once-per-press check also missed that second press, because it placed the handle
+   * at the wrapped node's `bounds.bottom`, the LAST line, 1487 and below the pad.
    *
    * The pad's bounds come from the accessibility window list rather than from its `LayoutParams`,
    * because those are inset by the status bar while gesture coordinates are raw screen pixels —
    * comparing the two directly is off by the status bar's height.
    */
-  private fun handleIsUnderThePad(): Boolean {
-    val snapshot = observer.latest ?: return false
-    val bounds = snapshot.bounds ?: return false
-    val handleY = bounds.bottom + locator.handleDrop
+  private fun clearThePadFor(down: PointF) {
+    if (padCleared) return
     val padBounds = windows.orEmpty()
       .firstOrNull {
         it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY &&
           it.root?.packageName?.toString() == packageName
       }
       ?.let { window -> android.graphics.Rect().also { window.getBoundsInScreen(it) } }
-      ?: return false
-    return handleY >= padBounds.top && handleY <= padBounds.bottom
+      ?: return
+    if (!padBounds.contains(down.x.toInt(), down.y.toInt())) return
+    Diag.log("  the pad at $padBounds covers the touch-down at (${down.x}, ${down.y}) — letting it through")
+    pad?.setTransparentToTouch(true)
+    padCleared = true
   }
 
   private fun onSwapEdge() {
@@ -386,10 +398,14 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   override fun drag(from: PointF, to: PointF, durationMs: Long, onFinished: (Boolean) -> Unit) {
     val slop = ViewConfiguration.get(this).scaledTouchSlop * SLOP_MULTIPLE
     val away = if (to.x >= from.x) slop.toFloat() else -slop.toFloat()
+    val start = onScreen(from)
+    val detour = onScreen(PointF(from.x + away, from.y))
+    val end = onScreen(to)
+    clearThePadFor(start)
     val path = Path().apply {
-      moveTo(from.x, from.y)
-      lineTo(from.x + away, from.y)
-      lineTo(to.x, to.y)
+      moveTo(start.x, start.y)
+      lineTo(detour.x, detour.y)
+      lineTo(end.x, end.y)
     }
     dispatch(GestureDescription.StrokeDescription(path, 0, durationMs), onFinished)
   }
@@ -407,10 +423,13 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     holdMs: Long,
     onFinished: (Boolean) -> Unit,
   ) {
+    val start = onScreen(from)
+    val end = onScreen(to)
+    clearThePadFor(start)
     val move = GestureDescription.StrokeDescription(
       Path().apply {
-        moveTo(from.x, from.y)
-        lineTo(to.x, to.y)
+        moveTo(start.x, start.y)
+        lineTo(end.x, end.y)
       },
       0,
       dragMs,
@@ -421,7 +440,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
         onFinished(false)
         return@dispatch
       }
-      val hold = move.continueStroke(Path().apply { moveTo(to.x, to.y) }, 0, holdMs, false)
+      val hold = move.continueStroke(Path().apply { moveTo(end.x, end.y) }, 0, holdMs, false)
       dispatch(hold, onFinished)
     }
   }
@@ -436,6 +455,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     // (measured, the held-pointer fix). So start clean rather than inheriting a pointer the app has stopped
     // following.
     if (heldPointer.isHeld) heldPointer.releaseNow()
+    clearThePadFor(onScreen(from))
     heldPointer.grab(from, to, detourBack, onGrabbed)
   }
 
@@ -448,6 +468,21 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   override fun screenWidth(): Int = resources.displayMetrics.widthPixels
 
   override fun screenHeight(): Int = resources.displayMetrics.heightPixels
+
+  /**
+   * [point], moved onto the screen if it lies off it.
+   *
+   * Every point a stroke visits goes through here, because `StrokeDescription` THROWS on a path
+   * whose bounds are negative, and the throw kills the process: the pad vanishes mid-press and the
+   * system restarts the service a second later. Measured 2026-09-24 on the rig, a walk-back whose
+   * reach escalated leftward from a handle at x 84 aimed its seventh try below 0. A slop detour
+   * near the left edge goes negative on its own. The callers stop escalating at the edge; this is
+   * the floor under all of them, so no caller's arithmetic can take the service down.
+   */
+  private fun onScreen(point: PointF) = PointF(
+    point.x.coerceIn(0f, (screenWidth() - 1).toFloat()),
+    point.y.coerceIn(0f, (screenHeight() - 1).toFloat()),
+  )
 
   /**
    * `onCompleted` means the strokes were played, NOT that the target app did anything with them, and
