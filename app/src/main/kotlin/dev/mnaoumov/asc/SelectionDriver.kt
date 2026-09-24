@@ -824,7 +824,8 @@ class SelectionDriver(
             // across one). That is a boundary learned by the `char →` button, which is exactly the
             // kind this set used to miss because only `word →` was thought to teach it anything.
             // Unless the grab changed row, where a grow is character-granular: see [changeRowThenGrow].
-            if (to.y == handle.y) recordBoundary(before, after, command)
+            // Nor when it crossed a node, where it lands wherever the finger was.
+            if (to.y == handle.y) recordBoundary(before, after, command, crossedByCharacterStep = true)
             locator.rememberAnchor(handle.x - reach.coerceAtLeast(0f))
             heldCorrect(targetOffset(before, after, command, start), start, command, onDone)
           }
@@ -1263,8 +1264,8 @@ class SelectionDriver(
     val crossed = after != null && before.source != null && after.source != null && before.source != after.source
     val moved = if (after == null) 0 else grownBy(current, after.movingOffset())
     when {
-      // Into the next node: a grow only crosses by snapping, so this is the word step, and
-      // [recordBoundary]'s crossing rule believes it.
+      // Into the next node: taken as the word step, and recorded only if [recordBoundary] reads it
+      // as a snap from a known boundary.
       after != null && crossed -> {
         recordBoundary(before, after, command)
         releaseThenReport(origin, after.movingOffset(), onDone)
@@ -1785,7 +1786,8 @@ class SelectionDriver(
           after.isEmpty() -> onDone(Outcome.HandleLost)
           else -> {
             // A sweep that grew landed where the app snapped it, same as any other grow. It will
-            // usually have crossed into another node, which [recordBoundary] handles by re-keying.
+            // usually have crossed into another node, which [recordBoundary] handles by re-keying,
+            // and records only from a known boundary like any other grow.
             recordBoundary(before, after, command)
             onDone(Outcome.Moved(before.movingOffset(), after.movingOffset()))
           }
@@ -1867,8 +1869,18 @@ class SelectionDriver(
    * **It must have grown by more than one character.** A plain `TextView` grows by character from
    * inside a word, so a one-character grow there proves nothing at all; on a snapping
    * target it means a word one character wide, which the set can afford to miss. Across a node
-   * change the comparison is meaningless — the offsets are in different frames — and the grow is
-   * believed, because a grow that crossed a node did so by snapping.
+   * change the offsets are in different frames, so the distance is counted across the seam
+   * ([grownAcrossSeam]); where a length is unknown nothing is recorded.
+   *
+   * **A crossing is held to the same tests.** It used to be believed outright, on the theory that a
+   * grow only crosses a node by snapping. A held `char →` crosses by following the finger: measured
+   * 2026-09-24 on `ERR_INVALID_URL`, from `9..15` of `"chrome://terms/"` the grab landed on `0..2`,
+   * inside `might`, and 2 went into the set before the correction walked the edge back to 1.
+   *
+   * **A character step that crossed records nothing at all**, from a known boundary or not. Its
+   * landing across the seam is where the finger was: from `9..14`, `14` seeded by the long-press, the
+   * same `char →` landed on `0..2` again, three characters on and still mid-`might`. So no distance
+   * test tells an overshoot from a snap there. [crossedByCharacterStep] marks such a landing.
    *
    * **And it must have STARTED on a known boundary.** The platform snaps a grow only while
    * `mInWord` is false, i.e. only from a boundary; from inside a word it follows the finger one
@@ -1880,6 +1892,7 @@ class SelectionDriver(
     before: SelectionObserver.Snapshot,
     after: SelectionObserver.Snapshot,
     command: PadCommand,
+    crossedByCharacterStep: Boolean = false,
   ) {
     if (!growsSelection(command)) return
     // Asked before the re-key below, which clears the set when the node changes.
@@ -1894,19 +1907,44 @@ class SelectionDriver(
      * emptiest.
      */
     syncBoundaryContext(after)
-    val crossed = before.source != null && after.source != null && before.source != after.source
-    if (crossed) {
-      knownBoundaries += after.movingOffset()
-      return
+    val grown = if (crossedNodes(before, after)) {
+      if (crossedByCharacterStep) {
+        Diag.log("  not recording ${after.movingOffset()}: a character step crossed a node, so it landed where the finger was")
+        return
+      }
+      grownAcrossSeam(before, after, command) ?: run {
+        Diag.log("  not recording ${after.movingOffset()}: it crossed a node of unknown length")
+        return
+      }
+    } else {
+      grownBy(before.movingOffset(), after.movingOffset())
     }
     if (!fromKnownBoundary) {
-      if (grownBy(before.movingOffset(), after.movingOffset()) > 1) {
+      if (grown > 1) {
         Diag.log("  not recording ${after.movingOffset()}: the grow started at ${before.movingOffset()}, not on a known boundary")
       }
       return
     }
-    if (grownBy(before.movingOffset(), after.movingOffset()) <= 1) return
+    if (grown <= 1) return
     knownBoundaries += after.movingOffset()
+  }
+
+  /**
+   * How many characters a grow that crossed from [before]'s node into [after]'s travelled, assuming
+   * the two nodes are adjacent — the same assumption as [crossedTarget]. Null when either length is
+   * unknown, since the seam cannot then be placed.
+   */
+  private fun grownAcrossSeam(
+    before: SelectionObserver.Snapshot,
+    after: SelectionObserver.Snapshot,
+    command: PadCommand,
+  ): Int? {
+    if (before.sourceLength < 0 || after.sourceLength < 0) return null
+    return if (command.toRight) {
+      before.sourceLength - before.movingOffset() + after.movingOffset()
+    } else {
+      before.movingOffset() + after.sourceLength - after.movingOffset()
+    }
   }
 
   /**
