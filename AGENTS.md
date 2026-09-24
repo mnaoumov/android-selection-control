@@ -680,6 +680,16 @@ kept. That is the ordering `recordBoundary` exists for: it re-keys before it add
  node and its offsets are unchanged, so keeping the set is the right answer. The earlier plan
  expected a clear here, and that expectation was wrong.
 
+**A crossing is held to the same tests as a grow inside one node, and a CHARACTER step's crossing is
+never recorded.** `recordBoundary` used to believe any landing across a node outright, on the theory
+that a grow only crosses by snapping. A held `char →` crosses where the finger is. Measured 2026-09-24,
+Chrome force-stopped: from `9..15` of `"chrome://terms/"` the grab landed on `0..2`, inside `might`,
+and the next press read `boundaries=[2]`. From `9..14`, with 14 seeded by the long-press, it landed on
+`0..2` too, three characters on, so no distance test separates it from a snap. After the change,
+three presses of three log `not recording 2: a character step crossed a node` and the set stays
+empty. The other crossings now need a known origin and a grow of more than one character, counted
+across the seam (`grownAcrossSeam`). The `word →` from `terms` above still records 1.
+
 **A grow snaps only when it STARTS on a word boundary, so a landing counts as a boundary only when
 the grow started on one the set already knows.** `SelectionHandleView.updatePosition` snaps only
 while `mInWord` is false, and `mInWord` is recomputed from the handle's own offset. From inside a word
