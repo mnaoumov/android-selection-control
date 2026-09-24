@@ -219,6 +219,35 @@ looking. Every held exit now lifts, settles and reports the offset that survived
 changing: `madeProgress` already treats an unchanged offset as no progress and stops a repeat run,
 and the status line already says "didn't move".
 
+**A `TextView` snaps a grow that starts on a word boundary, and the grab can land BACKWARDS. The
+platform's source says why.** The framework source is on this machine
+(`%LOCALAPPDATA%\Android\Sdk\sources\android-36.1\android\widget\Editor.java`), and
+`SelectionHandleView.updatePosition` holds three rules. Every one of them was then seen on the rig
+(2026-09-24, `alpha bravo charlie delta echo`):
+
+- **The word snap.** Growing from a boundary, the handle keeps its previous offset until the finger
+ passes the MIDDLE of the word it is entering, and then it jumps to that word's END. From inside a
+ word it moves one character at a time. So `char →` from the end of `bravo` (11) announces nothing
+ for any reach short of half of `charlie`, and then lands on 19. Getting to 12 means overshooting to
+ 19 and shrinking back, because shrinking is always character-granular.
+- **The first move event is always read as a shrink.** `mPrevX` is unset at touch-down, so the
+ first move has `xDiff == 0`, is not "expanding", and goes through the shrinking branch at the
+ finger's offset. The held grab also detours 60 px outward (`SLOP_DETOUR_PX`), which is about half
+ a word, so where a grab lands depends on how the move events happen to be sampled. Measured
+ landings for a one-character `char →`: 11 -> 12, nothing, 9 or 10; and 12 -> 13, nothing, 19 or
+ 11. The backwards ones are the whole of the old "moves the edge BACKWARDS" defect. The START edge
+ does the mirror image (5 -> 8 on a `char ←`).
+- **The touch-up filter.** On lift, an offset that changed in the last 150 ms is reverted to the
+ one before it, if that one had held for 350 ms. This is the lift-time snap-back recorded above.
+
+The pad now treats a landing that is not past the press's origin as not yet a step: it escalates,
+pushing a held pointer through the snap (`heldSnapThrough`). Any walk-back of more than one
+character is done released, because a held shrink out of a snap overshot three times in three
+while the released one with the same reach was exact. That walk-back is sized by the measured
+glyphs of the whole run (`HandleLocator.characterWidths`), not by one glyph times a count. Over 24
+`char →` presses from `bravo` every one landed exactly one character on. About one press in five
+still pays for the snap: 1.3–4.6 s and up to seven gestures, against 0.7–1 s and one gesture.
+
 **The first travel aims at exactly ONE character, in both directions** — not at the released path's
 [`CHARS_PER_ATTEMPT`] overshoot and not backed off by `BOUNDARY_BIAS`. Both deviations were measured
 and both cost accuracy: 1.5 characters lands on +2 wherever growing is character-granular, and
