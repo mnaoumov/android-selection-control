@@ -12,10 +12,14 @@ the moving edge is" that both edges now share). Read the gesture spike for the m
 does, and the held-pointer fix for everything a continued stroke will and will not tolerate.
 
 Open work is split by shape, one item each in that same store, and named there rather than here:
-driving the page / start / end buttons to completion; a handle inside a wrapped node; Play
-distribution, which ECM makes mandatory rather than optional; and verifying the boundary rework below
-on a device, which the sitting that wrote it had none for. The test rig is now a repo asset — see
-*The test rig* below.
+driving the page / start / end buttons to completion; locating a handle that the aimed-at drop misses,
+and a handle inside a wrapped node; Play distribution, which ECM makes mandatory rather than optional;
+and the one boundary claim a node crossing is needed to measure. The test rig is now a repo asset —
+see *The test rig* below.
+
+The boundary rework itself was measured on the rig on 2026-09-23: the long-press seed, the retrace and
+both halves of the no-poisoning guard all hold, and the `word ←`-collapses-onto-the-anchor claim that
+sat in this file unmeasured turned out to be false. All of it is under *Gotchas* below.
 
 Nothing about this project's plan lives here — this file is build/run mechanics only.
 
@@ -89,6 +93,14 @@ treat an advertised action, or a `true` return, as evidence that anything happen
 returns `true` with a correctly-sized array in which every `RectF` is just the whole node's bounds. The
 control: on Chrome's own editable omnibox it returns real per-character rects. Never *rely* on it for
 non-editable text.
+
+**Asked for ONE character at a known index, it lies too — so there is no narrower ask left to try.**
+That was the open question: the original measurement covered the whole node, which leaves room for the
+hope that a single index is cheaper for the platform to answer honestly. Measured 2026-09-23 on the rig
+against a 15-character Chrome inline node, `HandleLocator`'s rung asked for the character at the moving
+offset, got the node's own box back, detected it and fell through:
+`locate: per-character rects are the node's own bounds here — the platform is not answering`. What
+remains untried is descending the node tree for a finer child that hugs its own text.
 
 **But the lie is DETECTABLE, which is a different thing from useless.** A rectangle that is both as wide
 and as tall as the node it came from is the node's bounds repeated, and a rectangle that is genuinely one
@@ -398,11 +410,81 @@ replaces BOTH edges, while a handle drag moves one and leaves the anchor. That i
 free boundaries be harvested, and it fails safe: an unrecognised long-press seeds nothing, which is
 the old behaviour.
 
-**`word ←` onto the anchor collapses the selection, and that is correct.** A one-word selection's only
-boundary in the shrinking direction is its own anchor, so the first `word ←` after a long-press moves
-the end onto the start — exactly what `Ctrl+Shift+Left` does on a desktop. The target app then
-dismisses its handles and toolbar, so the pad goes blind and the user must long-press again; a char
-step from a one-character selection has always done the same.
+**All three of those claims are now measured, not reasoned** (2026-09-23, the rig, against the debug
+target's `alpha bravo charlie delta echo` whose boundaries are 5, 11, 19 and 25, so every expected
+number was known before the press):
+
+- **The seed.** A long-press on "charlie" logged `seeded from a fresh selection at 12..19:
+ boundaries=[12, 19]` — its two boundaries exactly, once, and never again across the thirteen pad
+ presses that followed. The fail-safe half showed itself by accident: long-pressing the *same* word a
+ second time seeded nothing, because reproducing both edges is indistinguishable from a no-op.
+- **The retrace.** Three `char →` (19 → 20 → 21 → 22, one gesture each), then one `⇤ word`:
+ `shrink 1: 22 -> target 19, lose 3` and `Moved(fromOffset=22, toOffset=19) in 399ms, 1 gesture(s)`.
+ One gesture, straight to the boundary. `no known word boundary yet` appeared nowhere in the sitting.
+- **No poisoning, in both directions.** `boundaries=[12, 19]` on every press line of the run and
+ nothing else, ever. Four `char ←` landed on 18, 17, 16, 15 and added none of them; a `⇤ word` from
+ 15 then targeted **12**, not one of those four landings, which is the whole point. The two
+ directions are caught by different halves of `recordBoundary` — `char →` by the "moved more than one
+ character" test, `char ←` on the END edge by `growsSelection` — and both were exercised.
+
+What is still unmeasured is the fourth claim: that a boundary learned in a node a grow has just
+crossed into survives the next press. It needs a node crossing, which needs a target the app can
+actually drive, which is the `HANDLE_DROP` gotcha below.
+
+**`word ←` onto the anchor does NOT collapse the selection — a dragged handle has a one-character
+floor.** This paragraph used to claim the opposite, reasoned from the desktop's `Ctrl+Shift+Left` and
+never measured. Measured 2026-09-23 on the rig, three times from two different starting selections,
+identical every time: the retrace picks the anchor correctly, the first drag gets to within one
+character of it, and every gesture after that accomplishes nothing while the reach escalates.
+
+```
+WORD_LEFT edge=END at 12..19 moving=19 srcLen=30 oneLine=true boundaries=[12, 19]
+ shrink 1: 19 -> target 12, lose 7 x 19.0px, reach=-126.35 -> 12..13
+ shrink 2: 13 -> target 12, lose 1 x 19.0px, reach=-22.8 -> nothing
+ shrink 3..8: identical, reach escalating -33.25 -> -85.5 -> nothing
+WORD_LEFT -> Moved(fromOffset=19, toOffset=13) in 3648ms, 8 gesture(s)
+```
+
+**The control is what makes it the platform's floor rather than the retrace's arithmetic**: a plain
+`char ←` from that same one-character selection also moves nothing and reports `HandleLost` in 627 ms.
+So the other half of the old claim — "a char step from a one-character selection has always done the
+same" — is false in the same direction. The target app keeps the last character selected and its
+handles up; nothing goes blind, and the pad says `moved 19 → 13`, which is honest.
+
+Two consequences worth knowing before reading a log: seven of those eight gestures are spent
+discovering a floor that is already known, which is most of a 3.6 s press; and the run ends with the
+selection one character wide rather than empty, so the next command starts from 12..13 and not from a
+caret.
+
+**`HANDLE_DROP` is 57 px, the real drop is about 28, and a `TextView` hides it while Chrome does not.**
+`HandleLocator` aims at the source node's `bounds.bottom + HANDLE_DROP`; the constant is documented in
+the source as a measurement taken on the owner's handset. Measured 2026-09-23 on the rig by scanning a
+live selection's own handle colour out of a screenshot — a diagnosis, never something to aim at:
+
+| target | node bottom | end handle | centre | real drop | aimed at | outcome |
+|---|---|---|---|---|---|---|
+| `TextView` (debug target), 320 dpi | 545 | y 545..588 | 566 | 21 px | 602 | grabbed, every step exact |
+| Chrome page content, 320 dpi | 767 | y 774..817, x 218..261 | 794 | 27 px | 824 | `HandleLost`, selection destroyed |
+| Chrome page content, 480 dpi | 1151 | y ~1155..1205 | ~1180 | 29 px | 1208 | `HandleLost` |
+
+So the aim is ~30 px low on both and lands **outside** a ~25 px-radius circle. The `TextView` case is
+further out still and works anyway, because the platform's own `HandleView` extends its touch region
+well past the drawn circle; Chrome's composited handle does not, and a touch that misses lands on the
+page, which collapses the selection. **`HandleLost` on page content is therefore not evidence about
+the node, the row or the rung — it is this constant.**
+
+**Proved by driving the handle by hand at its measured centre.** With a Chrome selection at 4..11, an
+`input swipe 238 794 -> 280 794` moved the end edge to the node's own end, which the app's next press
+reported itself as `edge=END at 4..15`. The app's own press from that same state, aiming 30 px lower,
+lost the handle again.
+
+**It is not un-scaled density, which was the obvious guess and is wrong.** Taken to `wm size 1080x2280`
+/ `wm density 480` — the handset's geometry class, where the 57 px was measured — the drop went 27 px
+to 29 px, i.e. near-constant in raw pixels while the handle itself grew. A density scale factor would
+not fix it; the drop has to come from the handle's actual position.
+
+**And no new fixture gets round it.** Every multi-node target draws Chrome's compositor handles, a
+`WebView` in the debug app included, so anything built to exercise node-crossing hits this first.
 
 ## The no-INTERNET property
 
@@ -530,6 +612,35 @@ expected result is a number rather than a guess, and it cannot reach a release b
 must stay `WRAP_CONTENT`: left at `MATCH_PARENT` a 30-character node reported itself 1208 px wide,
 every derived handle landed hundreds of pixels right of the real one, and every press failed — which
 read exactly like a gesture problem and was a fixture problem.
+
+**What it cannot express: a node crossing.** Each block is one `TextView`, so it is one accessibility
+node, and a selection never leaves the view it started in. Anything about a grow carrying the moving
+edge into the next node needs a target with an inline node tree.
+
+### A multi-node target on the guest, with no network
+
+This AVD has Chrome (`com.android.chrome`) and the guest has no usable network, which sounds like the
+end of it. It is not: **`chrome://terms` is refused, and Chrome's own `ERR_INVALID_URL` page is three
+adjacent inline nodes on one paragraph** — local, offline, identical every time, and reported
+individually by `uiautomator dump` once the service is bound:
+
+```
+[48,731][258,767] "The webpage at " (15 chars)
+[256,731][466,767] "chrome://terms/" (15 chars)
+[48,731][584,863] " might be temporarily down or..." (wraps)
+```
+
+Two practical notes for driving it:
+
+- **Chrome's first run cannot be clicked through while the pad is up.** The pad's window covers the
+ bottom of the screen, which is exactly where the sign-in and notification prompts put their buttons,
+ and it swallows every injected tap there. Empty
+ `settings put secure enabled_accessibility_services '""'` first, finish the first run, then
+ `rig.ps1 rebind`.
+- **Aim by the node tree, not by the screenshot**, the same discipline the app's own logged rectangles
+ buy elsewhere: `uiautomator dump` gives each inline node's bounds, and the character pitch across a
+ node whose box hugs its text is `width / text.length`. `chrome://` URLs are rejected from an intent,
+ so the address is typed — `input tap` the omnibox, `input text`, `keyevent 66`.
 
 ## Build
 
