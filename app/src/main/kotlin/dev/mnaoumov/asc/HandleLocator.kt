@@ -502,6 +502,13 @@ class HandleLocator(private val density: () -> Float) {
   /**
    * The floating toolbar's rectangle, for anything that needs more than its centre — masking it, in
    * particular. Same identification, so the two can never disagree about which window it is.
+   *
+   * **A window counts only when something in it can be pressed.** A `TextView` puts each selection
+   * handle in a `PopupWindow` of its own, an 88x80 window centred on the handle on the rig, and that is
+   * smaller than the toolbar. Picking the smallest non-full-screen window therefore took the handle
+   * for the toolbar, and every step on a `TextView` ended `HandleCovered` with nothing touched. The
+   * handle is a bare `View`, clickable nowhere; the toolbar is a row of buttons. Chrome draws its
+   * handles inside the page, so there the toolbar was already the only candidate.
    */
   fun toolbarBounds(
     windows: List<AccessibilityWindowInfo>,
@@ -511,10 +518,28 @@ class HandleLocator(private val density: () -> Float) {
     if (packageName == null) return null
     return windows
       .asSequence()
-      .filter { it.root?.packageName?.toString() == packageName }
-      .map { window -> Rect().also { window.getBoundsInScreen(it) } }
-      .filter { it.width() > 0 && it.width() < FULL_SCREEN_FRACTION * screenWidth }
+      .mapNotNull { window ->
+        val root = window.root ?: return@mapNotNull null
+        if (root.packageName?.toString() != packageName) return@mapNotNull null
+        val bounds = Rect().also { window.getBoundsInScreen(it) }
+        if (bounds.width() <= 0 || bounds.width() >= FULL_SCREEN_FRACTION * screenWidth) return@mapNotNull null
+        if (!hasClickableNode(root)) return@mapNotNull null
+        bounds
+      }
       .minByOrNull { it.width().toLong() * it.height() }
+  }
+
+  /** Whether [root] or anything under it is clickable, looking at no more than [TOOLBAR_NODE_BUDGET] nodes. */
+  private fun hasClickableNode(root: AccessibilityNodeInfo): Boolean {
+    val pending = ArrayDeque<AccessibilityNodeInfo>().apply { add(root) }
+    var visited = 0
+    while (pending.isNotEmpty() && visited < TOOLBAR_NODE_BUDGET) {
+      val node = pending.removeFirst()
+      visited++
+      if (node.isClickable) return true
+      for (i in 0 until node.childCount) node.getChild(i)?.let(pending::add)
+    }
+    return false
   }
 
   /**
@@ -633,5 +658,8 @@ class HandleLocator(private val density: () -> Float) {
     const val SCAN_MAX_PROBES = 6
 
     private const val FULL_SCREEN_FRACTION = 0.98f
+
+    /** A toolbar is a handful of buttons; a window with more nodes than this is not one worth walking. */
+    private const val TOOLBAR_NODE_BUDGET = 64
   }
 }
