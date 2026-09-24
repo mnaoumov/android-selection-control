@@ -17,7 +17,7 @@ and Play distribution, which ECM makes mandatory rather than optional. The test 
 
 A handle inside a **wrapped** node was on that list and is no longer: the row it needs comes from the
 platform's own per-character rectangle, which Chrome does supply for page content once the node has
-been asked twice. The gotcha that said otherwise had stood since the first spike and was the costliest
+been asked twice, for every character except the space a line wraps at (read from its neighbour). The gotcha that said otherwise had stood since the first spike and was the costliest
 thing in this file; it is rewritten under *Gotchas*, with the measurement.
 
 The boundary rework itself was measured on the rig on 2026-09-23: the long-press seed, the retrace and
@@ -139,6 +139,29 @@ pays one IPC rather than two, and the first version cached the refusal too. That
 the second press on an unchanged selection returned the memo without asking, so the answer Chrome was by
 then ready to give could never arrive, and the whole thing read as a permanent refusal. Only a successful
 answer is cached now.
+
+**A third trap: the whitespace a line WRAPS at has no box, and Chrome answers for it with the node's
+own bounds however often it is asked.** Loaded or not, that one index never becomes honest, and a word
+grow parks the end edge on exactly that index whenever the word ends a line. Measured 2026-09-24 on the
+rig against one 259-character, seven-line paragraph (a plain `<p>` served over `adb reverse`), Chrome
+force-stopped before each run, the primer's ask plus two presses 3 s apart:
+
+| selection | the index asked | answered? |
+|---|---|---|
+| `reader`, line 1 | 12, a space inside the line | yes, on the second ask |
+| `selecting`, line 2 | 53, a space inside the line | yes, on the second ask |
+| `missing`, line 7 | 243, a space inside the line | yes, on the second ask |
+| `phrase`, end of line 2 | 62, the space line 2 wraps at | **never** |
+
+The same refusal came back for the paragraph cut to 80 and to 160 characters, as a bare `<div>`, as
+bare body text, and as a text run beside an `<em>`, so length and structure are ruled out. The
+`ERR_INVALID_URL` control answered on the second ask in the same sitting. The caret has a character on
+each side, so `characterGeometry` now asks the other one when the first is refused. For offset 62 that
+is index 61, read from its right edge. The press then logs
+`index 62 has no box of its own — the caret was read from 61` and aims at the handle Chrome actually
+draws: (602, 1075) against a handle drawn at about (605, 1075). **What that does not fix is the step:**
+a rightward reach from the end of a line stays on that row and never enters the next line's first word,
+so the press still ends `HandleLost`, with the selection intact.
 
 **The lie is DETECTABLE, and that is what makes the priming safe.** A rectangle that is both as wide and
 as tall as the node it came from is the node's bounds repeated, and a rectangle that is genuinely one
@@ -778,6 +801,14 @@ address."`, is 81 characters over three lines at `[48,731][584,863]`. Long-press
 `(300, 845)` and the selection lands at offsets 65..68. `chrome://version` gives several more — the
 `useragent` row is 110 characters over eight lines — and the two pages together are how the
 character-rect priming above was measured.
+
+**A page of your own is served from the host, not typed as a `data:` URL.** An `am start` of a
+`data:` URI is refused ("unable to resolve Intent"), and one typed into the omnibox with `input text`
+came back as a Google search twice (2026-09-24). What works: a PowerShell `HttpListener` on
+`http://127.0.0.1:<port>/` on the host, `adb -s emulator-5570 reverse tcp:<port> tcp:<port>`, and an
+`am start -a android.intent.action.VIEW -d http://127.0.0.1:<port>/page.html -p com.android.chrome`.
+The guest has no network, but a reversed port is not network. **Keep the text away from the top of
+the page**: a selection near the top gets its floating toolbar BELOW it, on top of the handle.
 
 **Force-stop Chrome between runs of that measurement.** Inline text boxes, once loaded for a node,
 stay loaded, so a second run against a warm Chrome is answered honestly on the FIRST ask and proves

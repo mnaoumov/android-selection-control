@@ -157,6 +157,44 @@ class HandleLocator(private val density: () -> Float) {
     val index = (if (previous) offset - 1 else offset).coerceIn(0, length - 1)
     val caretIsRightEdge = previous
 
+    /*
+     * The caret has a character on each side, and either one's rectangle places it: the left edge of
+     * the one after, the right edge of the one before. So a refusal of the one asked for is not yet a
+     * refusal of the caret, and the other side is asked before giving up.
+     *
+     * That is not symmetry for its own sake. A whitespace character that a line WRAPS at has no box
+     * on any line, and Chrome answers for it with the node's own bounds for as long as it is asked,
+     * while the characters either side of it answer honestly. Measured 2026-09-24 on one 259-character
+     * seven-line paragraph, loaded and asked again: offsets 12, 53 and 243, each followed by a space
+     * inside a line, were answered, and offset 62, followed by the space line 2 wraps at, was refused
+     * on every ask, and that is exactly where a word grow parks the end edge. Its width then
+     * describes the neighbour rather than the character crossed, which is the right proxy: a wrap's
+     * space has no width of its own to cross.
+     */
+    val other = if (caretIsRightEdge) offset.takeIf { it < length } else (offset - 1).takeIf { it >= 0 }
+    var rect = characterRect(source, bounds, index)
+    var caretFromRight = caretIsRightEdge
+    if (rect == null && other != null) {
+      rect = characterRect(source, bounds, other)
+      caretFromRight = !caretIsRightEdge
+      if (rect != null) Diag.log("  locate: index $index has no box of its own — the caret was read from $other")
+    }
+    if (rect == null) {
+      Diag.log("  locate: per-character rects are the node's own bounds here — the platform is not answering")
+      return null
+    }
+
+    memoKey = key
+    memoValue = CharacterGeometry(
+      caretX = if (caretFromRight) rect.right else rect.left,
+      lineBottom = rect.bottom,
+      characterWidth = rect.width(),
+    )
+    return memoValue
+  }
+
+  /** One character's rectangle as the platform measures it, or null where it declines or lies. */
+  private fun characterRect(source: AccessibilityNodeInfo, bounds: Rect, index: Int): RectF? {
     val args = Bundle().apply {
       putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX, index)
       putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_LENGTH, 1)
@@ -179,18 +217,8 @@ class HandleLocator(private val density: () -> Float) {
     // The lie. A single character is never the width AND the height of the box that holds it; a
     // wrapped node's box is several lines tall and a one-line node's is many characters wide, so
     // either comparison alone would also reject an honest rect on a one-character node.
-    if (rect.width() >= bounds.width() - LIE_TOLERANCE && rect.height() >= bounds.height() - LIE_TOLERANCE) {
-      Diag.log("  locate: per-character rects are the node's own bounds here — the platform is not answering")
-      return null
-    }
-
-    memoKey = key
-    memoValue = CharacterGeometry(
-      caretX = if (caretIsRightEdge) rect.right else rect.left,
-      lineBottom = rect.bottom,
-      characterWidth = rect.width(),
-    )
-    return memoValue
+    if (rect.width() >= bounds.width() - LIE_TOLERANCE && rect.height() >= bounds.height() - LIE_TOLERANCE) return null
+    return rect
   }
 
   /**
