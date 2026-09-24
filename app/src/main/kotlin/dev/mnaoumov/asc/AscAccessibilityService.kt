@@ -429,13 +429,13 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
    * The held route (the held-pointer fix). The grab travels past the touch slop for the same reason [drag] does — a
    * miss that reads as a tap navigates — and [HeldPointer] adds the detour itself.
    */
-  override fun grabAndHold(from: PointF, to: PointF, onGrabbed: (Boolean) -> Unit) {
+  override fun grabAndHold(from: PointF, to: PointF, detourBack: Boolean, onGrabbed: (Boolean) -> Unit) {
     // A chain from a previous press cannot be reused: the press itself is a real touch, and a real
     // touch ends the target app's tracking of the handle even though the chain survives it
     // (measured, the held-pointer fix). So start clean rather than inheriting a pointer the app has stopped
     // following.
     if (heldPointer.isHeld) heldPointer.releaseNow()
-    heldPointer.grab(from, to, onGrabbed)
+    heldPointer.grab(from, to, detourBack, onGrabbed)
   }
 
   override fun moveHeld(to: PointF): Boolean = heldPointer.moveTo(to)
