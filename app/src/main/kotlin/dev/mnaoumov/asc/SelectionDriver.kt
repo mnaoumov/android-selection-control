@@ -941,12 +941,38 @@ class SelectionDriver(
             // Still silent on a GROWING correction: that is the target app's word snap, not a
             // late announcement. See [heldSnapThrough].
             toLose < 0 -> heldSnapThrough(target, origin, command, onDone, guard + 1)
-            else -> releaseThenReport(origin, current, onDone)
+            else -> releaseThenWalkBack(target, command, origin, onDone)
           }
         }
         return@awaitChange
       }
       heldCorrect(target, origin, command, onDone, guard + 1)
+    }
+  }
+
+  /**
+   * A held SHRINK that is still silent after the wait: lift, let the app settle, and finish on the
+   * released [walkBackTo].
+   *
+   * Chrome ignores a short held shrink. Measured 2026-09-24 on the rig, on a served one-line
+   * `Chrome is made by Google` at 32 px: held corrections of -11.7 px (12 -> 11, back across an
+   * 18 px `a`) and -5.2 px (8 -> 7, back across an 8 px `i`) announced nothing, even after the wait.
+   * A -19.5 px correction in the same run moved. Releasing there left the press two characters
+   * on, as `Moved(10, 12)`. The released walk-back re-locates the handle from the announced offset,
+   * and it is exact on a one-character shrink.
+   *
+   * The wait before [walkBackTo] matters. The lift can be revised, and a revision that arrived in
+   * the middle of the walk-back's own drag would read as that drag's answer.
+   */
+  private fun releaseThenWalkBack(target: Int, command: PadCommand, origin: Int, onDone: (Outcome) -> Unit) {
+    Diag.log("  held: the shrink to $target was ignored — lifting to walk back released")
+    gestures.releaseHeld {
+      val atLift = observer.latest
+      if (atLift == null) {
+        walkBackTo(target, command, origin, onDone)
+        return@releaseHeld
+      }
+      awaitQuiet(atLift, 0, onResult = { walkBackTo(target, command, origin, onDone) })
     }
   }
 

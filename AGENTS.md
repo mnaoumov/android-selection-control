@@ -300,6 +300,21 @@ debug target's `TextView` left 16 of 16 presses exact, so `pullBackThenRelease` 
 surface. The distance is not the point, only which way the pointer last moved, so it is the smallest
 move there is.
 
+**Chrome ignores a SHORT held shrink, so a silent one-character held correction lifts and walks back
+released.** Measured 2026-09-24 on the rig, on a served one-line `Chrome is made by Google` at 32 px:
+held corrections of -11.7 px (12 -> 11, back over an 18 px `a`), -5.2 px (8 -> 7, over an 8 px `i`)
+and -6.5 px (18 -> 17, over a 10 px glyph) announced nothing, even after the wait. A -19.5 px one in
+the same run moved. The press used to release on the overshoot and report `Moved(10, 12)`. Now
+`releaseThenWalkBack` lifts, settles and hands over to `walkBackTo`. After the change, 36 of 36 Chrome
+`char` presses over three lines moved exactly one character, four of them this way, at 1.4–1.6 s
+and 3 gestures against ~0.8 s and 1.
+
+Why the grab overshot to +2 in the first place: a one-line node's handle is still INTERPOLATED by the
+node's average character (`HandleLocator.locate`'s first branch), while the reach is a measured glyph.
+The grabs on that line sat exactly 16 px apart per offset (146, 162, … 258), across glyphs measured
+from 8 to 30 px. So the grab point is some pixels off the real handle, and a whole-glyph reach from
+there can pass the middle of the next glyph.
+
 A second +2 sat beside it: the held first travel was floored at `STEP_PX` = 12 even when the glyph
 had been measured, so the 8 px `i` and `l` of `oil` were overshot, 6 -> 8, and a held correction
 back to 7 announced nothing. That floor is gone; `pixelsPerCharacter` already bounds its answer.
