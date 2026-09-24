@@ -581,12 +581,14 @@ and `blocks` read those lines back. Computing a coordinate from a picture instea
 missed the pad by 11 px, landed on the page, and was written down as "gestures pass through the
 overlay" — which is the opposite of the truth and cost a whole round of measurement.
 
-**`buttons` and `blocks` can answer "(none logged)" about lines that are demonstrably in the log.**
-They read it with `logcat -s ASC:I -d -t <n>`, and `-t` takes the last *n* lines of the WHOLE buffer
+**Never read the app's log with `logcat -t`.** `-t <n>` takes the last *n* lines of the WHOLE buffer
 before the tag filter is applied — so on a chatty guest the app's own lines fall out of the window
 and the answer is empty rather than stale. Measured 2026-09-23: the pad's twelve rectangles sat in
-`logcat -d` at 17:30:31 while `-s ASC:I -d -t 80` returned nothing at 17:31:08. Drop the `-t` and the
-whole tagged buffer comes back. Worth knowing before concluding the pad never came up.
+`logcat -d` at 17:30:31 while `-s ASC:I -d -t 80` returned nothing at 17:31:08, and `buttons` printed
+"(none logged)". The rig's `Get-Log` now reads the whole tagged buffer (`-s ASC:I -d`) and takes any
+tail after the filter; re-checked the same day by flooding the guest with 3000 foreign lines, after
+which `-t 80` found 0 pad lines and `buttons` still listed all twelve. An ad-hoc adb read by hand
+falls into the same hole, so drop the `-t` there too.
 
 ### The AVD
 
