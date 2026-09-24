@@ -95,8 +95,8 @@ $SdkRoot = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { $env:LOCALAPPDATA
 $EmulatorExe = $SdkRoot | Join-Path -ChildPath 'emulator\emulator.exe'
 $AvdHome = $env:USERPROFILE | Join-Path -ChildPath '.android\avd'
 
-# How long to wait for a cold boot. Measured at ~40 s on this machine for this AVD; the ceiling is
-# generous because a machine running several other emulators is a machine where 40 s becomes 90.
+# How long to wait for a cold boot. Measured at ~30 s headless on this machine for this AVD; the
+# ceiling is generous because a machine running several other emulators is where 30 s becomes 90.
 $BootTimeoutSeconds = 240
 
 # --------------------------------------------------------------------------------------------------
@@ -371,14 +371,29 @@ function Start-Rig {
       clean fixture, and this AVD is already configured to cold-boot. The pair keeps every run
       starting from the same state, which is the only reason an expected offset is a number rather
       than a hope.
+
+      -no-window is not a preference either: it is what keeps the guest alive. Windowed, the
+      emulator's Qt UI needs opengl32sw, which it cannot load here; it falls back to system OpenGL,
+      and the guest then wedges under the first real work — the first `adb install` never returns
+      while `adb devices` still lists a healthy device and qemu takes no CPU at all. Its log ends on
+      "Showing crashdialog to get consent.", on a window nobody is looking at, which is why the
+      wedge reads as a hang rather than a crash. `-gpu swiftshader_indirect` alone does not help:
+      it is the window, not the guest renderer, that needs the missing module. Headless it boots in
+      ~30 s and survives installs, rebinds and dozens of presses, and `screencap` works without a
+      window, so `shot` loses nothing.
+
+      -no-metrics keeps a first boot on a fresh machine from stopping on the usage-stats question.
     #>
-    Write-Host -Object "Booting $RigAvdName on port $RigConsolePort ..."
+    Write-Host -Object "Booting $RigAvdName headless on port $RigConsolePort ..."
     Start-Process -FilePath $EmulatorExe -ArgumentList @(
         '-avd', $RigAvdName,
         '-port', "$RigConsolePort",
         '-no-snapshot-save',
-        '-no-boot-anim'
-    ) -WindowStyle Minimized
+        '-no-boot-anim',
+        '-no-window',
+        '-gpu', 'swiftshader_indirect',
+        '-no-metrics'
+    ) -WindowStyle Hidden
 
     if (Wait-RigReady -TimeoutSeconds $BootTimeoutSeconds) {
         Write-Host -Object "$RigSerial is up."
