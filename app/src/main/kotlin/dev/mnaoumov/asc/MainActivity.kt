@@ -55,6 +55,21 @@ class MainActivity : Activity() {
     )
 
     /*
+     * Declining has to be as available as agreeing, or the "consent" is only a speed bump: Play's
+     * prominent-disclosure requirement is an affirmative choice, and a choice needs a second
+     * option. Declining changes nothing — the service stays off because nothing turned it on.
+     */
+    column.addView(
+      Button(this).apply {
+        text = getString(R.string.disclosure_decline)
+        setOnClickListener {
+          Toast.makeText(this@MainActivity, R.string.disclosure_declined, Toast.LENGTH_LONG).show()
+          finish()
+        }
+      }
+    )
+
+    /*
      * The way back from the pad's own close button.
      *
      * Closing the pad hides the overlay and leaves the service connected, so putting it back is a
