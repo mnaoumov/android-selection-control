@@ -185,6 +185,52 @@ class HandleLocator {
   }
 
   /**
+   * The widths of the source node's characters `[from, to)`, as the platform measures them — or null
+   * where it will not, or where the run is longer than [MAX_SPAN] or leaves one line.
+   *
+   * For a step of SEVERAL characters, which one glyph's width times a count cannot size. Measured
+   * 2026-09-24 walking the END edge back from 19 to 13 across `harlie`: one width of 19 px times six
+   * aimed at 107 px where the six real glyphs total much less, and the walk landed on 12 three
+   * times running. The same rectangles [characterGeometry] asks for, just more of them, so the same
+   * standing: indices in, rectangles out, no text read. Bounded because the answer is as long as the
+   * request and some surfaces announce a node of thirteen thousand characters.
+   */
+  fun characterWidths(snapshot: SelectionObserver.Snapshot, from: Int, to: Int): FloatArray? {
+    val source = snapshot.source ?: return null
+    val bounds = snapshot.bounds ?: return null
+    if (from < 0 || to > snapshot.sourceLength || to - from !in 1..MAX_SPAN) return null
+
+    val args = Bundle().apply {
+      putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX, from)
+      putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_LENGTH, to - from)
+    }
+    val refreshed = runCatching {
+      source.refreshWithExtraData(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY, args)
+    }.getOrDefault(false)
+    if (!refreshed) return null
+    val rects = runCatching {
+      source.extras?.getParcelableArray(
+        AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY,
+        RectF::class.java,
+      )
+    }.getOrNull() ?: return null
+    if (rects.size != to - from) return null
+
+    val lineBottom = rects.first()?.bottom ?: return null
+    val widths = FloatArray(rects.size)
+    for ((i, rect) in rects.withIndex()) {
+      // A null entry is a character not laid out; a lie is the node's own box, as in
+      // [characterGeometry]; a different bottom is a wrap, across which widths do not add up to a
+      // horizontal distance.
+      if (rect == null || rect.width() <= 0f) return null
+      if (rect.width() >= bounds.width() - LIE_TOLERANCE && rect.height() >= bounds.height() - LIE_TOLERANCE) return null
+      if (kotlin.math.abs(rect.bottom - lineBottom) > LIE_TOLERANCE) return null
+      widths[i] = rect.width()
+    }
+    return widths
+  }
+
+  /**
    * The moving edge's own line, taken from a **finer node in the tree** — or null where the tree has
    * none to give.
    *
@@ -455,6 +501,9 @@ class HandleLocator {
      * characters and whole lines, so there is nothing in between for a tolerance to arbitrate.
      */
     const val LIE_TOLERANCE = 1f
+
+    /** The longest run [characterWidths] will ask for: a step's worth of characters, never a node's. */
+    const val MAX_SPAN = 64
 
     /** Scanning: the step is the handle's own touch radius; finer only buys duplicate hits. */
     const val SCAN_STEP = 48f

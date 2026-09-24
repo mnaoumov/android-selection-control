@@ -229,12 +229,19 @@ class SelectionDriver(
    * nine-character one needed 108, so a fixed step cannot work and the cap has to exceed the widest
    * word on screen.
    */
-  private fun growOneUnit(command: PadCommand, attempt: Int = 0, onDone: (Outcome) -> Unit) {
+  private fun growOneUnit(
+    command: PadCommand,
+    attempt: Int = 0,
+    // Where the press began, which a retry after a backwards landing has to keep reporting from.
+    first: SelectionObserver.Snapshot? = null,
+    onDone: (Outcome) -> Unit,
+  ) {
     val before = observer.latestWithFreshBounds()
     if (before == null) {
       onDone(Outcome.NoSelection)
       return
     }
+    val origin = first ?: before
     val handle = locator.locate(before, activeEdge, toolbarCentre())
     if (handle == null) {
       acquireThenRetry(command, onDone)
@@ -258,10 +265,28 @@ class SelectionDriver(
             if (after == null) "nothing" else "${after.low()}..${after.high()} bounds=${after.bounds}"
         )
         when {
+          /*
+           * The handle moved, but BACK: the drag's first move event reaches the platform's shrinking
+           * branch, which can pull the edge a character against the drag (measured 2026-09-24: a
+           * 13.5 px grow from 11 announced 10). That is not the step, and reporting it as one sent a
+           * `char →` press backwards. The handle is known to be under the finger, so escalate from
+           * where it is now, as for a reach that was too short.
+           */
+          after != null && locator.grabbedAHandle(before, after) && !progressed(origin, after, command) &&
+            attempt + 1 < MAX_ATTEMPTS -> {
+            Diag.log("  grow: landed on ${after.movingOffset()}, not past ${origin.movingOffset()} — reaching further")
+            growOneUnit(command, attempt + 1, origin, onDone)
+          }
           after != null && locator.grabbedAHandle(before, after) -> {
-            recordBoundary(before, after, command)
+            /*
+             * Only a grow from where the press began is evidence of a boundary. One that restarted
+             * from a backwards landing started MID-WORD, and a `TextView` grows from mid-word one
+             * character at a time rather than snapping. Measured 2026-09-24: 10 -> 14, from inside
+             * `bravo` to inside `charlie`, went into the set, and the next `word ←` walked to 14.
+             */
+            if (before.movingOffset() == origin.movingOffset()) recordBoundary(before, after, command)
             locator.rememberAnchor(handle.x - reach.coerceAtLeast(0f))
-            onDone(Outcome.Moved(before.movingOffset(), after.movingOffset()))
+            onDone(Outcome.Moved(origin.movingOffset(), after.movingOffset()))
           }
           after != null -> onDone(Outcome.HandleLost)
           // Silence is ambiguous: the reach may be too short, or that drag may have landed on the
@@ -271,11 +296,26 @@ class SelectionDriver(
             Diag.log("  grow: the selection is gone from screen — stopping rather than poking the page")
             onDone(Outcome.HandleLost)
           }
-          attempt + 1 < MAX_ATTEMPTS -> growOneUnit(command, attempt + 1, onDone)
+          attempt + 1 < MAX_ATTEMPTS -> growOneUnit(command, attempt + 1, origin, onDone)
           else -> onDone(Outcome.HandleLost)
         }
       }
     }
+  }
+
+  /**
+   * Whether [after] is past where the press began, in the direction [command] drags — or in another
+   * node, which a drag only reaches by going that way. Offsets increase rightward, so the drag's
+   * direction is [PadCommand.toRight] on both edges.
+   */
+  private fun progressed(
+    first: SelectionObserver.Snapshot,
+    after: SelectionObserver.Snapshot,
+    command: PadCommand,
+  ): Boolean {
+    if (first.source != null && after.source != null && first.source != after.source) return true
+    val moved = after.movingOffset() - first.movingOffset()
+    return if (command.toRight) moved > 0 else moved < 0
   }
 
   /**
@@ -288,12 +328,19 @@ class SelectionDriver(
     command: PadCommand,
     onDone: (Outcome) -> Unit,
     retriesLeft: Int = MAX_STEP_RETRIES,
+    // A retry after an overshoot is the SAME press, so it reports from where the press began and
+    // aims where the press was aiming. Recomputing both from the overshoot reported a press that
+    // started at 11 and ended at 11 as `Moved(10, 11)`, measured 2026-09-24, and aimed one
+    // character short of the original target whenever the overshoot was more than one.
+    pressOrigin: Int? = null,
+    pressTarget: Int? = null,
   ) {
     val beforeGrow = observer.latest ?: run {
       onDone(Outcome.NoSelection)
       return
     }
     val start = beforeGrow.movingOffset()
+    val origin = pressOrigin ?: start
 
     growOneUnit(command) { outcome ->
       if (outcome !is Outcome.Moved) {
@@ -314,16 +361,17 @@ class SelectionDriver(
         beforeGrow.source != afterGrow.source
       val target = when {
         crossed -> if (command.toRight) 1 else afterGrow.sourceLength - 1
+        pressTarget != null -> pressTarget
         command.toRight -> start + 1
         else -> start - 1
       }
 
       // A grow that happened to move exactly one character (a lone space, say) is already the answer.
       if (afterGrow.movingOffset() == target) {
-        onDone(Outcome.Moved(start, target))
+        onDone(Outcome.Moved(origin, target))
         return@growOneUnit
       }
-      walkBackTo(target, command, start, onDone, retriesLeft = retriesLeft)
+      walkBackTo(target, command, origin, onDone, retriesLeft = retriesLeft)
     }
   }
 
@@ -366,8 +414,10 @@ class SelectionDriver(
    * - **Shrinking** is character-granular everywhere measured, so aim at the target directly and one
    *   link is usually the whole step.
    * - **Growing** snaps to a word in Chrome even while held (measured: 8 to 10 to 18, straight
-   *   across a word boundary), though a plain `TextView` steps by character in both directions. So
-   *   overshoot as the released path does and let [heldCorrect] walk back — held, and therefore once.
+   *   across a word boundary). A plain `TextView` steps by character only from INSIDE a word: from
+   *   a boundary it snaps too, to the next word's end once the finger passes that word's middle,
+   *   and holds still until then (see [heldSnapThrough]). So overshoot as the released path does
+   *   and let [heldCorrect] walk back.
    *
    * Falls back to the released path rather than failing whenever the chain will not start or does
    * not survive: it is slower, it works, and a held pointer is not worth a regression.
@@ -427,9 +477,15 @@ class SelectionDriver(
            * Nothing announced, so the grab may have missed the handle and be resting on the page.
            * Let go BEFORE deciding anything: a held pointer sitting on a page is worse than no
            * pointer, and the released path re-derives the handle from scratch anyway.
+           *
+           * And wait for the lift to have PLAYED before dispatching anything else. A release is only
+           * a request that the chain honours at the end of the link in flight, and a drag
+           * dispatched while that lift is still playing cancels the one gesture or the other.
+           * Measured 2026-09-24 from a word's end: the fallback's first drag came back not completed
+           * every time, so the press reported `HandleLost` in about 500 ms with the selection
+           * untouched and the released path never having run.
            */
-          after == null -> {
-            gestures.releaseHeld()
+          after == null -> gestures.releaseHeld {
             if (selectionStillOnScreen()) {
               releasedCharacterStep(command, onDone)
             } else {
@@ -560,6 +616,22 @@ class SelectionDriver(
     // ordinary START step, and each of the signs below then read a normal step as an overshoot.
     val toLose = towardAnchor * (target - current)
     /*
+     * More than one character to shrink means the grow before it jumped — a word SNAP, or a held
+     * grow that ran on (10 -> 14 on a one-character correction). Held steps are aimed at one
+     * character, so nothing else puts the edge two or more past its target. And a held shrink of
+     * more than one character is measured to overshoot, three times in three on 2026-09-24: 19 -> 13
+     * aimed at the six measured glyphs landed on 11, 19 -> 14 landed on 12, and 14 -> 12 landed on
+     * 11. The released walk-back with the identical measured reach landed exactly, 19 -> 13 and
+     * 19 -> 12. So lift and walk back released. The lift is safe from the platform's touch-up
+     * filter, which only reverts an offset that changed within 150 ms of the lift: this runs after a
+     * quiet settle and a link.
+     */
+    if (toLose > 1) {
+      Diag.log("  held: $toLose characters back to $target — lifting to walk back released")
+      gestures.releaseHeld { walkBackTo(target, command, origin, onDone) }
+      return
+    }
+    /*
      * Aim AT the target and land INSIDE its cell — the offset comes out as a floor, so a finger on
      * the boundary rounds down and the bias backs off into the target's own cell.
      *
@@ -569,7 +641,7 @@ class SelectionDriver(
      * past the target again. Measured, on the press that ended two characters out.
      */
     val bias = if (toLose >= 0) BOUNDARY_BIAS else -BOUNDARY_BIAS
-    val reach = direction * (toLose - bias) * perChar
+    val reach = measuredReach(before, current, target) ?: (direction * (toLose - bias) * perChar)
 
     gestureCount++
     if (!gestures.moveHeld(PointF(at.x + reach, at.y))) {
@@ -601,15 +673,111 @@ class SelectionDriver(
          */
         Diag.log("  held: no news yet — waiting rather than correcting a second time")
         awaitChange(before) { later ->
-          if (later == null) {
-            releaseThenReport(origin, current, onDone)
-          } else {
-            heldCorrect(target, origin, command, onDone, guard + 1)
+          when {
+            later != null -> heldCorrect(target, origin, command, onDone, guard + 1)
+            // Still silent on a GROWING correction: that is the target app's word snap, not a
+            // late announcement. See [heldSnapThrough].
+            toLose < 0 -> heldSnapThrough(target, origin, command, onDone, guard + 1)
+            else -> releaseThenReport(origin, current, onDone)
           }
         }
         return@awaitChange
       }
       heldCorrect(target, origin, command, onDone, guard + 1)
+    }
+  }
+
+  /**
+   * Push the HELD pointer on past the target app's word snap, then let [heldCorrect] shrink back
+   * onto [target].
+   *
+   * A growing correction that announces nothing, even after the wait, was not ignored. It ran into
+   * the word snap in the platform's `Editor.SelectionHandleView.updatePosition`: while it grows from
+   * a word boundary, the handle keeps its previous offset until the finger passes the MIDDLE of the
+   * word it is entering, and then it jumps to that word's end. So from the end of `bravo` no reach
+   * short of half of `charlie` moves anything, and a character-sized correction waits for news that
+   * cannot come. Shrinking is character-granular from wherever the snap lands (the platform keeps
+   * the finger's offset from the snapped handle as `mTouchWordDelta`), so overshooting to the word's
+   * end and walking back is exact. This is [growOneCharacter]'s strategy, done while the pointer is
+   * still down, which is where [heldCorrect] can walk back in one link.
+   *
+   * It is what turns the backwards press into a forward one. The grab's FIRST move event always
+   * takes the platform's shrinking branch, because it has no previous x to compare against, and
+   * that can pull the edge one character back. Measured 2026-09-24: `12` became `11`, the
+   * correction towards `13` was snapped away, and the press reported `Moved(12, 11)`.
+   *
+   * Only reached after a grab that [HandleLocator.grabbedAHandle] has confirmed, so the pointer is
+   * on the handle and a longer reach cannot land on the page. The toolbar is down for the whole
+   * drag, so [selectionStillOnScreen] means nothing here and is deliberately not asked.
+   */
+  private fun heldSnapThrough(
+    target: Int,
+    origin: Int,
+    command: PadCommand,
+    onDone: (Outcome) -> Unit,
+    guard: Int,
+    attempt: Int = 1,
+  ) {
+    val before = observer.latestWithFreshBounds()
+    val current = before?.movingOffset()
+    if (before == null || current == null) {
+      gestures.releaseHeld()
+      onDone(Outcome.NoSelection)
+      return
+    }
+    val at = gestures.heldAt()
+    if (at == null) {
+      Diag.log("  held: nothing is held any more — finishing on the released path")
+      walkBackTo(target, command, origin, onDone)
+      return
+    }
+    if (attempt > MAX_SNAP_THROUGH_ATTEMPTS) {
+      Diag.log("  held: no snap after $MAX_SNAP_THROUGH_ATTEMPTS pushes, at $current, wanted $target")
+      releaseThenReport(origin, current, onDone)
+      return
+    }
+
+    // The width that matters is the next WORD's, which nothing here can measure, so step by the
+    // node's AVERAGE character, as [growOneUnit] does, rather than by the glyph in front of the
+    // handle — which on this path is usually the narrow space the snap is refusing to cross.
+    val step = (averageCharacterWidth(before) * CHARS_PER_ATTEMPT).coerceAtLeast(STEP_PX)
+    val x = (at.x - towardAnchor * step).coerceIn(0f, (gestures.screenWidth() - 1).toFloat())
+    gestureCount++
+    if (!gestures.moveHeld(PointF(x, at.y))) {
+      Diag.log("  held: the move was refused — finishing on the released path")
+      walkBackTo(target, command, origin, onDone)
+      return
+    }
+    awaitChange(before) { after ->
+      Diag.log(
+        "  held snap-through $attempt: at $current, want $target, at=${at.x} -> x=$x -> " +
+          if (after == null) "nothing" else "${after.low()}..${after.high()}"
+      )
+      when {
+        after == null -> heldSnapThrough(target, origin, command, onDone, guard, attempt + 1)
+        !locator.grabbedAHandle(before, after) -> {
+          gestures.releaseHeld()
+          onDone(Outcome.HandleLost)
+        }
+        else -> {
+          // A snap lands on a real word boundary whichever button asked for it — a `char ←` that
+          // overshot can need a grow back — so this does not go through [recordBoundary], which
+          // asks the button. The one-character test is the same one it applies.
+          syncBoundaryContext(after)
+          if (grownBy(current, after.movingOffset()) > 1) knownBoundaries += after.movingOffset()
+          heldCorrect(target, origin, command, onDone, guard)
+        }
+      }
+    }
+  }
+
+  /** The node's width over its length where it is one line, otherwise whatever a step can measure. */
+  private fun averageCharacterWidth(snapshot: SelectionObserver.Snapshot): Float {
+    val bounds = snapshot.bounds
+    return if (snapshot.sourceIsOneLine() && bounds != null && snapshot.sourceLength > 0) {
+      (bounds.width().toFloat() / snapshot.sourceLength).coerceIn(MIN_CHAR_PX, MAX_CHAR_PX)
+    } else {
+      pixelsPerCharacter(snapshot, Crossing.RIGHTWARD)
     }
   }
 
@@ -637,6 +805,7 @@ class SelectionDriver(
     onDone: (Outcome) -> Unit,
     guard: Int = 0,
     retriesLeft: Int = MAX_STEP_RETRIES,
+    silentProbes: Int = 0,
   ) {
     val before = observer.latestWithFreshBounds()
     val current = before?.movingOffset()
@@ -665,7 +834,7 @@ class SelectionDriver(
        */
       if (retriesLeft > 0 && selectionStillOnScreen()) {
         Diag.log("  shrink: overshot to $current past $target; starting the step over from here")
-        growOneCharacter(command, onDone, retriesLeft - 1)
+        growOneCharacter(command, onDone, retriesLeft - 1, origin, target)
       } else {
         Diag.log("  shrink: overshot to $current past $target and out of retries")
         onDone(Outcome.Moved(origin, current))
@@ -711,10 +880,12 @@ class SelectionDriver(
      * 20 returned 19, twice in a row, and the press burned seven gestures getting nowhere. Backing
      * off a fraction of a character puts the finger clearly within the target's own cell.
      */
-    val reach = direction * (toLose - BOUNDARY_BIAS) * perChar +
+    val reach = (measuredReach(before, current, target) ?: (direction * (toLose - BOUNDARY_BIAS) * perChar)) +
       // A probe that moved nothing was too short to leave the character it started in; lengthen it
-      // rather than repeat it.
-      direction * guard * perChar * FINAL_STEP_FRACTION
+      // rather than repeat it. Counted in SILENT probes, not in corrections: a correction that did
+      // move is aiming afresh from where it landed, and lengthening it anyway is what carried a walk
+      // from 13 past its target of 12 and on to 11, measured 2026-09-24.
+      direction * silentProbes * perChar * FINAL_STEP_FRACTION
 
     gestureCount++
 
@@ -734,7 +905,7 @@ class SelectionDriver(
           // one character out.
           after == null ->
             if (guard + 1 < MAX_CORRECTIONS && selectionStillOnScreen()) {
-              walkBackTo(target, command, origin, onDone, guard + 1, retriesLeft)
+              walkBackTo(target, command, origin, onDone, guard + 1, retriesLeft, silentProbes + 1)
             } else {
               onDone(Outcome.Moved(origin, current))
             }
@@ -813,6 +984,21 @@ class SelectionDriver(
   /** The same question where the travel is a correction onto [target] rather than a button press. */
   private fun crossingToward(current: Int, target: Int): Crossing =
     if (target >= current) Crossing.RIGHTWARD else Crossing.LEFTWARD
+
+  /**
+   * How far in x to move from the caret at [current] so the handle lands on [target]: the real glyphs
+   * between them, less [BOUNDARY_BIAS] of the last one crossed so the finger stops inside the
+   * target's cell rather than on its boundary. The same aim the per-glyph formula takes, with the
+   * run measured instead of one glyph's width multiplied by a count, which is only right for a run
+   * of one. Null where the platform will not measure the run, and the caller keeps that formula.
+   */
+  private fun measuredReach(snapshot: SelectionObserver.Snapshot, current: Int, target: Int): Float? {
+    if (current == target) return 0f
+    val widths = locator.characterWidths(snapshot, minOf(current, target), maxOf(current, target)) ?: return null
+    val lastCrossed = if (target < current) widths.first() else widths.last()
+    val sign = if (target > current) 1f else -1f
+    return sign * (widths.sum() - BOUNDARY_BIAS * lastCrossed)
+  }
 
   /**
    * Wait for the next announcement rather than sleeping a fixed span.
@@ -1032,8 +1218,8 @@ class SelectionDriver(
    * correctness bug rather than an imprecision: the set's whole claim is that everything in it is a
    * boundary, and `word ←` has nothing else to check it against.
    *
-   * **It must have moved more than one character.** A plain `TextView` steps by character in BOTH
-   * directions, unlike Chrome, so a one-character grow there proves nothing at all; on a snapping
+   * **It must have grown by more than one character.** A plain `TextView` grows by character from
+   * inside a word, so a one-character grow there proves nothing at all; on a snapping
    * target it means a word one character wide, which the set can afford to miss. Across a node
    * change the comparison is meaningless — the offsets are in different frames — and the grow is
    * believed, because a grow that crossed a node did so by snapping.
@@ -1055,9 +1241,19 @@ class SelectionDriver(
      */
     syncBoundaryContext(after)
     val crossed = before.source != null && after.source != null && before.source != after.source
-    if (!crossed && kotlin.math.abs(after.movingOffset() - before.movingOffset()) <= 1) return
+    if (!crossed && grownBy(before.movingOffset(), after.movingOffset()) <= 1) return
     knownBoundaries += after.movingOffset()
   }
+
+  /**
+   * How many characters the moving edge travelled AWAY from the anchor — negative when it came back.
+   *
+   * Signed on purpose. A growing press can land BEHIND where it started: the grab's first move event
+   * reaches the platform's shrinking branch, and 11 -> 9 on `bravo` is measured (2026-09-24). With
+   * the old `abs` that read as a two-character grow, so 9 and 8, both mid-`bravo`, went into
+   * [knownBoundaries], where `word ←` would take them for words.
+   */
+  private fun grownBy(from: Int, to: Int): Int = -towardAnchor * (to - from)
 
   /**
    * A selection change the pad did not cause, offered by the service so a **fresh selection can seed
@@ -1153,6 +1349,13 @@ class SelectionDriver(
      * something is wrong that a fourth will not fix, and each one costs a settle.
      */
     const val MAX_HELD_CORRECTIONS = 3
+
+    /**
+     * How many pushes [heldSnapThrough] may make towards a word's middle. Each is [CHARS_PER_ATTEMPT]
+     * average characters, so this reaches past the middle of a word of about twenty characters —
+     * with the pointer already one or two characters in — and each silent push costs a settle.
+     */
+    const val MAX_SNAP_THROUGH_ATTEMPTS = 6
 
     /**
      * The last character is crept, not stepped: a fraction of the average width, so a narrow glyph
