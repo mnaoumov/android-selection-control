@@ -531,12 +531,14 @@ class SelectionDriver(
       /*
        * Offsets are local to the source node, and a grow can carry the end into the NEXT node —
        * after which `start + 1` is a number in a frame of reference that no longer exists. When the
-       * node has changed, one character past the old end is simply one character into the new one.
+       * node has changed, the target is reckoned across the seam ([crossedTarget]). A grow jumps a
+       * word, so its landing is never the step, and where the seam arithmetic says nothing the old
+       * guess stands: one character into the new node.
        */
-      val crossed = beforeGrow.source != null && afterGrow.source != null &&
-        beforeGrow.source != afterGrow.source
       val target = when {
-        crossed -> if (command.toRight) 1 else afterGrow.sourceLength - 1
+        crossedNodes(beforeGrow, afterGrow) ->
+          crossedTarget(beforeGrow, afterGrow, command, start)
+            ?: if (command.toRight) 1 else afterGrow.sourceLength - 1
         pressTarget != null -> pressTarget
         command.toRight -> start + 1
         else -> start - 1
@@ -556,20 +558,47 @@ class SelectionDriver(
    *
    * Offsets are local to the source node, and a step can carry the edge into the NEXT node — after
    * which `start + 1` is a number in a frame of reference that no longer exists. When the node has
-   * changed, one character past the old end is simply one character into the new one.
+   * changed, the target is reckoned across the seam as if the two nodes were adjacent: see
+   * [crossedTarget]. Where that arithmetic has nothing to say, the landing itself is the step, since
+   * a held grab is aimed at one character and [HandleLocator.grabbedAHandle] has already ruled out a
+   * collapse.
    */
   private fun targetOffset(
     before: SelectionObserver.Snapshot,
     after: SelectionObserver.Snapshot,
     command: PadCommand,
     start: Int,
-  ): Int {
-    val crossed = before.source != null && after.source != null && before.source != after.source
-    return when {
-      crossed -> if (command.toRight) 1 else after.sourceLength - 1
-      command.toRight -> start + 1
-      else -> start - 1
-    }
+  ): Int = when {
+    crossedNodes(before, after) -> crossedTarget(before, after, command, start) ?: after.movingOffset()
+    command.toRight -> start + 1
+    else -> start - 1
+  }
+
+  private fun crossedNodes(before: SelectionObserver.Snapshot, after: SelectionObserver.Snapshot): Boolean =
+    before.source != null && after.source != null && before.source != after.source
+
+  /**
+   * One character past [start], counted into the node [after] landed in, assuming the two nodes are
+   * adjacent: the end of the left one is the start of the right one, the same caret. Null when the
+   * answer falls outside the landing node, which means the assumption does not hold or its length is
+   * unknown.
+   *
+   * It used to be `sourceLength - 1` leftward and `1` rightward. That is right only for a step that
+   * starts exactly ON the seam. From offset 1, one character left lands ON the seam, and Chrome
+   * announces the seam in the previous node's frame, as its length. Measured 2026-09-24 on
+   * `ERR_INVALID_URL`: `char ←` from `0..1` of the paragraph grabbed onto `9..15` of
+   * `"chrome://terms/"`, the paragraph's offset 0 and exactly one step. The old target of 14 read
+   * that as an overshoot, and the held correction took one more character off.
+   */
+  private fun crossedTarget(
+    before: SelectionObserver.Snapshot,
+    after: SelectionObserver.Snapshot,
+    command: PadCommand,
+    start: Int,
+  ): Int? {
+    if (before.sourceLength < 0 || after.sourceLength < 0) return null
+    val target = if (command.toRight) start + 1 - before.sourceLength else after.sourceLength + start - 1
+    return target.takeIf { it in 0..after.sourceLength }
   }
 
   /**
@@ -817,7 +846,9 @@ class SelectionDriver(
     }
     if (current == target) {
       when {
-        grownBy(origin, target) > 0 -> pullBackThenRelease(origin, current, onDone)
+        // Asked of the command, not of `grownBy(origin, target)`: after a node crossing the two are
+        // offsets in different nodes, and 1 -> 15 on a `char ←` read as a grow of 14.
+        growsSelection(command) -> pullBackThenRelease(origin, current, onDone)
         else -> releaseThenReport(origin, current, onDone)
       }
       return

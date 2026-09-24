@@ -557,6 +557,15 @@ the source switches to the newly-covered node and the offsets restart from it �
 `…46, 47, 48` on a 48-character node and then reported `0..4` on the next one. There is no document-wide
 offset anywhere in this mechanism.
 
+**The caret between two adjacent nodes can be announced in EITHER node's frame.** Measured 2026-09-24 on
+`ERR_INVALID_URL`, Chrome force-stopped: `char ←` from `0..1` of the paragraph landed on `9..15` of
+`"chrome://terms/"`. That is the paragraph's offset 0 in the previous node's frame, as its length, and it
+is exactly one character. A target of `sourceLength - 1` read it as an overshoot and took one more character
+off. So a step that crosses a node is reckoned across the seam as if the nodes were adjacent
+(`SelectionDriver.crossedTarget`): leftward `length + start - 1`, rightward `start + 1 - previous length`.
+Where that falls outside the landing node, the held path takes its landing as the step. After the fix, cold:
+`char ←` 1 → 15 in 1 gesture, `char →` 15 → 1, and `char ←` from 15 → 14 inside the node.
+
 **A block-level node's `getBoundsInScreen` is the block box, not the text box.** Long-pressing the centre
 of an `h1` whose bounds run 56..1218 but whose glyphs end at 547 hits empty space and selects nothing.
 Inline nodes hug their text; block nodes do not.
