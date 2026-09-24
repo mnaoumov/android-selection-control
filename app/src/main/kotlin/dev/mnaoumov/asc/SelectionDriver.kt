@@ -1365,9 +1365,10 @@ class SelectionDriver(
             releaseThenReport(origin, current, onDone)
           } else {
             // Nothing moved at all, so there is no evidence the pointer is on the handle. Let go and
-            // hand the press to the plain grow, which escalates its reach properly.
+            // hand the press to the plain grow, which escalates its reach properly — unless the lift
+            // shows a push did move the edge after all. See [releaseThenGrow].
             Diag.log("  word walk: nothing moved from $current — falling back to a plain grow")
-            gestures.releaseHeld { growOneUnit(command, onDone = onDone) }
+            releaseThenGrow(command, origin, before, onDone)
           }
           return
         }
@@ -1391,6 +1392,61 @@ class SelectionDriver(
       }
     }
   }
+
+  /**
+   * The word walk's fallback to [growOneUnit], with the lift read back first.
+   *
+   * "Nothing moved" is only what the walk's settle saw, and a push's announcement can arrive after
+   * it. Measured 2026-09-24 on Chrome's error page, from 22, the start of `down` (22..26): two silent
+   * pushes, the fallback, and then a plain grow that started from 26 — the second push had reached
+   * the end of `down` late — and grew one more, into `or`. The press reported `26 -> 27` though it
+   * began at 22, one character past a word end, in 1 run of 3 in each of two sittings.
+   *
+   * So the fallback lifts, waits for the announcements to stop, and grows only when the edge is
+   * still where the press began. An edge already past it is the step, reported from [origin] and
+   * recorded nowhere, like the walk's own jump: nothing says whether a late landing was a snap. A
+   * landing in another node than [frame]'s is the step too, as the walk takes a crossing, unless it
+   * is the seam [origin] already sat on, announced in the other frame.
+   */
+  private fun releaseThenGrow(
+    command: PadCommand,
+    origin: Int,
+    frame: SelectionObserver.Snapshot,
+    onDone: (Outcome) -> Unit,
+  ) {
+    gestures.releaseHeld {
+      val atLift = observer.latest
+      if (atLift == null) {
+        growOneUnit(command, onDone = onDone)
+        return@releaseHeld
+      }
+      awaitQuiet(
+        atLift,
+        0,
+        onResult = { settled ->
+          when {
+            settled == null -> growOneUnit(command, onDone = onDone)
+            settled.isEmpty() -> {
+              Diag.log("  word walk: the lift collapsed the selection — a lost handle, not a move")
+              onDone(Outcome.HandleLost)
+            }
+            movedPast(frame, origin, settled) -> {
+              Diag.log(
+                "  word walk: a late push had moved $origin -> ${settled.movingOffset()} — taking it as the " +
+                  "step, recording nothing"
+              )
+              onDone(Outcome.Moved(origin, settled.movingOffset()))
+            }
+            else -> growOneUnit(command, onDone = onDone)
+          }
+        },
+      )
+    }
+  }
+
+  private fun movedPast(frame: SelectionObserver.Snapshot, origin: Int, settled: SelectionObserver.Snapshot): Boolean =
+    if (crossedNodes(frame, settled)) !isSeamOf(frame, settled, origin)
+    else grownBy(origin, settled.movingOffset()) > 0
 
   /** Push the held pointer one character further in the growing direction and hand the landing back. */
   private fun pushHeld(
