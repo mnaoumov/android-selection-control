@@ -410,7 +410,7 @@ The pad now treats a landing that is not past the press's origin as not yet a st
 pushing a held pointer through the snap (`heldSnapThrough`). Any walk-back of more than one
 character is done released, because a held shrink out of a snap overshot three times in three
 while the released one with the same reach was exact. That walk-back is sized by the measured
-glyphs of the whole run (`HandleLocator.characterWidths`), not by one glyph times a count. Over 24
+glyphs of the whole run (`HandleLocator.characterRun`, by its outer edges), not by one glyph times a count. Over 24
 `char →` presses from `bravo` every one landed exactly one character on. About one press in five
 still pays for the snap: 1.3–4.6 s and up to seven gestures, against 0.7–1 s and one gesture.
 
@@ -793,17 +793,26 @@ edge is still where the press began. After the change, 6 runs of 6 reported `22 
 **Where the set knows no end, Chrome's walk stops on the next word's START**, at the first silent
 push, which is the one-push rule above. Measured 2026-09-24 on a served copy of the error page's
 sentence, Chrome force-stopped each run: long-press `temporarily` (21..32), three `char ←` to 29, then
-`word →` with the known-boundary stop switched off for the measurement, which is the only way to get a
-mid-word Chrome edge with no known end (see below). Before: 30, 31, 32, 33, silent once, then a jump
+`word →` with the known-boundary stop switched off for the measurement, which was then the only way to
+get a mid-word Chrome edge with no known end (see below; a `char →` from a word's start now gets one). Before: 30, 31, 32, 33, silent once, then a jump
 to 37, the end of `down`. After: stopped on 33 in 5 gestures and 1.8 s, three runs of three, recording
 33. The next `word →` then grew from 33 to 37 in 2. The stop is a word's start, so the step includes the
 space. Shrinking one more to the word's end would assume one space between words, and nothing measures
 that.
 
-**On Chrome no pad sequence reaches a mid-word edge whose word end the set does not know.** A long-press
-seeds both ends of its word, and a `char` step from a word boundary, in the direction of travel, does
-not move: `char →` from 21 (the start of `temporarily`) snapped to 32, and the shrink back aimed at 22
-landed on 21, three times, 23 gestures in 12 s. `char ←` from 32 on the START edge did the mirror.
+**A walk back over several characters is sized by the run's outer EDGES, not by its widths added up,
+because Chrome's per-character rectangles overlap.** A `char` step from a word boundary, in the
+direction of travel, snaps a whole word and walks back. Measured 2026-09-24 on the served sentence,
+Chrome force-stopped: `char →` from 21 (the start of `temporarily`) snapped to 32, and the shrink back
+aimed at 22 landed on 21, three rounds of three, `Moved(21, 21)` in 12.7 s and 22 gestures. `char ←`
+from 32 on the START edge did the mirror. The ten widths of `emporarily` came back as 18, 30, 20, 20,
+12, 18, 12, 8, 8, 16, 162 px in all, between carets 150 px apart. Every width is even, i.e. whole page
+pixels at 2x, so each rectangle looks rounded out. The finger stopped 12 px short, inside the `t`, and
+Chrome rounded the edge back onto the origin. `HandleLocator.characterRun` now returns the run's left
+and right edges, and `measuredReach` uses their difference. After the change, three presses of three
+each way: `21 -> 22` in 8 gestures and 5-6 s, and `32 -> 31` in 6 gestures and 3.7 s. Most of that time
+is the grow's escalation up to the snap. The walk back itself landed in one drag. The debug target's
+`TextView` walk-backs (19 -> 12, 14 -> 11, 25 -> 19) still land in one drag.
 
 **Two things made that walk look like a granularity problem when it was not.** It used to land on 22
 in one push from 20, which read as Chrome jumping the end. It was the `STEP_PX` = 12 floor on the
