@@ -263,6 +263,28 @@ looking. Every held exit now lifts, settles and reports the offset that survived
 changing: `madeProgress` already treats an unchanged offset as no progress and stops a repeat run,
 and the status line already says "didn't move".
 
+**Chrome finalises a GROWING drag one character further on at the lift, so a grow pulls the held
+pointer back 1 px before it lets go.** Measured 2026-09-24 on the rig, against a served page with a
+centred 13 px `Google LLC`, the shape of `chrome://version`'s header: one `char →` from `0..6` held at
+7 with the pointer 2 px into the `L`, and the lift turned it into 8 on seven presses of seven, cold
+and warm. Nearest-boundary rounding cannot explain it (2 px into a 16 px glyph is 7). The direction of
+the last move does, and the controls say so: a press whose held correction ended with a shrinking move
+was never revised; a 1 px push forward before the lift was revised three times in three; a 1 px pull
+back was revised never, 4 of 4, and then 25 of 26 Chrome presses over three nodes. The same 1 px on the
+debug target's `TextView` left 16 of 16 presses exact, so `pullBackThenRelease` is not gated by
+surface. The distance is not the point, only which way the pointer last moved, so it is the smallest
+move there is.
+
+A second +2 sat beside it: the held first travel was floored at `STEP_PX` = 12 even when the glyph
+had been measured, so the 8 px `i` and `l` of `oil` were overshot, 6 -> 8, and a held correction
+back to 7 announced nothing. That floor is gone; `pixelsPerCharacter` already bounds its answer.
+The reported shape now reads `reach=10.0 -> 0..7`, pulls back, and stays on 7.
+
+**`chrome://version` itself cannot show any of this on the rig.** Its header sits right under the
+omnibox, so Chrome puts the floating toolbar BELOW the selection, over the handle, and every grab there
+lands on the toolbar and ends `HandleLost` (eight of eight). Measure the lift on a served page that
+reproduces the header's shape lower down, as above.
+
 **A `TextView` snaps a grow that starts on a word boundary, and the grab can land BACKWARDS. The
 platform's source says why.** The framework source is on this machine
 (`%LOCALAPPDATA%\Android\Sdk\sources\android-36.1\android\widget\Editor.java`), and
