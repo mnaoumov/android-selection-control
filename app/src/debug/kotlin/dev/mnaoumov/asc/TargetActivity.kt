@@ -25,10 +25,13 @@ import android.widget.TextView
  */
 class TargetActivity : Activity() {
 
+  private lateinit var column: LinearLayout
+  private lateinit var views: List<TextView>
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
 
-    val column = LinearLayout(this).apply {
+    column = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
       setPadding(PADDING, PADDING, PADDING, PADDING)
     }
@@ -41,28 +44,33 @@ class TargetActivity : Activity() {
      * not hold: measured on the rig, the screen still opened on whichever selectable view was added
      * last. So the order is chosen to make that behaviour land somewhere useful instead.
      */
-    val sections = listOf(
-      "WRAPPED" to WRAPPED,
-      "DIGITS" to DIGITS,
-      "ONE_LINE" to ONE_LINE,
-    )
-    val views = sections.map { (name, text) ->
+    views = SECTIONS.map { (name, text) ->
       column.addView(label(name))
       selectable(text).also { column.addView(it) }
     }
 
     setContentView(ScrollView(this).apply { addView(column) })
+  }
 
-    // Log where each block landed, in raw screen pixels, so a test can long-press a known word
-    // without a human reading coordinates off a screenshot. Names and rectangles only — the fixture
-    // text is never logged, exactly as in the app itself.
+  /**
+   * Log where each block landed, in raw screen pixels, so a test can long-press a known word
+   * without a human reading coordinates off a screenshot. Names and rectangles only — the fixture
+   * text is never logged, exactly as in the app itself.
+   *
+   * On every RESUME, not once in `onCreate`: `am start` on an activity already in the task stack
+   * resumes it without creating it, and a harvest only a creation wrote left `rig.ps1 target`
+   * reporting no blocks for an activity plainly on screen. Posted, so the first resume logs after
+   * layout rather than before it.
+   */
+  override fun onResume() {
+    super.onResume()
     column.post {
       val at = IntArray(2)
       views.forEachIndexed { i, view ->
         view.getLocationOnScreen(at)
         Diag.log(
-          "target '${sections[i].first}' at ${at[0]},${at[1]} ${view.width}x${view.height} " +
-            "len=${sections[i].second.length}"
+          "target '${SECTIONS[i].first}' at ${at[0]},${at[1]} ${view.width}x${view.height} " +
+            "len=${SECTIONS[i].second.length}"
         )
       }
     }
@@ -108,5 +116,11 @@ class TargetActivity : Activity() {
         "rather than one tidy rectangle."
 
     private const val PADDING = 32
+
+    private val SECTIONS = listOf(
+      "WRAPPED" to WRAPPED,
+      "DIGITS" to DIGITS,
+      "ONE_LINE" to ONE_LINE,
+    )
   }
 }

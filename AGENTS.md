@@ -718,6 +718,16 @@ must stay `WRAP_CONTENT`: left at `MATCH_PARENT` a 30-character node reported it
 every derived handle landed hundreds of pixels right of the real one, and every press failed — which
 read exactly like a gesture problem and was a fixture problem.
 
+**It logs its block rectangles on every RESUME, not on creation.** `am start` on an activity already
+in the task stack resumes it without running `onCreate`, and while the rectangles were logged there,
+`rig.ps1 target` answered `(none logged)` for a target plainly on screen, after the app had merely
+been sent behind Chrome — and blamed the APK. Measured 2026-09-24 both ways: resumed (the same
+`ActivityRecord` before and after) and force-stopped first, three blocks each time. `Start-Target`
+also polls for them for up to 15 s rather than sleeping 2 s, because on a guest booted seconds
+earlier the launch splash alone outlasted the sleep. **So `(none logged)` has had three causes** —
+`logcat -t` windowing (above), a resume on an APK older than this, and a fixed sleep on a cold guest
+— and knowing one of them is exactly what hides the other two.
+
 **What it cannot express: a node crossing.** Each block is one `TextView`, so it is one accessibility
 node, and a selection never leaves the view it started in. Anything about a grow carrying the moving
 edge into the next node needs a target with an inline node tree.
