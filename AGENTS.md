@@ -563,6 +563,28 @@ kept. That is the ordering `recordBoundary` exists for: it re-keys before it add
  node and its offsets are unchanged, so keeping the set is the right answer. The earlier plan
  expected a clear here, and that expectation was wrong.
 
+**A grow snaps only when it STARTS on a word boundary, so a landing counts as a boundary only when
+the grow started on one the set already knows.** `SelectionHandleView.updatePosition` snaps only
+while `mInWord` is false, and `mInWord` is recomputed from the handle's own offset. From inside a word
+the handle follows the finger one character at a time. Measured 2026-09-24 on `alpha bravo charlie
+delta echo`: two `char →` took the end to 21, inside `delta`, and a `word →` with a 1.5-character
+reach landed on 23. The pad announced that as a word and put 23 into the set. `recordBoundary` now
+refuses a grow whose origin is not a known boundary, and logs `not recording <n>`.
+
+**`word →` from such an edge walks the HELD pointer one character at a time until the handle holds
+still** (`growToWordEnd`). Once it reaches the word's end, `mInWord` turns false and the handle waits
+for the finger to pass the middle of the next word. So two silent pushes in a row mean the edge is on
+a word's end, and that is recorded. Same fixture, same sitting: 21 walked 22, 23, 24, 25, then two
+silent pushes, so the step ends on 25 in 2.0 s and 6 gestures. `⇤ word` from there then retraced to
+19 in one gesture. From 13 inside `charlie` the walk ended on 19.
+
+**Chrome does not hold at the word's end.** On the error page, from 19 inside `temporarily` (10..21),
+the walk went 20 and then 22 on one push, past the end. A jump of more than one is therefore taken as
+the step and recorded nowhere. A first version walked back to the offset before the jump and recorded
+both 20 and 22, and those were the very mid-word boundaries this rule exists to keep out. So on
+Chrome `word →` from mid-word now lands one past the word end, on the next word's start, and learns
+nothing from it.
+
 **`word ←` onto the anchor does NOT collapse the selection — a dragged handle has a one-character
 floor.** This paragraph used to claim the opposite, reasoned from the desktop's `Ctrl+Shift+Left` and
 never measured. Measured 2026-09-23 on the rig, three times from two different starting selections,

@@ -211,7 +211,13 @@ class SelectionDriver(
 
     val growing = growsSelection(command)
     when (command.unit) {
-      PadCommand.Unit.WORD -> if (growing) growOneUnit(command, onDone = report) else shrinkByWord(command, report)
+      PadCommand.Unit.WORD -> when {
+        !growing -> shrinkByWord(command, report)
+        // Only a grow from a boundary snaps to a word; from anywhere else it follows the finger one
+        // character at a time and stops wherever the reach ran out. See [growToWordEnd].
+        snapshot.movingOffset() in knownBoundaries -> growOneUnit(command, onDone = report)
+        else -> growToWordEnd(command, report)
+      }
       // Both directions go through the held chain now (the held-pointer fix): it is exact where the released path
       // has to undo a snap, and it falls back to the released path by itself when a chain will not
       // run. [releasedCharacterStep] is what it falls back to.
@@ -771,6 +777,178 @@ class SelectionDriver(
     }
   }
 
+  /**
+   * `word →` from an edge that is not KNOWN to sit on a word boundary: walk the held pointer one
+   * character at a time until the target app holds the handle still.
+   *
+   * The platform's `Editor.SelectionHandleView.updatePosition` snaps a grow to a word only when
+   * `mInWord` is false, and `mInWord` is recomputed from the handle's current offset. So a grow from
+   * inside a word does not snap: it follows the finger one character at a time, and [growOneUnit]'s
+   * fixed reach simply stops wherever it ran out. Measured 2026-09-24: from 21, inside `delta`, one
+   * `word →` landed on 23. Once the handle reaches the word's end, `mInWord` turns false and the
+   * handle HOLDS there until the finger passes the middle of the next word. That hold is the one
+   * signal the walk needs, and it reads no text:
+   *
+   *  - **+1** — still inside the word; step again.
+   *  - **nothing, twice** — the hold, so the edge is on the word's end. Two pushes because one silent
+   *    push could be a step that stayed inside its own cell; two characters of travel from inside a
+   *    word always move the handle.
+   *  - **a jump of more than one** — taken as the step and reported, and recorded NOWHERE. On a
+   *    `TextView` it is a snap to the end of a word short enough that one push passed its middle, so
+   *    the walk has gone a short word too far. On Chrome it is not even that: from 20, inside
+   *    `temporarily` (10..21), one push landed on 22 (measured 2026-09-24), so a jump says nothing
+   *    about where it started or where it landed. A first version walked back to the offset before
+   *    the jump and recorded both, which put 20 and 22 into the set and was the very poisoning this
+   *    exists to stop.
+   *
+   * So only the hold is recorded. Measured on the debug target: 21 -> 25 through `delta` and 13 -> 19
+   * through `charlie`, each ending on two silent pushes.
+   *
+   * Falls back to [growOneUnit] whenever the chain will not start: slower and less exact, but the
+   * old behaviour rather than a regression.
+   */
+  private fun growToWordEnd(command: PadCommand, onDone: (Outcome) -> Unit) {
+    val before = observer.latestWithFreshBounds()
+    if (before == null) {
+      onDone(Outcome.NoSelection)
+      return
+    }
+    val handle = locator.locate(before, activeEdge, toolbarCentre())
+    if (handle == null) {
+      acquireThenRetry(command, onDone)
+      return
+    }
+    val origin = before.movingOffset()
+    val reach = (if (command.toRight) 1f else -1f) *
+      pixelsPerCharacter(before, crossingOf(command)).coerceAtLeast(STEP_PX)
+
+    gestureCount++
+    gestures.grabAndHold(handle, PointF(handle.x + reach, handle.y)) { grabbed ->
+      if (!grabbed) {
+        Diag.log("  word walk: the grab was refused — falling back to a plain grow")
+        growOneUnit(command, onDone = onDone)
+        return@grabAndHold
+      }
+      awaitChange(before) { after ->
+        Diag.log(
+          "  word walk grab: handle=(${handle.x}, ${handle.y}) reach=$reach -> " +
+            if (after == null) "nothing" else "${after.low()}..${after.high()}"
+        )
+        when {
+          after != null && !locator.grabbedAHandle(before, after) -> {
+            gestures.releaseHeld()
+            onDone(Outcome.HandleLost)
+          }
+          else -> {
+            if (after != null) locator.rememberAnchor(handle.x - reach.coerceAtLeast(0f))
+            walkHeldToWordEnd(command, origin, before, after, onDone)
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * One decision of [growToWordEnd], on the landing [after] of a push made from [before].
+   * [silentPushes] counts the pushes since the handle last moved; [stepped] says whether any push
+   * has moved the edge by exactly one character, which is what makes a later jump a snap past a
+   * boundary rather than the step itself.
+   */
+  private fun walkHeldToWordEnd(
+    command: PadCommand,
+    origin: Int,
+    before: SelectionObserver.Snapshot,
+    after: SelectionObserver.Snapshot?,
+    onDone: (Outcome) -> Unit,
+    silentPushes: Int = 0,
+    stepped: Boolean = false,
+    pushes: Int = 1,
+  ) {
+    val current = before.movingOffset()
+    val crossed = after != null && before.source != null && after.source != null && before.source != after.source
+    val moved = if (after == null) 0 else grownBy(current, after.movingOffset())
+    when {
+      // Into the next node: a grow only crosses by snapping, so this is the word step, and
+      // [recordBoundary]'s crossing rule believes it.
+      after != null && crossed -> {
+        recordBoundary(before, after, command)
+        releaseThenReport(origin, after.movingOffset(), onDone)
+        return
+      }
+      after == null || moved == 0 -> {
+        if (silentPushes + 1 >= WORD_WALK_SILENT_PUSHES) {
+          if (stepped) {
+            // Held still with the finger past it: the snap hold, so this is a word's end.
+            knownBoundaries += current
+            Diag.log("  word walk: held at $current — a word's end")
+            releaseThenReport(origin, current, onDone)
+          } else {
+            // Nothing moved at all, so there is no evidence the pointer is on the handle. Let go and
+            // hand the press to the plain grow, which escalates its reach properly.
+            Diag.log("  word walk: nothing moved from $current — falling back to a plain grow")
+            gestures.releaseHeld { growOneUnit(command, onDone = onDone) }
+          }
+          return
+        }
+        pushHeld(command, origin, before, onDone, silentPushes + 1, stepped, pushes)
+      }
+      moved < 0 -> {
+        // The grab's first move event takes the platform's shrinking branch and can pull the edge
+        // back a character (see [heldSnapThrough]). Keep walking from where it is.
+        pushHeld(command, origin, after, onDone, 0, stepped, pushes)
+      }
+      moved == 1 -> pushHeld(command, origin, after, onDone, 0, true, pushes)
+      else -> {
+        Diag.log("  word walk: jumped $current -> ${after.movingOffset()} — taking it as the step, recording nothing")
+        releaseThenReport(origin, after.movingOffset(), onDone)
+      }
+    }
+  }
+
+  /** Push the held pointer one character further in the growing direction and hand the landing back. */
+  private fun pushHeld(
+    command: PadCommand,
+    origin: Int,
+    from: SelectionObserver.Snapshot,
+    onDone: (Outcome) -> Unit,
+    silentPushes: Int,
+    stepped: Boolean,
+    pushes: Int,
+  ) {
+    val at = gestures.heldAt()
+    if (at == null) {
+      Diag.log("  word walk: nothing is held any more, at ${from.movingOffset()}")
+      onDone(Outcome.Moved(origin, from.movingOffset()))
+      return
+    }
+    if (pushes >= MAX_WORD_WALK_PUSHES) {
+      Diag.log("  word walk: out of pushes at ${from.movingOffset()}")
+      releaseThenReport(origin, from.movingOffset(), onDone)
+      return
+    }
+    val reach = (if (command.toRight) 1f else -1f) *
+      pixelsPerCharacter(from, crossingOf(command)).coerceAtLeast(STEP_PX)
+    val x = (at.x + reach).coerceIn(0f, (gestures.screenWidth() - 1).toFloat())
+    gestureCount++
+    if (!gestures.moveHeld(PointF(x, at.y))) {
+      Diag.log("  word walk: the move was refused at ${from.movingOffset()}")
+      releaseThenReport(origin, from.movingOffset(), onDone)
+      return
+    }
+    awaitChange(from) { after ->
+      Diag.log(
+        "  word walk push ${pushes + 1}: at ${from.movingOffset()}, x=$x -> " +
+          if (after == null) "nothing" else "${after.low()}..${after.high()}"
+      )
+      if (after != null && !locator.grabbedAHandle(from, after)) {
+        gestures.releaseHeld()
+        onDone(Outcome.HandleLost)
+        return@awaitChange
+      }
+      walkHeldToWordEnd(command, origin, from, after, onDone, silentPushes, stepped, pushes + 1)
+    }
+  }
+
   /** The node's width over its length where it is one line, otherwise whatever a step can measure. */
   private fun averageCharacterWidth(snapshot: SelectionObserver.Snapshot): Float {
     val bounds = snapshot.bounds
@@ -1223,6 +1401,12 @@ class SelectionDriver(
    * target it means a word one character wide, which the set can afford to miss. Across a node
    * change the comparison is meaningless — the offsets are in different frames — and the grow is
    * believed, because a grow that crossed a node did so by snapping.
+   *
+   * **And it must have STARTED on a known boundary.** The platform snaps a grow only while
+   * `mInWord` is false, i.e. only from a boundary; from inside a word it follows the finger one
+   * character at a time, so a reach of two characters lands two characters on. Measured 2026-09-24:
+   * two `char →` took the end to 21, inside `delta`, and a `word →` that landed on 23 went into the
+   * set. A grow from a boundary the set has not learned is missed, which fails safe.
    */
   private fun recordBoundary(
     before: SelectionObserver.Snapshot,
@@ -1230,6 +1414,8 @@ class SelectionDriver(
     command: PadCommand,
   ) {
     if (!growsSelection(command)) return
+    // Asked before the re-key below, which clears the set when the node changes.
+    val fromKnownBoundary = before.movingOffset() in knownBoundaries
     /*
      * Re-key HERE and not only at the top of the next press.
      *
@@ -1241,7 +1427,17 @@ class SelectionDriver(
      */
     syncBoundaryContext(after)
     val crossed = before.source != null && after.source != null && before.source != after.source
-    if (!crossed && grownBy(before.movingOffset(), after.movingOffset()) <= 1) return
+    if (crossed) {
+      knownBoundaries += after.movingOffset()
+      return
+    }
+    if (!fromKnownBoundary) {
+      if (grownBy(before.movingOffset(), after.movingOffset()) > 1) {
+        Diag.log("  not recording ${after.movingOffset()}: the grow started at ${before.movingOffset()}, not on a known boundary")
+      }
+      return
+    }
+    if (grownBy(before.movingOffset(), after.movingOffset()) <= 1) return
     knownBoundaries += after.movingOffset()
   }
 
@@ -1356,6 +1552,15 @@ class SelectionDriver(
      * with the pointer already one or two characters in — and each silent push costs a settle.
      */
     const val MAX_SNAP_THROUGH_ATTEMPTS = 6
+
+    /**
+     * Silent pushes in a row that [growToWordEnd] takes as the word-end hold. Two characters of travel
+     * from inside a word always move the handle; one can stay inside its own cell.
+     */
+    const val WORD_WALK_SILENT_PUSHES = 2
+
+    /** Pushes one [growToWordEnd] may make: a long word plus the two silent pushes that end it. */
+    const val MAX_WORD_WALK_PUSHES = 24
 
     /**
      * The last character is crept, not stepped: a fraction of the average width, so a narrow glyph
