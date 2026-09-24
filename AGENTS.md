@@ -627,6 +627,18 @@ off. So a step that crosses a node is reckoned across the seam as if the nodes w
 Where that falls outside the landing node, the held path takes its landing as the step. After the fix, cold:
 `char ←` 1 → 15 in 1 gesture, `char →` 15 → 1, and `char ←` from 15 → 14 inside the node.
 
+**The correction that follows a crossing can land on the seam in the OTHER frame too.** Measured 2026-09-24,
+Chrome force-stopped: long-press `terms` (`9..14`), `char →`. The grab crossed to `0..2` of the paragraph, the
+target was 0 (the seam), and the released walk-back reached it, but Chrome announced it as `9..15`, in the
+previous node's frame. `walkBackTo` then read 15 as fifteen characters short of 0 and dragged the handle across
+the whole node, which destroyed the selection. A held correction did the same once (`1 -> 9..15`, read as 15
+back). So `heldCorrect` and `walkBackTo` now carry the snapshot whose node the target is counted in, and a
+landing in another node is judged by `SelectionDriver.isSeamOf`. If that landing is the seam, it is the target.
+Anywhere else the walk stops where it is, because correcting it would need a grow reckoned in a frame it does not
+share. After the fix, four cold runs of `char →`, `char →`, `char ←`, `char ←` went 14 → 15 → 1 → 15 → 14.
+That is 16 presses of 16 exact, with the seam walk-back taking 2 gestures and about 1 s. The held-correction
+branch is built but has not fired again on the rig.
+
 **A block-level node's `getBoundsInScreen` is the block box, not the text box.** Long-pressing the centre
 of an `h1` whose bounds run 56..1218 but whose glyphs end at 547 hits empty space and selects nothing.
 Inline nodes hug their text; block nodes do not.

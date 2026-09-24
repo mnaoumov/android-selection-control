@@ -702,6 +702,19 @@ class SelectionDriver(
     before.source != null && after.source != null && before.source != after.source
 
   /**
+   * Whether [landed] sits on the seam that [target], counted in [frame]'s node, is: the end of the
+   * node on its left or the start of the node on its right, which are the same caret. Chrome
+   * announces that caret in either frame. Same adjacency assumption as [crossedTarget], and false
+   * where a length is unknown or the target is not the seam: nothing else of one node has a place
+   * in the other.
+   */
+  private fun isSeamOf(frame: SelectionObserver.Snapshot, landed: SelectionObserver.Snapshot, target: Int): Boolean {
+    if (frame.sourceLength < 0 || landed.sourceLength < 0) return false
+    val current = landed.movingOffset()
+    return (target == 0 && current == landed.sourceLength) || (target == frame.sourceLength && current == 0)
+  }
+
+  /**
    * One character past [start], counted into the node [after] landed in, assuming the two nodes are
    * adjacent: the end of the left one is the start of the right one, the same caret. Null when the
    * answer falls outside the landing node, which means the assumption does not hold or its length is
@@ -863,7 +876,7 @@ class SelectionDriver(
             // Still re-key: a landing across a node makes the old node's offsets meaningless.
             syncBoundaryContext(after)
             locator.rememberAnchor(handle.x - reach.coerceAtLeast(0f))
-            heldCorrect(targetOffset(before, after, command, start), start, command, onDone)
+            heldCorrect(targetOffset(before, after, command, start), start, command, onDone, frame = after)
           }
         }
       }
@@ -967,6 +980,8 @@ class SelectionDriver(
     command: PadCommand,
     onDone: (Outcome) -> Unit,
     guard: Int = 0,
+    // The snapshot whose node [target] is counted in, as for [walkBackTo].
+    frame: SelectionObserver.Snapshot? = null,
   ) {
     val before = observer.latestWithFreshBounds()
     // Mirrors [walkBackTo], down to the frame the arithmetic below is written in: [movingOffset] for
@@ -979,7 +994,16 @@ class SelectionDriver(
       onDone(Outcome.NoSelection)
       return
     }
-    if (current == target) {
+    val targetFrame = frame ?: before
+    val onSeam = crossedNodes(targetFrame, before) && isSeamOf(targetFrame, before, target)
+    if (crossedNodes(targetFrame, before) && !onSeam) {
+      // Past the seam into another node, where [target] means nothing: see [walkBackTo].
+      Diag.log("  held: landed on $current in another node, past $target — stopping there")
+      releaseThenReport(origin, current, onDone)
+      return
+    }
+    if (current == target || onSeam) {
+      if (onSeam) Diag.log("  held: $current in the next node is the seam, which is $target")
       when {
         // Asked of the command, not of `grownBy(origin, target)`: after a node crossing the two are
         // offsets in different nodes, and 1 -> 15 on a `char ←` read as a grow of 14.
@@ -999,7 +1023,7 @@ class SelectionDriver(
       // The chain died under us — which it now SAYS, under the same held: prefix as everything else.
       // The released path can still finish from wherever the selection actually is.
       Diag.log("  held: nothing is held any more — finishing on the released path")
-      walkBackTo(target, command, origin, onDone)
+      walkBackTo(target, command, origin, onDone, frame = targetFrame)
       return
     }
 
@@ -1022,7 +1046,7 @@ class SelectionDriver(
      */
     if (toLose > 1) {
       Diag.log("  held: $toLose characters back to $target — lifting to walk back released")
-      gestures.releaseHeld { walkBackTo(target, command, origin, onDone) }
+      gestures.releaseHeld { walkBackTo(target, command, origin, onDone, frame = targetFrame) }
       return
     }
     /*
@@ -1042,7 +1066,7 @@ class SelectionDriver(
     gestureCount++
     if (!gestures.moveHeld(to)) {
       Diag.log("  held: the move was refused — finishing on the released path")
-      walkBackTo(target, command, origin, onDone)
+      walkBackTo(target, command, origin, onDone, frame = targetFrame)
       return
     }
     awaitChange(before) { after ->
@@ -1070,16 +1094,16 @@ class SelectionDriver(
         Diag.log("  held: no news yet — waiting rather than correcting a second time")
         awaitChange(before) { later ->
           when {
-            later != null -> heldCorrect(target, origin, command, onDone, guard + 1)
+            later != null -> heldCorrect(target, origin, command, onDone, guard + 1, targetFrame)
             // Still silent on a GROWING correction: that is the target app's word snap, not a
             // late announcement. See [heldSnapThrough].
-            toLose < 0 -> heldSnapThrough(target, origin, command, onDone, guard + 1)
-            else -> releaseThenWalkBack(target, command, origin, onDone)
+            toLose < 0 -> heldSnapThrough(target, origin, command, onDone, guard + 1, frame = targetFrame)
+            else -> releaseThenWalkBack(target, command, origin, onDone, targetFrame)
           }
         }
         return@awaitChange
       }
-      heldCorrect(target, origin, command, onDone, guard + 1)
+      heldCorrect(target, origin, command, onDone, guard + 1, targetFrame)
     }
   }
 
@@ -1097,15 +1121,21 @@ class SelectionDriver(
    * The wait before [walkBackTo] matters. The lift can be revised, and a revision that arrived in
    * the middle of the walk-back's own drag would read as that drag's answer.
    */
-  private fun releaseThenWalkBack(target: Int, command: PadCommand, origin: Int, onDone: (Outcome) -> Unit) {
+  private fun releaseThenWalkBack(
+    target: Int,
+    command: PadCommand,
+    origin: Int,
+    onDone: (Outcome) -> Unit,
+    frame: SelectionObserver.Snapshot?,
+  ) {
     Diag.log("  held: the shrink to $target was ignored — lifting to walk back released")
     gestures.releaseHeld {
       val atLift = observer.latest
       if (atLift == null) {
-        walkBackTo(target, command, origin, onDone)
+        walkBackTo(target, command, origin, onDone, frame = frame)
         return@releaseHeld
       }
-      awaitQuiet(atLift, 0, onResult = { walkBackTo(target, command, origin, onDone) })
+      awaitQuiet(atLift, 0, onResult = { walkBackTo(target, command, origin, onDone, frame = frame) })
     }
   }
 
@@ -1139,6 +1169,7 @@ class SelectionDriver(
     onDone: (Outcome) -> Unit,
     guard: Int,
     attempt: Int = 1,
+    frame: SelectionObserver.Snapshot? = null,
   ) {
     val before = observer.latestWithFreshBounds()
     val current = before?.movingOffset()
@@ -1150,7 +1181,7 @@ class SelectionDriver(
     val at = gestures.heldAt()
     if (at == null) {
       Diag.log("  held: nothing is held any more — finishing on the released path")
-      walkBackTo(target, command, origin, onDone)
+      walkBackTo(target, command, origin, onDone, frame = frame)
       return
     }
     if (attempt > MAX_SNAP_THROUGH_ATTEMPTS) {
@@ -1167,7 +1198,7 @@ class SelectionDriver(
     gestureCount++
     if (!gestures.moveHeld(PointF(x, at.y))) {
       Diag.log("  held: the move was refused — finishing on the released path")
-      walkBackTo(target, command, origin, onDone)
+      walkBackTo(target, command, origin, onDone, frame = frame)
       return
     }
     awaitChange(before) { after ->
@@ -1176,7 +1207,7 @@ class SelectionDriver(
           if (after == null) "nothing" else "${after.low()}..${after.high()}"
       )
       when {
-        after == null -> heldSnapThrough(target, origin, command, onDone, guard, attempt + 1)
+        after == null -> heldSnapThrough(target, origin, command, onDone, guard, attempt + 1, frame)
         !locator.grabbedAHandle(before, after) -> {
           gestures.releaseHeld()
           onDone(Outcome.HandleLost)
@@ -1187,7 +1218,7 @@ class SelectionDriver(
           // asks the button. The one-character test is the same one it applies.
           syncBoundaryContext(after)
           if (grownBy(current, after.movingOffset()) > 1) knownBoundaries += after.movingOffset()
-          heldCorrect(target, origin, command, onDone, guard)
+          heldCorrect(target, origin, command, onDone, guard, frame)
         }
       }
     }
@@ -1442,11 +1473,38 @@ class SelectionDriver(
     guard: Int = 0,
     retriesLeft: Int = MAX_STEP_RETRIES,
     silentProbes: Int = 0,
+    // The snapshot whose node [target] is counted in: the one the walk started from, since every
+    // caller computes its target in the frame of the selection it hands over.
+    frame: SelectionObserver.Snapshot? = null,
   ) {
     val before = observer.latestWithFreshBounds()
     val current = before?.movingOffset()
     if (before == null || current == null) {
       onDone(Outcome.NoSelection)
+      return
+    }
+    val targetFrame = frame ?: before
+    if (crossedNodes(targetFrame, before)) {
+      /*
+       * The walk left the target's node, and [target] is a number in a frame that this announcement
+       * does not use. Measured 2026-09-24 on `ERR_INVALID_URL`: the walk back from 2 to 0 of the
+       * paragraph reached the seam and Chrome announced it in the previous node's frame, as `9..15`.
+       * Read as fifteen characters short of 0, the next drag took the handle back across the whole
+       * node and destroyed the selection.
+       *
+       * Mapped across the seam, as [crossedTarget] does ([isSeamOf]), a landing there IS the
+       * target. Anywhere else in that node is past the seam, and correcting
+       * that would be a grow reckoned in a frame this walk does not share, so the walk stops where
+       * it is, with the selection intact.
+       */
+      Diag.log(
+        if (isSeamOf(targetFrame, before, target)) {
+          "  shrink: $current in the next node is the seam, which is $target — done"
+        } else {
+          "  shrink: landed on $current in another node, past $target — stopping there"
+        }
+      )
+      onDone(Outcome.Moved(origin, current))
       return
     }
     if (current == target || guard >= MAX_CORRECTIONS) {
@@ -1575,7 +1633,7 @@ class SelectionDriver(
             if (guard + 1 < MAX_CORRECTIONS) {
               awaitSelectionOnScreen { onScreen ->
                 if (onScreen) {
-                  walkBackTo(target, command, origin, onDone, guard + 1, retriesLeft, silentProbes + 1)
+                  walkBackTo(target, command, origin, onDone, guard + 1, retriesLeft, silentProbes + 1, targetFrame)
                 } else {
                   onDone(Outcome.Moved(origin, current))
                 }
@@ -1584,7 +1642,7 @@ class SelectionDriver(
               onDone(Outcome.Moved(origin, current))
             }
           !locator.grabbedAHandle(before, after) -> onDone(Outcome.HandleLost)
-          else -> walkBackTo(target, command, origin, onDone, guard + 1, retriesLeft)
+          else -> walkBackTo(target, command, origin, onDone, guard + 1, retriesLeft, frame = targetFrame)
         }
       }
     }
