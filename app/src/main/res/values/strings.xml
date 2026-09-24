@@ -11,6 +11,7 @@
     <string name="disclosure_title">Before you turn this on</string>
     <string name="disclosure_body">Selection Pad uses Android\'s accessibility service so it can move the selection handles in other apps — that is the only way to reach text a keyboard cannot, such as a web page.\n\nWhat it does with that access:\n\n•  Reads where the current selection starts and ends, as positions on screen.\n•  Sends taps and drags to move the selection handles, one per button press.\n\nWhat it never does:\n\n•  It never reads the text itself, only positions and rectangles.\n•  It never stores anything.\n•  It cannot send anything anywhere — the app requests no permissions at all, including no internet access.\n\nNothing happens until you enable the service yourself, and turning it off in Accessibility settings stops it completely.</string>
     <string name="disclosure_agree">I understand — open Accessibility settings</string>
+    <string name="disclosure_decline">No thanks</string>
     <string name="disclosure_declined">Selection Pad stays off until you agree.</string>
     <string name="consent_recorded">Thanks. Enable “Selection Pad” in the list that opens.</string>
 

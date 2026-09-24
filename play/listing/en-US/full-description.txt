@@ -1,0 +1,32 @@
+Selecting text on a phone means dragging a tiny handle with your finger and hoping it stops on the right letter. Inside a text field a keyboard can help, with arrow keys or a cursor pad. Everywhere else - a web page, an article, a read-only view - no keyboard is involved, so there is nothing to help with.
+
+Selection Pad adds a small floating pad of buttons that move the selection for you, the way Shift and the arrow keys do on a computer:
+
+• Extend or shrink the selection by one character.
+• Extend or shrink it by a whole word.
+• Choose which end of the selection moves, and swap it with one tap.
+• Hold a button to keep stepping; touch anywhere to stop.
+• Hide the app's own selection menu while it is in the way, and bring it back when you want it.
+
+Select a word the usual way with a long press, then use the pad to put each end exactly where you want it. Then copy, share or look it up with the app's own menu, as you normally would.
+
+HOW IT WORKS - AND WHY IT USES ACCESSIBILITY
+
+Selection Pad uses Android's Accessibility Service API. That is the only way an app can move a selection inside another app, because the text belongs to that other app and no keyboard is connected to it.
+
+With that access, Selection Pad does exactly two things:
+
+• It reads where the current selection starts and ends, as positions and rectangles on the screen.
+• It performs the same touch you would - a drag on the selection handle that the other app already shows - once per button press.
+
+It does not read, store or send the text you select, and it has no way to: the app requests no permissions at all, not even internet access. Nothing leaves your phone, because nothing can.
+
+The service does nothing until you turn it on yourself in Accessibility settings, after the app explains what it does and you agree. Turning it off there stops it completely. The pad's close button hides it without turning the service off, and the app's own screen brings it back.
+
+WHERE IT WORKS
+
+Selection Pad drives the selection handles that an app already draws, so it works where you can already select text by touch. It is built and measured against web pages in Chrome and against ordinary Android text. Apps that draw their own selection in an unusual way may not respond to it.
+
+OPEN SOURCE
+
+Selection Pad is open source under the MIT licence.

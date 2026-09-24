@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    A selection on a line of text: the highlighted run, the two carets at its edges, and the two
+    teardrop handles hanging below them - the handles the app drives. Everything sits inside the
+    66-unit safe circle of the 108-unit adaptive canvas (the farthest handle edge is 32 units from
+    the centre), so no launcher mask clips a handle.
+
+    The same geometry is in play/graphics/icon.svg, which renders the 512 px store icon; change both.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:fillColor="#8AB4F8" android:pathData="M37,42 H71 V58 H37 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M35,38 H37 V58 H35 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M71,38 H73 V58 H71 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M36,58 L30,58 A6,6 0 1 0 36,64 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M72,58 L78,58 A6,6 0 1 1 72,64 Z" />
+</vector>

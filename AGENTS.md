@@ -712,6 +712,22 @@ Both produce `app-debug.apk` from a `:app` module, so **check which directory yo
 installing — the two APKs have different application ids (`dev.mnaoumov.asc` and
 `dev.mnaoumov.asc.spike`) and can be installed side by side.
 
+**The release bundle** is `:app:bundleRelease`, signed with the Play upload key when four
+`ascUpload*` Gradle properties (or `ASC_UPLOAD_*` environment variables) name it, and unsigned when
+none do. The key and its passwords never enter the repo, which is public; `play/README.md` has the
+names, the `keytool` line and the upload order. A partial configuration fails the build by design,
+because a bundle signed with nothing is refused by Play loudly while one half-configured is a
+mistake that should not reach the Console.
+
+Measured 2026-09-23 with a throwaway key: `apksigner verify` reads the release APK as signed by it,
+`jarsigner -verify` accepts the `.aab`, and `aapt2 dump permissions` on the release APK prints the
+package line and nothing else — the zero-permission property holds for the build that ships, not
+only the debug one.
+
+**Nothing in `play/` is generated except the two PNGs**, which `play/graphics/render.ps1` renders
+from their SVGs with a headless Chrome and `.gitignore` keeps out. The launcher icon's vector and
+`play/graphics/icon.svg` share one geometry and have to be changed together.
+
 ## Run the app
 
 ```powershell
@@ -744,8 +760,9 @@ A further wrinkle worth knowing: a service enabled with `settings put` **runs**,
 row still reads `Off`. So the list is not a reliable indicator of what is actually running — check
 `settings get secure enabled_accessibility_services`, or just look for the pad.
 
-The launcher entry (**Selection Pad**) shows the Play-required disclosure and a link to Accessibility
-settings; on this device that link is informational, since the toggle will not be there.
+The launcher entry (**Selection Pad**) shows the Play-required disclosure, which ends in a real choice:
+agree, which opens Accessibility settings, or **No thanks**, which closes the screen and leaves the
+service off (both checked on the rig 2026-09-23). On this device the settings link is informational, since the toggle will not be there.
 
 The pad appears as soon as the service connects. Its buttons take **real injected input** —
 `adb shell input tap <x> <y>` — which is the right way to test them: the service's own

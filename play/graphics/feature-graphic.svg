@@ -1,0 +1,16 @@
+<!-- The 1024 x 500 store feature graphic. The motif is the launcher icon's geometry, enlarged. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="500" viewBox="0 0 1024 500">
+  <rect width="1024" height="500" fill="#1A4C8F"/>
+  <g transform="translate(40 34) scale(4.2)">
+    <path fill="#8AB4F8" d="M37,42 H71 V58 H37 Z"/>
+    <path fill="#FFFFFF" d="M35,38 H37 V58 H35 Z"/>
+    <path fill="#FFFFFF" d="M71,38 H73 V58 H71 Z"/>
+    <path fill="#FFFFFF" d="M36,58 L30,58 A6,6 0 1 0 36,64 Z"/>
+    <path fill="#FFFFFF" d="M72,58 L78,58 A6,6 0 1 1 72,64 Z"/>
+  </g>
+  <g font-family="Segoe UI, Roboto, Helvetica, Arial, sans-serif" fill="#FFFFFF">
+    <text x="440" y="230" font-size="76" font-weight="600">Selection Pad</text>
+    <text x="442" y="292" font-size="30" fill="#D2E3FC">Select text one character at a time,</text>
+    <text x="442" y="332" font-size="30" fill="#D2E3FC">anywhere you can select it by touch.</text>
+  </g>
+</svg>

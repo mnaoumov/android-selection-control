@@ -12,3 +12,6 @@ captures/
 .idea/
 *.iml
 .kotlin/
+
+# Store graphics are rendered from their SVG sources by play/graphics/render.ps1
+play/graphics/*.png

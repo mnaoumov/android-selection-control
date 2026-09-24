@@ -37,8 +37,9 @@ edge is moving.
 | --- | --- |
 | `app/` | the product — the accessibility service, the handle locator and the floating pad |
 | `spike/` | a throwaway, adb-driven diagnostic service. **Not app code**, never promoted |
+| `play/` | the Google Play listing: text, privacy policy, declaration answers, store graphics |
 
-The two are **separate Gradle projects** with separate wrappers; the root `settings.gradle.kts`
+`app/` and `spike/` are **separate Gradle projects** with separate wrappers; the root `settings.gradle.kts`
 deliberately does not include `spike/`. The spike is kept because it is how every mechanism above
 was measured, and how the next one will be.
 
@@ -49,9 +50,12 @@ was measured, and how the next one will be.
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Then enable **Android Selection Control** in Settings → Accessibility.
+Then enable **Selection Pad** in Settings → Accessibility.
 
 `minSdk` is 33, `targetSdk` 36, application id `dev.mnaoumov.asc`.
+
+A release bundle for Google Play is `./gradlew :app:bundleRelease`; `play/README.md` covers the upload
+key, which lives outside the repository, and everything else the listing needs.
 
 ### One thing that will surprise you
 

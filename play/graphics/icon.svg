@@ -1,0 +1,10 @@
+<!-- The 512 px store icon. Same geometry as app/src/main/res/drawable/ic_launcher_foreground.xml,
+     cropped to the adaptive icon's central 72 units; Play applies its own corner mask. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="18 18 72 72">
+  <rect x="0" y="0" width="108" height="108" fill="#1A4C8F"/>
+  <path fill="#8AB4F8" d="M37,42 H71 V58 H37 Z"/>
+  <path fill="#FFFFFF" d="M35,38 H37 V58 H35 Z"/>
+  <path fill="#FFFFFF" d="M71,38 H73 V58 H71 Z"/>
+  <path fill="#FFFFFF" d="M36,58 L30,58 A6,6 0 1 0 36,64 Z"/>
+  <path fill="#FFFFFF" d="M72,58 L78,58 A6,6 0 1 1 72,64 Z"/>
+</svg>
