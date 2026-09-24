@@ -597,10 +597,21 @@ function Start-Target {
     Assert-RigAttached
     if (-not $KeepLog) { Clear-Log }
     Invoke-Adb -Arguments @('shell', 'am', 'start', '-n', $TargetActivity) | Out-Null
-    Start-Sleep -Seconds 2
-    $blocks = @(Get-TargetBlocks)
+
+    # Poll rather than sleep a fixed time: on a guest booted seconds ago the launch splash alone
+    # outlasted a 2 s sleep, and both producers logged just after the read that reported them absent.
+    $deadline = (Get-Date).AddSeconds(15)
+    do {
+        Start-Sleep -Milliseconds 500
+        $blocks = @(Get-TargetBlocks)
+    } while ($blocks.Count -eq 0 -and (Get-Date) -lt $deadline)
     if ($blocks.Count -eq 0) {
-        Write-Warning -Message 'The target activity logged no blocks. It is debug-only — check the debug APK is the one installed.'
+        # Two causes, the likelier first. An APK built before the target logged on every resume
+        # writes its blocks only when the activity is CREATED, so resuming one already in the stack
+        # logs nothing while it sits plainly on screen. Only after that is the APK itself suspect.
+        Write-Warning -Message ('The target activity logged no blocks. If it is on screen, the installed APK predates ' +
+            'the log-on-resume target: rebuild, or `am force-stop` the app so the next start creates it. ' +
+            'If it is not on screen, the target is debug-only — check the debug APK is the one installed.')
     }
     return $blocks
 }
