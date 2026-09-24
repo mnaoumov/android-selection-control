@@ -526,11 +526,22 @@ function Clear-Log {
     Invoke-Adb -AllowFailure -Arguments @('logcat', '-c') | Out-Null
 }
 
+<#
+  The app's own log lines, newest last.
+
+  Never hand adb `-t`: it takes the last n lines of the WHOLE buffer before the tag filter runs, so
+  on a chatty guest the app's lines fall out of the window and the answer is empty rather than
+  stale — measured as `buttons` printing "(none logged)" 37 s after the pad logged all twelve
+  rectangles. The tagged buffer is small because the tag is ours, and `Clear-Log` bounds it anyway,
+  so it is read whole and any tail is taken after the filter. `-Lines 0` means all of it.
+#>
 function Get-Log {
     [CmdletBinding()]
     param([int] $Lines = 200)
 
-    return @(Invoke-Adb -AllowFailure -Arguments @('logcat', '-s', "${LogTag}:I", '-d', '-t', "$Lines"))
+    $all = @(Invoke-Adb -AllowFailure -Arguments @('logcat', '-s', "${LogTag}:I", '-d'))
+    if ($Lines -le 0 -or $all.Count -le $Lines) { return $all }
+    return @($all | Select-Object -Last $Lines)
 }
 
 <#
@@ -553,7 +564,7 @@ function Get-LoggedRects {
         [string[]] $Lines
     )
 
-    if ($null -eq $Lines) { $Lines = Get-Log -Lines 400 }
+    if ($null -eq $Lines) { $Lines = Get-Log -Lines 0 }
 
     $found = [ordered]@{}
     $Lines | ForEach-Object -Process {
