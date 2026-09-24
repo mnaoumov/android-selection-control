@@ -818,14 +818,24 @@ class SelectionDriver(
             onDone(Outcome.HandleLost)
           }
           else -> {
-            // The FIRST landing of a held character step is worth recording even though the press
-            // will walk back off it: aimed at one character in the growing direction, a target that
-            // snaps words lands on the next boundary instead (measured 8 -> 10 -> 18, straight
-            // across one). That is a boundary learned by the `char →` button, which is exactly the
-            // kind this set used to miss because only `word →` was thought to teach it anything.
-            // Unless the grab changed row, where a grow is character-granular: see [changeRowThenGrow].
-            // Nor when it crossed a node, where it lands wherever the finger was.
-            if (to.y == handle.y) recordBoundary(before, after, command, crossedByCharacterStep = true)
+            /*
+             * The FIRST landing is NOT recorded as a boundary, although a `TextView` snap from a
+             * boundary would land on one (8 -> 10 -> 18, once). On Chrome it is where the grab's
+             * outward detour left the handle: measured 2026-09-24 on the error page, `char →` from
+             * 21, the end of `temporarily`, landed on 23, inside `down` (22..26), and 23 went into
+             * the set. The press after it read 23 as a known boundary and took 24 as the next word's
+             * start. Nothing tells that landing from a snap. And with the outward detour a
+             * `TextView` does not snap here at all: six presses of six from `bravo`'s end moved
+             * 11 -> 12 in one gesture. The snaps that do happen are recorded by [heldSnapThrough]
+             * and [growOneUnit].
+             *
+             * Detouring toward the anchor, as [growToWordEnd] does, was measured and refused. Chrome
+             * then landed on 22 four times of four, but the `TextView` grab from a word's end then
+             * announced nothing 2 times of 3. It fell back to the released path, at 4-7 gestures and
+             * 2-9 s a press against 1 gesture and about 1 s.
+             */
+            // Still re-key: a landing across a node makes the old node's offsets meaningless.
+            syncBoundaryContext(after)
             locator.rememberAnchor(handle.x - reach.coerceAtLeast(0f))
             heldCorrect(targetOffset(before, after, command, start), start, command, onDone)
           }
@@ -1877,10 +1887,11 @@ class SelectionDriver(
    * 2026-09-24 on `ERR_INVALID_URL`, from `9..15` of `"chrome://terms/"` the grab landed on `0..2`,
    * inside `might`, and 2 went into the set before the correction walked the edge back to 1.
    *
-   * **A character step that crossed records nothing at all**, from a known boundary or not. Its
-   * landing across the seam is where the finger was: from `9..14`, `14` seeded by the long-press, the
-   * same `char →` landed on `0..2` again, three characters on and still mid-`might`. So no distance
-   * test tells an overshoot from a snap there. [crossedByCharacterStep] marks such a landing.
+   * **A character step records nothing at all**, so it never reaches this. Across a seam its landing
+   * is where the finger was: from `9..14`, `14` seeded by the long-press, the same `char →` landed on
+   * `0..2` again, three characters on and still mid-`might`. Inside one node on Chrome it is where
+   * the grab's detour left the handle (see [heldCharacterStep]). No distance test tells either from
+   * a snap.
    *
    * **And it must have STARTED on a known boundary.** The platform snaps a grow only while
    * `mInWord` is false, i.e. only from a boundary; from inside a word it follows the finger one
@@ -1892,7 +1903,6 @@ class SelectionDriver(
     before: SelectionObserver.Snapshot,
     after: SelectionObserver.Snapshot,
     command: PadCommand,
-    crossedByCharacterStep: Boolean = false,
   ) {
     if (!growsSelection(command)) return
     // Asked before the re-key below, which clears the set when the node changes.
@@ -1908,10 +1918,6 @@ class SelectionDriver(
      */
     syncBoundaryContext(after)
     val grown = if (crossedNodes(before, after)) {
-      if (crossedByCharacterStep) {
-        Diag.log("  not recording ${after.movingOffset()}: a character step crossed a node, so it landed where the finger was")
-        return
-      }
       grownAcrossSeam(before, after, command) ?: run {
         Diag.log("  not recording ${after.movingOffset()}: it crossed a node of unknown length")
         return

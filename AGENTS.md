@@ -686,9 +686,28 @@ that a grow only crosses by snapping. A held `char →` crosses where the finger
 Chrome force-stopped: from `9..15` of `"chrome://terms/"` the grab landed on `0..2`, inside `might`,
 and the next press read `boundaries=[2]`. From `9..14`, with 14 seeded by the long-press, it landed on
 `0..2` too, three characters on, so no distance test separates it from a snap. After the change,
-three presses of three log `not recording 2: a character step crossed a node` and the set stays
-empty. The other crossings now need a known origin and a grow of more than one character, counted
-across the seam (`grownAcrossSeam`). The `word →` from `terms` above still records 1.
+three presses of three left the set empty. The other crossings now need a known origin and a grow of
+more than one character, counted across the seam (`grownAcrossSeam`). The `word →` from `terms`
+above still records 1.
+
+**A held character step records NO boundary at all, inside a node as well as across one.** It used to
+record its first landing from a known boundary, on the theory that a `TextView` snaps there to the
+next word's end. On Chrome that landing is where the grab's 60 px outward detour left the handle.
+Measured 2026-09-24 on the error page, Chrome force-stopped: `char →` from 21, the end of
+`temporarily` (seeded `[10, 21]`), landed on 23 or 24, inside `down` (22..26), and that offset went
+into the set. The next `word →` then started from a "known boundary" mid-word, and a released
+walk-back from it recorded 24 as the next word's start. After the change, three presses of three still
+ended on 22 in 2 gestures, the set stayed `[10, 21]`, and the `word →` after each landed on 26 twice.
+The third run landed on 27, which is a separate defect.
+
+The alternative was to keep the recording and detour the grab toward the anchor, as the word walk
+does. It was measured and refused. Chrome then landed on 22 exactly, 4 presses of 4. But on the
+`TextView`, the grab from `bravo`'s end announced nothing 2 times of 3 and fell back to the released
+path, at 4-7 gestures and 2-9 s a press.
+
+Dropping the recording has cost the `TextView` nothing that was measured. With the outward detour the
+grab does not snap there: 6 presses of 6 went 11 -> 12 in one gesture at about 1 s, before and after
+the change. The snaps that do happen are recorded by the held snap-through and the released grow.
 
 **A grow snaps only when it STARTS on a word boundary, so a landing counts as a boundary only when
 the grow started on one the set already knows.** `SelectionHandleView.updatePosition` snaps only
