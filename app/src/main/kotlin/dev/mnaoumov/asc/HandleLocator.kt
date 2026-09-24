@@ -36,6 +36,20 @@ enum class Crossing { RIGHTWARD, LEFTWARD }
 data class CharacterGeometry(val caretX: Float, val lineBottom: Float, val characterWidth: Float)
 
 /**
+ * A run of the source node's characters as the platform measures them: each glyph's width, and the
+ * run's outer edges, [left] and [right].
+ *
+ * The distance across the run is [span], NOT the sum of [widths]. Chrome's rectangles overlap their
+ * neighbours: on the rig every width came back a whole even number, which is whole page pixels at
+ * 2x, so each looks rounded OUT, and a sum over ten glyphs overstated the run by 12 px (162 against
+ * the 150 between its carets). The outer edges carry that rounding once each rather than ten times.
+ * The debug target's `TextView` walk-backs landed in one drag with either answer.
+ */
+class CharacterRun(val widths: FloatArray, val left: Float, val right: Float) {
+  val span: Float get() = right - left
+}
+
+/**
  * Where on screen the handle being moved is.
  *
  * Five rungs, in the order the pad build measured them to be reliable. Each is used only where it
@@ -240,8 +254,8 @@ class HandleLocator(private val density: () -> Float) {
   }
 
   /**
-   * The widths of the source node's characters `[from, to)`, as the platform measures them — or null
-   * where it will not, or where the run is longer than [MAX_SPAN] or leaves one line.
+   * The source node's characters `[from, to)` as the platform measures them — or null where it will
+   * not, or where the run is longer than [MAX_SPAN] or leaves one line.
    *
    * For a step of SEVERAL characters, which one glyph's width times a count cannot size. Measured
    * 2026-09-24 walking the END edge back from 19 to 13 across `harlie`: one width of 19 px times six
@@ -250,7 +264,7 @@ class HandleLocator(private val density: () -> Float) {
    * standing: indices in, rectangles out, no text read. Bounded because the answer is as long as the
    * request and some surfaces announce a node of thirteen thousand characters.
    */
-  fun characterWidths(snapshot: SelectionObserver.Snapshot, from: Int, to: Int): FloatArray? {
+  fun characterRun(snapshot: SelectionObserver.Snapshot, from: Int, to: Int): CharacterRun? {
     val source = snapshot.source ?: return null
     val bounds = snapshot.bounds ?: return null
     if (from < 0 || to > snapshot.sourceLength || to - from !in 1..MAX_SPAN) return null
@@ -273,6 +287,8 @@ class HandleLocator(private val density: () -> Float) {
 
     val lineBottom = rects.first()?.bottom ?: return null
     val widths = FloatArray(rects.size)
+    var left = 0f
+    var right = 0f
     for ((i, rect) in rects.withIndex()) {
       // A null entry is a character not laid out; a lie is the node's own box, as in
       // [characterGeometry]; a different bottom is a wrap, across which widths do not add up to a
@@ -281,8 +297,10 @@ class HandleLocator(private val density: () -> Float) {
       if (rect.width() >= bounds.width() - LIE_TOLERANCE && rect.height() >= bounds.height() - LIE_TOLERANCE) return null
       if (kotlin.math.abs(rect.bottom - lineBottom) > LIE_TOLERANCE) return null
       widths[i] = rect.width()
+      if (i == 0) left = rect.left
+      right = rect.right
     }
-    return widths
+    return CharacterRun(widths, left, right)
   }
 
   /**
@@ -664,7 +682,7 @@ class HandleLocator(private val density: () -> Float) {
      */
     const val LIE_TOLERANCE = 1f
 
-    /** The longest run [characterWidths] will ask for: a step's worth of characters, never a node's. */
+    /** The longest run [characterRun] will ask for: a step's worth of characters, never a node's. */
     const val MAX_SPAN = 64
 
     /** Scanning: the step is the handle's own touch radius; finer only buys duplicate hits. */

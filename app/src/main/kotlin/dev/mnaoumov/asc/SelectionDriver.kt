@@ -1779,13 +1779,21 @@ class SelectionDriver(
    * target's cell rather than on its boundary. The same aim the per-glyph formula takes, with the
    * run measured instead of one glyph's width multiplied by a count, which is only right for a run
    * of one. Null where the platform will not measure the run, and the caller keeps that formula.
+   *
+   * The distance is the run's outer edges, [CharacterRun.span], never its widths added up: Chrome's
+   * rectangles overlap their neighbours. Measured 2026-09-24 on a served paragraph, `char →` from 21,
+   * the start of `temporarily`: the grow snapped to 32 and the walk back to 22 was sized by ten widths
+   * summing to 162 px between carets 150 px apart. The finger stopped 12 px short, inside the `t`, and
+   * Chrome put the edge back on 21, three rounds of three per press. Sized by the span, the same walk
+   * landed on 22 in one drag, three presses of three, and the `char ←` mirror on the START edge
+   * (32 -> 31, across the same word) did the same.
    */
   private fun measuredReach(snapshot: SelectionObserver.Snapshot, current: Int, target: Int): Float? {
     if (current == target) return 0f
-    val widths = locator.characterWidths(snapshot, minOf(current, target), maxOf(current, target)) ?: return null
-    val lastCrossed = if (target < current) widths.first() else widths.last()
+    val run = locator.characterRun(snapshot, minOf(current, target), maxOf(current, target)) ?: return null
+    val lastCrossed = if (target < current) run.widths.first() else run.widths.last()
     val sign = if (target > current) 1f else -1f
-    return sign * (widths.sum() - BOUNDARY_BIAS * lastCrossed)
+    return sign * (run.span - BOUNDARY_BIAS * lastCrossed)
   }
 
   /**
