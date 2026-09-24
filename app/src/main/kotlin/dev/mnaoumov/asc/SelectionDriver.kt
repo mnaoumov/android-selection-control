@@ -1183,9 +1183,17 @@ class SelectionDriver(
    *    is the ONLY stop: it does not hold at a word's end but steps on through the space and holds at
    *    the next word's START (see below).
    *  - **+1** — still inside the word; step again.
-   *  - **nothing, twice** — the hold, so the edge is on the word's end. Two pushes because one silent
-   *    push could be a step that stayed inside its own cell; two characters of travel from inside a
-   *    word always move the handle.
+   *  - **nothing, after a push of one MEASURED glyph** — the hold. A push the platform sized cannot
+   *    stay inside its own cell, so one is enough. On a `TextView` the hold is the word's end; on
+   *    Chrome, with no known boundary to stop on, it is the next word's START, after a step through
+   *    the space. Pushing again there jumped to the end of THAT word, two words reported as one:
+   *    measured 2026-09-24 on a served paragraph, with the known-boundary stop switched off since
+   *    nothing on the pad reaches such an edge, 29 inside `temporarily` walked 30, 31, 32, 33, was
+   *    silent once at 33 and jumped to 37. Stopping on the first silent push lands on 33 in 5
+   *    gestures, three runs of three, and the next `word →` grows from it to 37 in 2.
+   *  - **nothing, twice** — the same hold, where the push was sized by an average: one silent push
+   *    could be a step that stayed inside a wide glyph's cell, and two characters of travel from
+   *    inside a word always move the handle.
    *  - **a jump of more than one** — taken as the step and reported, and recorded NOWHERE. On a
    *    `TextView` it is a snap to the end of a word short enough that one push passed its middle, so
    *    the walk has gone a short word too far. A first version walked back to the offset before the
@@ -1269,6 +1277,8 @@ class SelectionDriver(
     silentPushes: Int = 0,
     stepped: Boolean = false,
     pushes: Int = 1,
+    // Whether the push that produced [after] was sized by a glyph the platform measured.
+    pushWasMeasured: Boolean = false,
   ) {
     val current = before.movingOffset()
     val crossed = after != null && before.source != null && after.source != null && before.source != after.source
@@ -1280,6 +1290,14 @@ class SelectionDriver(
         recordBoundary(before, after, command)
         releaseThenReport(origin, after.movingOffset(), onDone)
         return
+      }
+      // A push of one MEASURED glyph cannot stay inside its own cell, so one silent push after a step
+      // is already the hold. On Chrome that hold is the next word's start: a second push jumps on to
+      // that word's end, two words' worth of step reported as one.
+      (after == null || moved == 0) && stepped && pushWasMeasured -> {
+        knownBoundaries += current
+        Diag.log("  word walk: held at $current after a measured push — a word boundary")
+        pullBackThenRelease(origin, current, onDone)
       }
       after == null || moved == 0 -> {
         if (silentPushes + 1 >= WORD_WALK_SILENT_PUSHES) {
@@ -1338,6 +1356,9 @@ class SelectionDriver(
       releaseThenReport(origin, from.movingOffset(), onDone)
       return
     }
+    // Asked before the reach is sized, so a refusal here that the sizing's own re-ask turns into an
+    // answer reads as unmeasured: the safe side, which keeps the two-push rule.
+    val measured = locator.characterGeometry(from, activeEdge, crossingOf(command)) != null
     val reach = (if (command.toRight) 1f else -1f) * pixelsPerCharacter(from, crossingOf(command))
     val x = (at.x + reach).coerceIn(0f, (gestures.screenWidth() - 1).toFloat())
     gestureCount++
@@ -1356,7 +1377,7 @@ class SelectionDriver(
         onDone(Outcome.HandleLost)
         return@awaitChange
       }
-      walkHeldToWordEnd(command, origin, from, after, onDone, silentPushes, stepped, pushes + 1)
+      walkHeldToWordEnd(command, origin, from, after, onDone, silentPushes, stepped, pushes + 1, measured)
     }
   }
 
@@ -2089,8 +2110,9 @@ class SelectionDriver(
     const val MAX_SNAP_THROUGH_ATTEMPTS = 6
 
     /**
-     * Silent pushes in a row that [growToWordEnd] takes as the word-end hold. Two characters of travel
-     * from inside a word always move the handle; one can stay inside its own cell.
+     * Silent pushes in a row that [growToWordEnd] takes as the word-end hold when its pushes were sized
+     * by an average. Two characters of travel from inside a word always move the handle; one can stay
+     * inside its own cell. A push of a measured glyph cannot, and ends the walk on its own.
      */
     const val WORD_WALK_SILENT_PUSHES = 2
 
