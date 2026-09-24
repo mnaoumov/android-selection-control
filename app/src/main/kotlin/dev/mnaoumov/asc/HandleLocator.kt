@@ -45,7 +45,8 @@ data class CharacterGeometry(val caretX: Float, val lineBottom: Float, val chara
  * 1. **Interpolate** across the source node's bounds — accurate to about a character where the node
  *    hugs its text, which is Chrome's per-phrase inline nodes. Only valid when the box is one line:
  *    a phrase that wraps reports the union of its line boxes, and interpolating across that put the
- *    handle ~130 px out in x and ~76 px in y.
+ *    handle ~130 px out in x and ~76 px in y. The column comes from rung 2's rectangle whenever it
+ *    answers, and from the node's average character only where it does not.
  * 2. **Ask the platform for the character's own rectangle** — the only rung that answers with a ROW
  *    rather than assuming one. It is also the only rung that can be caught lying, which is what
  *    makes it safe to try; Chrome page content is measured to lie. See [characterGeometry].
@@ -448,16 +449,30 @@ class HandleLocator(private val density: () -> Float) {
     val bounds = snapshot.bounds ?: return null
 
     if (snapshot.sourceIsOneLine() && snapshot.sourceLength > 0) {
+      /*
+       * The caret comes from the character's own rectangle wherever the platform gives one, and from
+       * the node's AVERAGE character only where it will not. Interpolating by the average is off by
+       * however far the prefix's real glyphs diverge from it, while the reach that follows is sized
+       * by a measured glyph, so the two disagree. Measured 2026-09-24 on a served one-line
+       * `Chrome is made by Google`: the grabs sat exactly 16 px apart per offset across glyphs of
+       * 8 to 30 px, and a one-glyph reach from there landed two characters on, from 10 across the
+       * `m` and from 6 across the space. The row stays `bounds.bottom`: on one line that is already
+       * the caret's own, and it is the row every one-line grab has been measured at.
+       *
+       * The primer has usually asked already, so on Chrome this is the memo rather than an IPC.
+       */
       val offset = if (edge == Edge.START) snapshot.low() else snapshot.high()
-      val anchorX = bounds.left + (offset.toFloat() / snapshot.sourceLength) * bounds.width()
+      val average = bounds.left + (offset.toFloat() / snapshot.sourceLength) * bounds.width()
+      val measured = characterGeometry(snapshot, edge)?.caretX
+      if (measured != null) Diag.log("  locate: one-line caret measured=$measured average=$average")
+      val anchorX = measured ?: average
       val x = if (edge == Edge.START) anchorX - handleInset else anchorX + handleInset
       return PointF(x, bounds.bottom + handleDrop)
     }
 
     /*
-     * Only reached once interpolation is out, so the fast path — Chrome's one-line inline nodes,
-     * which is most presses — never pays the round trip. This is the case where every remaining
-     * rung is guessing at a row, so an IPC that answers with one is cheap by comparison.
+     * Reached only once interpolation is out, so this is the case where every remaining rung is
+     * guessing at a row, and an answer that carries one is worth more than the column above.
      */
     val character = characterGeometry(snapshot, edge)
       ?: lineNodeGeometry(snapshot, edge)
