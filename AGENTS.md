@@ -335,14 +335,49 @@ Every press moved exactly one character in both builds. The measured aim removed
 the average was furthest off (16 px at offset 6 of the first line). Everywhere else the same offsets
 overshoot whichever aim is used: at offset 6 of `mint oil ink lilt wax` the grab moved 14.6 px and the
 press still landed on 8. At offset 9 of the first line, the average and the measured caret were the same
-pixel. So the rest of the +2 landings depend on where the step goes, not on where the grab starts, and
-remain unexplained. The debug target's `TextView` took 16 of 16 presses, 8 each way from `bravo`, exactly
+pixel. So the rest of the +2 landings depend on where the step goes, not on where the grab starts. They
+were the grab's slop detour (the entry after next). The debug target's `TextView` took 16 of 16 presses, 8 each way from `bravo`, exactly
 one character each, with an aim that moved by up to 14 px.
 
 A second +2 sat beside it: the held first travel was floored at `STEP_PX` = 12 even when the glyph
 had been measured, so the 8 px `i` and `l` of `oil` were overshot, 6 -> 8, and a held correction
 back to 7 announced nothing. That floor is gone; `pixelsPerCharacter` already bounds its answer.
 The reported shape now reads `reach=10.0 -> 0..7`, pulls back, and stays on 7.
+
+**On Chrome the held grab's detour stops just past the touch slop, because Chrome keeps the lead a
+snap built up.** The grab used to travel 60 px past the handle before coming back to its destination.
+That visit grows the selection, often past the next word's middle, where Chrome snaps to the word's
+end. The return is a shrink, and Chrome's shrink keeps the distance between the snapped edge and the
+finger, so the edge stops one character past the finger. Measured 2026-09-24 on the rig by logging
+every announcement during the grab: `char →` from 9 of `Chrome is made by Google` announced 10, 14, 13,
+12, 11 and stopped on 11 with the pointer on 10's caret. From 17 it snapped to 23, the end of `Google`,
+and came back only to 20. A visit that stayed short of a word's middle (from 8: 10, then 9) came back
+exactly. So the detour is now as long as the reach, or one pixel past the slop (17 px here) when the
+reach is shorter, which is `drag`'s `pastTarget = false`. The page is recognised by the
+`AccessibilityNodeInfo.chromeRole` key in the source node's extras, which Chrome and WebView set on
+every node. Its class name is `android.widget.TextView`, so the class cannot say it.
+
+A short detour does not reach the next word's middle, so from a word's START Chrome holds the edge and
+the grab announces nothing. There the held pointer now pushes on through the snap (`heldSnapThrough`)
+and walks back from the word's end. Releasing to the released grow instead took 3-7 gestures and once
+ended where it began (`Moved(9, 9)` in 4.1 s). Chrome force-stopped before each run, served page:
+
+| run | presses | extra gestures, 60 px detour | extra gestures, short detour |
+|---|---|---|---|
+| `Chrome is made by Google`, `char →` from 6 | 16 | from 9, 10, 17, 18 | from 10, 15, 18 (two runs, identical) |
+| `alpha bravo charlie delta`, `char →` from 11 | 12 | from 12, 19, 20 | from 12, 20 |
+| `mint oil ink lilt wax`, `char →` from 4 | 12 | from 6, 11, 15 | from 5, 9, 13 |
+| `Google`, swapped, `char ←` from 18 | 12 | not measured | from 17, 14, 9 |
+| `char ←` from 24 after four `word →` | 10 | not measured | none |
+
+Every press in every run moved exactly one character. Each remaining extra-gesture press starts at a
+word's start in its direction of travel. Where Chrome held the edge, the push-through took 3-4
+gestures and 1.35-1.75 s. Where the short grab still crossed a short word's middle (`by`, `oil`,
+`lilt`, `is`) and snapped, a released walk-back took 2 gestures and 1.2-1.5 s.
+The mid-word and space +2s are gone (1 gesture, about 0.8 s). A shrink has no word to snap into, and 10 of 10
+took one gesture. Detouring toward the anchor was also measured, and it was worse: the return is then a grow, which
+Chrome ended one character SHORT about as often as the long detour ended long. The debug target's
+`TextView` keeps the 60 px detour, and 16 of 16 presses from `bravo` still moved exactly one character.
 
 **`chrome://version` itself cannot show any of this on the rig.** Its header sits right under the
 omnibox, so Chrome puts the floating toolbar BELOW the selection, over the handle, and every grab there

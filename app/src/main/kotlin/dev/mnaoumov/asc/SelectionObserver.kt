@@ -50,6 +50,12 @@ class SelectionObserver {
      * where the text used to be, which reads to the user as "it loses the handle far too easily".
      */
     val source: AccessibilityNodeInfo? = null,
+    /**
+     * Whether the source is Blink page content: Chrome, or a WebView, which tag every node with a
+     * `chromeRole` extra. Its class name cannot say so, because Chrome reports page text as
+     * `android.widget.TextView`. Read from the extras' KEYS, never from any value in them.
+     */
+    val isBlink: Boolean = false,
   ) {
     fun low(): Int = minOf(from, to)
 
@@ -132,6 +138,7 @@ class SelectionObserver {
       packageName = event.packageName?.toString(),
       atMs = SystemClock.uptimeMillis(),
       source = source,
+      isBlink = runCatching { source.extras?.containsKey(CHROME_ROLE_KEY) }.getOrNull() == true,
     )
     return true
   }
@@ -183,6 +190,9 @@ class SelectionObserver {
 
   companion object {
     private const val MAX_DEPTH = 60
+
+    /** The extra Chrome and WebView put on every node. See [Snapshot.isBlink]. */
+    private const val CHROME_ROLE_KEY = "AccessibilityNodeInfo.chromeRole"
 
     /**
      * Below this ratio of character width to box height, the box spans wrapped lines and

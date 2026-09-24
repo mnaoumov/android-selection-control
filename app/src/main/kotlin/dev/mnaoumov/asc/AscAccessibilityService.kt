@@ -467,14 +467,22 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
    * The held route (the held-pointer fix). The grab travels past the touch slop for the same reason [drag] does — a
    * miss that reads as a tap navigates — and [HeldPointer] adds the detour itself.
    */
-  override fun grabAndHold(from: PointF, to: PointF, detourBack: Boolean, onGrabbed: (Boolean) -> Unit) {
+  override fun grabAndHold(
+    from: PointF,
+    to: PointF,
+    detourBack: Boolean,
+    pastTarget: Boolean,
+    onGrabbed: (Boolean) -> Unit,
+  ) {
     // A chain from a previous press cannot be reused: the press itself is a real touch, and a real
     // touch ends the target app's tracking of the handle even though the chain survives it
     // (measured, the held-pointer fix). So start clean rather than inheriting a pointer the app has stopped
     // following.
     if (heldPointer.isHeld) heldPointer.releaseNow()
     clearThePadFor(onScreen(from))
-    heldPointer.grab(from, to, detourBack, onGrabbed)
+    // Not past [to]: the same bound [drag] uses, as far as [to] or one pixel past the slop.
+    val shortDetour = if (pastTarget) null else ViewConfiguration.get(this).scaledTouchSlop + 1f
+    heldPointer.grab(from, to, detourBack, shortDetour, onGrabbed)
   }
 
   override fun moveHeld(to: PointF): Boolean = heldPointer.moveTo(to)
