@@ -308,7 +308,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   private fun madeProgress(outcome: Outcome): Boolean = when (outcome) {
     is Outcome.Moved -> outcome.fromOffset != outcome.toOffset
     is Outcome.Degraded -> true
-    Outcome.NoSelection, Outcome.HandleLost, Outcome.RowUnknown, Outcome.HandleCovered -> false
+    Outcome.NoSelection, Outcome.HandleLost, Outcome.RowUnknown, Outcome.HandleCovered, Outcome.AtFloor -> false
   }
 
   /**
@@ -354,6 +354,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     Outcome.RowUnknown -> "this block wraps — select within one line"
     // Also not "reselect": the selection is untouched. Lower on screen, the toolbar goes above it.
     Outcome.HandleCovered -> "the menu covers the handle — scroll the text lower"
+    Outcome.AtFloor -> "one character left — the app keeps it"
     is Outcome.Degraded -> "one character (${outcome.reason})"
   }
 

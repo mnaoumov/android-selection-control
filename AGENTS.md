@@ -735,10 +735,29 @@ So the other half of the old claim — "a char step from a one-character selecti
 same" — is false in the same direction. The target app keeps the last character selected and its
 handles up; nothing goes blind, and the pad says `moved 19 → 13`, which is honest.
 
-Two consequences worth knowing before reading a log: seven of those eight gestures are spent
-discovering a floor that is already known, which is most of a 3.6 s press; and the run ends with the
-selection one character wide rather than empty, so the next command starts from 12..13 and not from a
-caret.
+**On Chrome the floor is not a floor: the correction onto the anchor CROSSES it.** Measured
+2026-09-24 on the served seven-line paragraph: `word ←` from `23..28` (`small`) reached `23..24` on
+the first drag, and the correction onto 23 carried the handle over the anchor to `22..23`, the space
+before the word, reported as `HandleLost`. The selection was no longer the one the user made.
+
+**So `word ←` now targets the floor, never the anchor** (`shrinkByWord`): a retrace whose nearest
+boundary IS the anchor aims one character short of it, and a press that starts one character from
+the anchor touches nothing and ends `AtFloor` ("one character left — the app keeps it"). Measured
+after the change, Chrome force-stopped each time, three runs of three: `28 -> 24` in 1 gesture and
+0.4-0.9 s, then `AtFloor` in 0 ms and 0 gestures. The `TextView` START edge does the same from
+`12..19` after a swap: `12 -> 18` in 1 gesture, then `AtFloor`. A boundary short of the anchor is
+still the target: from `23..40`, `word ←` went to 29 and then 28, as before.
+
+The floor applies only while the anchor is known to be in the announcing node. That is the node
+of the last fresh selection (`anchorNodeKey`). After a grow into the next node, Chrome announces
+`0..1` in THAT node's frame, and the `0` is where the node starts, not the anchor. A shrink from there
+legitimately crosses the seam, so it is left alone: from `terms` grown into the paragraph, `word ←`
+from `0..1` still crossed back to `9..14`.
+
+Not re-measured: the `TextView` END edge. Every press there ended `HandleCovered` on the rig, because
+the toolbar lookup took that `TextView`'s own handle window for the toolbar, a separate open defect.
+`char ←` from a one-character selection is not guarded either. The anchor it would need is the same
+unknown across a node seam.
 
 **The handle aim is in dp: `HANDLE_DROP_DP` = 14 and `HANDLE_INSET_DP` = 9. It was once raw pixels
 taken off the handset, and on any other density that missed Chrome's handle entirely.**

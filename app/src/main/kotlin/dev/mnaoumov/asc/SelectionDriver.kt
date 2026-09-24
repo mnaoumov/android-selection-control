@@ -48,6 +48,16 @@ sealed interface Outcome {
    * screen moves the toolbar above it.
    */
   data object HandleCovered : Outcome
+
+  /**
+   * A shrink was asked for with one character left, so nothing was touched.
+   *
+   * A dragged handle cannot take the selection below one character: a `TextView` keeps it, and
+   * Chrome carries the handle across the anchor and flips the selection onto the other side of it.
+   * So the pad stops one character short of the anchor and says so, rather than spend gestures on a
+   * floor that is already known.
+   */
+  data object AtFloor : Outcome
   data class Degraded(val reason: String) : Outcome
 }
 
@@ -179,6 +189,24 @@ class SelectionDriver(
 
   /** The edge the pad is moving. The other one is the anchor and stays put. */
   var activeEdge: Edge = Edge.END
+    set(value) {
+      // After a swap the anchor is the edge that was moving, which is in the announcing node only
+      // when the whole selection is. Otherwise nothing says where it is.
+      if (value != field && observer.latest?.let(::nodeKey) != anchorNodeKey) anchorNodeKey = null
+      field = value
+    }
+
+  /**
+   * The node the ANCHOR is known to be in, as [nodeKey] reads it, or null when that is not known.
+   *
+   * Set by a fresh selection, whose two edges are in the node it was announced from. The anchor's
+   * offset ([anchorOffset]) means something only while the announcing node is this one: a grow
+   * that carries the moving edge into the next node is announced in THAT node's frame, as `0..1`,
+   * and the `0` there is where the node starts rather than where the selection does. A shrink from
+   * there crosses the seam back legitimately (see [crossedTarget]), so the one-character floor in
+   * [shrinkByWord] must not apply to it.
+   */
+  private var anchorNodeKey: String? = null
 
   /**
    * The offset of the edge being moved — `low()` for START, `high()` for END.
@@ -1686,15 +1714,29 @@ class SelectionDriver(
      * were learned while the OTHER edge travelled, so they lie on the far side of the anchor from
      * the edge now moving, and one of them as a target would drag the moving handle straight past
      * the anchor. `from`/`to` then arrive reversed, [movingOffset] starts answering for the wrong
-     * end, and the loop corrects against it. Reaching the anchor exactly is fine and is what a
-     * desktop keyboard does — the selection collapses to a caret.
+     * end, and the loop corrects against it.
+     *
+     * **And the anchor itself is not a target either: the floor is one character short of it.** A
+     * desktop keyboard collapses the selection to a caret there; a dragged handle cannot. A
+     * `TextView` keeps the last character and spends every further gesture discovering that, and
+     * Chrome is worse — measured 2026-09-24 on the served seven-line paragraph, `word ←` from
+     * `23..28` got to `23..24` on the first drag and the correction onto 23 carried the handle over
+     * the anchor, leaving `22..23`, the space BEFORE the word, reported as `HandleLost`. So the
+     * anchor is replaced by the floor, and a press that starts on the floor touches nothing.
      */
     val anchor = snapshot.anchorOffset()
+    val floor = anchor - towardAnchor
+    val anchorHere = anchorNodeKey == nodeKey(snapshot)
+    if (anchorHere && towardAnchor * (floor - current) <= 0) {
+      Diag.log("  shrink: $current is already one character from the anchor at $anchor — touching nothing")
+      onDone(Outcome.AtFloor)
+      return
+    }
     val target = if (towardAnchor < 0) {
       knownBoundaries.filter { it in anchor until current }.maxOrNull()
     } else {
       knownBoundaries.filter { it in (current + 1)..anchor }.minOrNull()
-    }
+    }?.let { if (anchorHere && it == anchor) floor else it }
     if (target == null) {
       /*
        * Honest degradation: one character, and say so rather than pretend it was a word.
@@ -1902,14 +1944,18 @@ class SelectionDriver(
     val freshSelection = before == null || (now.low() != before.low() && now.high() != before.high())
     if (!freshSelection) return
     syncBoundaryContext(now)
+    anchorNodeKey = nodeKey(now)
     knownBoundaries += now.low()
     knownBoundaries += now.high()
     Diag.log("seeded from a fresh selection at ${now.low()}..${now.high()}: boundaries=$knownBoundaries")
   }
 
+  private fun nodeKey(snapshot: SelectionObserver.Snapshot): String =
+    "${snapshot.packageName}|${snapshot.bounds}|${snapshot.sourceLength}"
+
   /** Offsets are local to the source node, so a change of node invalidates every remembered one. */
   private fun syncBoundaryContext(snapshot: SelectionObserver.Snapshot) {
-    val key = "${snapshot.packageName}|${snapshot.bounds}|${snapshot.sourceLength}"
+    val key = nodeKey(snapshot)
     if (key != boundariesNodeKey) {
       knownBoundaries.clear()
       boundariesNodeKey = key
