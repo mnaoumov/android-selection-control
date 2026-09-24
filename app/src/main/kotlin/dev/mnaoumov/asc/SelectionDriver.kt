@@ -109,6 +109,33 @@ class SelectionDriver(
    */
   private fun selectionStillOnScreen(): Boolean = toolbarCentre() != null
 
+  /**
+   * [selectionStillOnScreen], asked only once the target app has had time to put its toolbar back.
+   *
+   * The app takes its toolbar down for the whole of any handle drag and puts it back after, so read
+   * straight after a drag the toolbar is absent whether or not the selection survived. Measured
+   * 2026-09-24 on Chrome's `ERR_INVALID_URL` page: a 12 px `word →` reach from the end of the first
+   * node announced nothing, the check ran 6 ms later, found no toolbar, and the press ended
+   * `HandleLost` in 430 ms with the selection intact and the toolbar back seconds later — twice, so
+   * the escalation that would have passed the next word's middle never ran.
+   *
+   * So a missing toolbar is re-read every [POLL_MS] for up to [TOOLBAR_RETURN_MS] before it is
+   * believed. A surviving selection costs only as long as its toolbar takes to come back; a
+   * destroyed one costs the whole bound, once, at the end of a press that is failing anyway.
+   */
+  private fun awaitSelectionOnScreen(waited: Long = 0, onResult: (Boolean) -> Unit) {
+    if (selectionStillOnScreen()) {
+      if (waited > 0) Diag.log("  toolbar back after ${waited}ms")
+      onResult(true)
+      return
+    }
+    if (waited >= TOOLBAR_RETURN_MS) {
+      onResult(false)
+      return
+    }
+    handler.postDelayed({ awaitSelectionOnScreen(waited + POLL_MS, onResult) }, POLL_MS)
+  }
+
   /** The edge the pad is moving. The other one is the anchor and stays put. */
   var activeEdge: Edge = Edge.END
 
@@ -298,11 +325,14 @@ class SelectionDriver(
           // Silence is ambiguous: the reach may be too short, or that drag may have landed on the
           // page and taken the selection (or the whole page) with it. Never escalate past the point
           // where a selection still visibly exists.
-          !selectionStillOnScreen() -> {
-            Diag.log("  grow: the selection is gone from screen — stopping rather than poking the page")
-            onDone(Outcome.HandleLost)
+          attempt + 1 < MAX_ATTEMPTS -> awaitSelectionOnScreen { onScreen ->
+            if (onScreen) {
+              growOneUnit(command, attempt + 1, origin, onDone)
+            } else {
+              Diag.log("  grow: the selection is gone from screen — stopping rather than poking the page")
+              onDone(Outcome.HandleLost)
+            }
           }
-          attempt + 1 < MAX_ATTEMPTS -> growOneUnit(command, attempt + 1, origin, onDone)
           else -> onDone(Outcome.HandleLost)
         }
       }
@@ -492,11 +522,13 @@ class SelectionDriver(
            * untouched and the released path never having run.
            */
           after == null -> gestures.releaseHeld {
-            if (selectionStillOnScreen()) {
-              releasedCharacterStep(command, onDone)
-            } else {
-              Diag.log("  held: the selection is gone from screen — stopping rather than poking the page")
-              onDone(Outcome.HandleLost)
+            awaitSelectionOnScreen { onScreen ->
+              if (onScreen) {
+                releasedCharacterStep(command, onDone)
+              } else {
+                Diag.log("  held: the selection is gone from screen — stopping rather than poking the page")
+                onDone(Outcome.HandleLost)
+              }
             }
           }
           !locator.grabbedAHandle(before, after) -> {
@@ -1010,12 +1042,19 @@ class SelectionDriver(
        * aims at the same place from a character closer — and it converges, because each retry aims
        * absolutely rather than stepping. Bounded, because a press that keeps missing must end.
        */
-      if (retriesLeft > 0 && selectionStillOnScreen()) {
-        Diag.log("  shrink: overshot to $current past $target; starting the step over from here")
-        growOneCharacter(command, onDone, retriesLeft - 1, origin, target)
-      } else {
+      if (retriesLeft == 0) {
         Diag.log("  shrink: overshot to $current past $target and out of retries")
         onDone(Outcome.Moved(origin, current))
+        return
+      }
+      awaitSelectionOnScreen { onScreen ->
+        if (onScreen) {
+          Diag.log("  shrink: overshot to $current past $target; starting the step over from here")
+          growOneCharacter(command, onDone, retriesLeft - 1, origin, target)
+        } else {
+          Diag.log("  shrink: overshot to $current past $target and the selection is gone from screen")
+          onDone(Outcome.Moved(origin, current))
+        }
       }
       return
     }
@@ -1082,8 +1121,14 @@ class SelectionDriver(
           // Nothing moved: the creep was too short. Try again slightly longer rather than give up
           // one character out.
           after == null ->
-            if (guard + 1 < MAX_CORRECTIONS && selectionStillOnScreen()) {
-              walkBackTo(target, command, origin, onDone, guard + 1, retriesLeft, silentProbes + 1)
+            if (guard + 1 < MAX_CORRECTIONS) {
+              awaitSelectionOnScreen { onScreen ->
+                if (onScreen) {
+                  walkBackTo(target, command, origin, onDone, guard + 1, retriesLeft, silentProbes + 1)
+                } else {
+                  onDone(Outcome.Moved(origin, current))
+                }
+              }
             } else {
               onDone(Outcome.Moved(origin, current))
             }
@@ -1526,6 +1571,14 @@ class SelectionDriver(
      * [QUIET_MS], so an ordinarily chatty settle still completes on its own terms.
      */
     const val MAX_QUIET_WAIT_MS = 600L
+
+    /**
+     * How long [awaitSelectionOnScreen] waits for the target app to put its toolbar back after a
+     * drag before believing it gone. The pad's own mask lingers [AscAccessibilityService]'s 700 ms
+     * over the same gap for the same reason; this is a little longer, since a wrong "gone" here ends
+     * a press that would have worked.
+     */
+    const val TOOLBAR_RETURN_MS = 900L
 
     /** Must exceed the widest word on screen once multiplied by [STEP_PX]. */
     const val MAX_ATTEMPTS = 12
