@@ -166,9 +166,34 @@ bare body text, and as a text run beside an `<em>`, so length and structure are 
 each side, so `characterGeometry` now asks the other one when the first is refused. For offset 62 that
 is index 61, read from its right edge. The press then logs
 `index 62 has no box of its own — the caret was read from 61` and aims at the handle Chrome actually
-draws: (602, 1075) against a handle drawn at about (605, 1075). **What that does not fix is the step:**
-a rightward reach from the end of a line stays on that row and never enters the next line's first word,
-so the press still ends `HandleLost`, with the selection intact.
+draws: (602, 1075) against a handle drawn at about (605, 1075).
+
+**A step whose next character is on another row has to change row, not reach sideways.** A rightward
+reach from the end of a line has nothing to enter, and `word →` from `small` at the end of line 1 ended
+`HandleLost` three presses in three. `SelectionDriver.crossRowDelta` reads the carets of the current and
+the destination offset from the same rectangles; when their bottoms differ, the handle travels to the
+other row's caret. That applies to every step: the grow, the held first travel, and the walk-back and
+held corrections, which is the mirror case of a shrink from a line's first word. Measured 2026-09-24 on
+the rig, the same paragraph served lower down (`padding-top: 300px`) so the toolbar stays above:
+
+| press | before | after |
+|---|---|---|
+| `word →` from `23..28` (`small`, end of line 1) | `HandleLost` | `28 -> 40`, the end of `frustration` on line 2 |
+| `char →` from 28 | not measured | `28 -> 29`, 1 gesture |
+| `char ←` from 29 | not measured | `29 -> 28`, 1 gesture, back up to line 1 |
+| `word ←` from 29 | not measured | `29 -> 28`, 1 gesture |
+
+**Chrome's grow is CHARACTER-granular across a row change.** One drag aimed 18 px into line 2 landed on
+32, inside `frustration` (29..40), and even a drag aimed at line 2's own caret landed on 31. So a word
+grow across a wrap is two stages (`changeRowThenGrow`): change row, walk a same-row shrink back onto the
+row's first character, which is exact, then grow along the row from there as from any boundary. That
+first character is recorded as a boundary only when the character between the rows has no box of its
+own (`HandleLocator.hasOwnBox`), i.e. the line wraps at a space. No grow that changed row goes through
+`recordBoundary`: the first version did, and 32, 34 and 35 went into the set.
+
+**The grow escalation stops at the screen's edge.** Each reach is clamped to the screen, and the press
+ends once the previous reach was already off it. Measured `word →` from the end of a paragraph's last
+line: six tries, the last clamped to x 719, instead of the escalation running on to a 360 px reach.
 
 **The lie is DETECTABLE, and that is what makes the priming safe.** A rectangle that is both as wide and
 as tall as the node it came from is the node's bounds repeated, and a rectangle that is genuinely one

@@ -126,19 +126,23 @@ class HandleLocator(private val density: () -> Float) {
    * [crossing] names which side of the caret the answer's width should describe — see [Crossing].
    * It defaults to the character after the caret, which is what a caller that only wants the caret's
    * x and row gets either way.
+   *
+   * [at] reads the caret at another offset of the same node instead of the moving edge's, for a step
+   * that has to know which ROW its destination is on before it travels there.
    */
   fun characterGeometry(
     snapshot: SelectionObserver.Snapshot,
     edge: Edge,
     crossing: Crossing = Crossing.RIGHTWARD,
+    at: Int? = null,
   ): CharacterGeometry? {
     val source = snapshot.source ?: return null
     val bounds = snapshot.bounds ?: return null
     val length = snapshot.sourceLength
     if (length <= 0) return null
 
-    val offset = if (edge == Edge.START) snapshot.low() else snapshot.high()
-    val key = "${snapshot.atMs}|$edge|$offset|$crossing"
+    val offset = (at ?: if (edge == Edge.START) snapshot.low() else snapshot.high()).coerceIn(0, length)
+    val key = "${snapshot.atMs}|$offset|$crossing"
     if (key == memoKey) return memoValue
     memoKey = null
     memoValue = null
@@ -192,6 +196,18 @@ class HandleLocator(private val density: () -> Float) {
       characterWidth = rect.width(),
     )
     return memoValue
+  }
+
+  /**
+   * Whether the character at [index] has a box of its own. The whitespace a line wraps at has none
+   * (see [characterGeometry]), so on a node already answering for its neighbours a refusal here says
+   * the line wraps at a SPACE, and the character after it starts a word.
+   */
+  fun hasOwnBox(snapshot: SelectionObserver.Snapshot, index: Int): Boolean {
+    val source = snapshot.source ?: return false
+    val bounds = snapshot.bounds ?: return false
+    if (index !in 0 until snapshot.sourceLength) return false
+    return characterRect(source, bounds, index) != null
   }
 
   /** One character's rectangle as the platform measures it, or null where it declines or lies. */
