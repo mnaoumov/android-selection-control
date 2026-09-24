@@ -271,6 +271,13 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       // The press just moved the selection, so the toolbar has just moved too. After `busy` clears,
       // or the guard in refreshMask would skip it.
       refreshMask()
+      /*
+       * Prime whatever the press left selected. Every announcement it caused arrived while `busy`,
+       * where onAccessibilityEvent does not prime, so a grow that carried the edge into a new node
+       * left that node unasked. Measured 2026-09-24: a `word →` into an 81-character wrapped
+       * paragraph, then a `char ←` 3 s later, and the node was still cold on that press's first ask.
+       */
+      observer.latest?.let { locator.primeCharacterRects(it, driver.activeEdge) }
 
       /*
        * Keep the run going only while it is still this command's run AND the last step actually got

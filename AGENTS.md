@@ -134,6 +134,13 @@ on a narrow glyph. A caret is excluded on purpose: an editable field announces o
 and the pad never steps a caret. On a `TextView`, which answers on the first ask, the prime is not
 wasted for a rightward press: the success is memoised on that announcement and the press reads it.
 
+**It also fires when a press ENDS, because the announcements a press causes arrive while it is busy,
+where nothing primes.** A grow that carries the edge into a new node therefore used to leave that node
+unasked, and the next press was cold. Measured 2026-09-24 on `ERR_INVALID_URL`, Chrome force-stopped:
+a `word →` from `terms` into the wrapped paragraph, then a `char ←` 3 s later. Before, that press was
+refused and grabbed under the third line (y 891); after, it read `lineBottom=767` and grabbed at y 795
+on the first.
+
 **A second trap sits on top of it: do not cache the "no".** The rung memoises per announcement so a step
 pays one IPC rather than two, and the first version cached the refusal too. That is invisible and total:
 the second press on an unchanged selection returned the memo without asking, so the answer Chrome was by
@@ -443,7 +450,9 @@ happens to be sitting there. An x can be estimated and corrected by the loop; a 
 handle one line out is not a near miss but a touch on the page. That is why `SelectionDriver`'s scan now
 *refuses* on a box measured to wrap (`HandleLocator.scanRowIsKnown`) instead of hunting sideways along a
 row it has no reason to believe: a sideways search is only ever as good as the row it searches, and a
-miss there costs the user their selection.
+miss there costs the user their selection. **The toolbar-mirror rung is gated the same way**: it answers
+with a column and borrows the same `bounds.bottom` row, and on a cold wrapped node it once aimed a drag
+under the third line while the edge sat on the first.
 
 That refusal is deliberately narrow — it fires only where the wrap is **measured**
 (`sourceLength > 0 && !sourceIsOneLine`). A surface that announces no length at all (Gecko sends
