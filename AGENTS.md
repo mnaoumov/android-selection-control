@@ -405,6 +405,16 @@ just as loudly as a moving one, which produced a confident false hit at a pixel 
 The signature of a real grab is that **one edge held while the other moved, and the range stayed
 non-empty**.
 
+**"No toolbar" straight after a drag is not "no selection".** The target app takes its toolbar down
+for the whole of a handle drag and puts it back after, so the safety check that a silent drag has
+not destroyed the selection (`selectionStillOnScreen`, the toolbar's presence) reads "gone" every
+time it is asked in that gap. It was asked 6 ms after the settle, and every silent grow on Chrome
+ended `HandleLost` with the selection intact, so the escalation that would have passed the next
+word's middle never ran. `awaitSelectionOnScreen` now re-reads it for up to 900 ms before believing
+it. Measured 2026-09-24 on the rig, a served one-line `alpha extraordinarily wonderful`: three silent
+grow tries in a row each found the toolbar gone and back **25 ms** later, and the fourth crossed the
+word. On a `TextView` the toolbar is already back when asked, so the wait costs nothing there.
+
 **The floating toolbar's horizontal centre tracks the selection's centre** to within ~6 px (measured:
 toolbar 615.5, highlight 621.5, handle midpoint 616.5), and it keeps tracking as the selection
 changes (720.5 after widening, matching the wider highlight). Since the handles are symmetric about
