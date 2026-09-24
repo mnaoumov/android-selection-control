@@ -363,12 +363,19 @@ class HandleLocator(private val density: () -> Float) {
    * steps are ~400 ms apart. [characterGeometry] deliberately does not memoise a refusal, so the
    * press that follows re-asks rather than being handed this call's null.
    *
-   * Narrow on purpose: only where the box is **measured** to wrap, which is the only case that
-   * cannot be served by interpolating across the node. Everywhere else the press pays nothing and
-   * this costs no IPC at all.
+   * **Every non-empty selection, not only a wrapped one.** It was first gated on a box measured to
+   * wrap, the case that fails outright without it. But a one-line node is refused on its first ask
+   * too, and `SelectionDriver.pixelsPerCharacter` then sizes the step by the node's AVERAGE, which
+   * this repo measured as the worse aim — so the first press on every newly selected one-line node
+   * was the inexact one. Where a surface answers honestly on the first ask (a `TextView`) nothing is
+   * wasted for a rightward press: [characterGeometry] memoises the success on this announcement,
+   * so the press is served from it and the IPC has only moved earlier.
+   *
+   * **But never a caret.** An editable field announces a collapsed selection on every keystroke,
+   * and the pad never steps a caret, so priming one would be an IPC per keystroke for nothing.
    */
   fun primeCharacterRects(snapshot: SelectionObserver.Snapshot, edge: Edge) {
-    if (!snapshot.isKnownMultiLine()) return
+    if (snapshot.isEmpty()) return
     characterGeometry(snapshot, edge)
   }
 
