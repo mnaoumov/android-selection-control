@@ -119,6 +119,21 @@ does the first ask on the selection ANNOUNCEMENT rather than on the press, which
 a human takes hundreds of milliseconds to reach a button — and `characterGeometry` deliberately does not
 memoise a refusal, so the press that follows re-asks instead of being handed the primer's null.
 
+**The primer fires on every NON-EMPTY selection, not only a wrapped one.** It was first gated on a box
+measured to wrap, and a one-line node paid for that on its first press, sized by the node's average
+instead of the glyph it crosses. Measured 2026-09-24 on the rig, Chrome force-stopped both times, the
+same long-press on `Google` on `chrome://version` and one `char →`:
+
+| primer | the press's ask | reach | time |
+|---|---|---|---|
+| wrapped nodes only | refused (the node's own box) | 15.54 px, the average | 1100 ms |
+| every non-empty selection | answered | 12.0 px, the space it crossed | 639 ms |
+
+Both landed on 7 in one gesture, because a space is forgiving; the reach is the difference that matters
+on a narrow glyph. A caret is excluded on purpose: an editable field announces one on every keystroke
+and the pad never steps a caret. On a `TextView`, which answers on the first ask, the prime is not
+wasted for a rightward press: the success is memoised on that announcement and the press reads it.
+
 **A second trap sits on top of it: do not cache the "no".** The rung memoises per announcement so a step
 pays one IPC rather than two, and the first version cached the refusal too. That is invisible and total:
 the second press on an unchanged selection returned the memo without asking, so the answer Chrome was by
@@ -199,8 +214,8 @@ the whole of the "one offset the press can never get past" above.
 
 `refreshWithExtraData(EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY)` answers honestly on a `TextView`, so
 the one-line path now asks it and keeps the average only where it declines. On Chrome page content
-it declines on the FIRST ask and answers on a later one (the gotcha above), so a one-line node warmed
-by a press or by the primer is sized by a real glyph there too. It must be asked for the
+it declines on the FIRST ask and answers on a later one (the gotcha above), and the primer
+makes that later ask the first press, so a one-line node is sized by a real glyph there too. It must be asked for the
 character the step CROSSES: leftward that is the one BEFORE the caret (`offset - 1`), and asking the
 other way measures the glyph the step is walking away from. Measured on the rig, same fixture, back
 to back: leftward from 25, the average sized every reach at 16.03 and needed a correction at the

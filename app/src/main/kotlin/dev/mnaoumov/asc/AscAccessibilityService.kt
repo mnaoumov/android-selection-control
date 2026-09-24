@@ -136,7 +136,8 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       /*
        * Ask Chrome to measure the new selection's characters NOW, so that the press which follows
        * can be answered at all. On page content the first such request only starts the work — see
-       * [HandleLocator.primeCharacterRects], which is the whole of the wrapped-node fix — and this
+       * [HandleLocator.primeCharacterRects], which is the whole of the wrapped-node fix and what
+       * makes a one-line node's first press measured rather than averaged — and this
        * announcement is the one moment reliably hundreds of milliseconds ahead of a press.
        */
       observer.latest?.let { locator.primeCharacterRects(it, driver.activeEdge) }
