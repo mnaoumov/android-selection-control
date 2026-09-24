@@ -325,16 +325,45 @@ class SelectionDriver(
     // width of the next word, and the node's own geometry says how wide a character is here. A
     // constant step wastes attempts on wide text and overshoots on narrow.
     val step = (pixelsPerCharacter(before, crossingOf(command)) * CHARS_PER_ATTEMPT).coerceAtLeast(STEP_PX)
-    val reach = step * (attempt + 1) * (if (command.toRight) 1 else -1)
+    val sign = if (command.toRight) 1 else -1
+    val reach = step * (attempt + 1) * sign
+
+    /*
+     * From the last character of a line the next one is on the next row, and from the first
+     * character of a line the previous one is on the row above, so the reach starts from THAT caret
+     * rather than running sideways off the line's end. See [crossRowDelta].
+     */
+    val next = before.movingOffset() + sign
+    val crossing = crossRowDelta(before, before.movingOffset(), next, 0f)
+    val wrap = crossing ?: PointF(0f, 0f)
+    val base = PointF(handle.x + wrap.x, handle.y + wrap.y)
+    if (crossing != null && first == null && command.unit == PadCommand.Unit.WORD && growsSelection(command)) {
+      changeRowThenGrow(command, before, handle, base, next, onDone)
+      return
+    }
+
+    /*
+     * And never past the screen's edge. A reach that already left it last time will find nothing
+     * further on; measured with the toolbar over a line-end handle, the escalation ran to 360 px.
+     */
+    val width = gestures.screenWidth().toFloat()
+    val onScreen = { x: Float -> x >= 0f && x <= width - 1 }
+    if (attempt > 0 && !onScreen(base.x + step * attempt * sign)) {
+      Diag.log("  grow: the last reach already left the screen at x ${base.x + step * attempt * sign} — stopping")
+      onDone(Outcome.HandleLost)
+      return
+    }
+    val to = PointF((base.x + reach).coerceIn(0f, width - 1), base.y)
+
     gestureCount++
-    gestures.drag(handle, PointF(handle.x + reach, handle.y), DRAG_MS) { completed ->
+    gestures.drag(handle, to, DRAG_MS) { completed ->
       if (!completed) {
         onDone(Outcome.HandleLost)
         return@drag
       }
       awaitChange(before) { after ->
         Diag.log(
-          "  grow try ${attempt + 1}: handle=(${handle.x}, ${handle.y}) reach=$reach -> " +
+          "  grow try ${attempt + 1}: handle=(${handle.x}, ${handle.y}) reach=$reach to=(${to.x}, ${to.y}) -> " +
             if (after == null) "nothing" else "${after.low()}..${after.high()} bounds=${after.bounds}"
         )
         when {
@@ -357,7 +386,8 @@ class SelectionDriver(
              * character at a time rather than snapping. Measured 2026-09-24: 10 -> 14, from inside
              * `bravo` to inside `charlie`, went into the set, and the next `word ←` walked to 14.
              */
-            if (before.movingOffset() == origin.movingOffset()) recordBoundary(before, after, command)
+            // Nor is a grow that changed row, which is character-granular: see [changeRowThenGrow].
+            if (before.movingOffset() == origin.movingOffset() && crossing == null) recordBoundary(before, after, command)
             locator.rememberAnchor(handle.x - reach.coerceAtLeast(0f))
             onDone(Outcome.Moved(origin.movingOffset(), after.movingOffset()))
           }
@@ -374,6 +404,76 @@ class SelectionDriver(
             }
           }
           else -> onDone(Outcome.HandleLost)
+        }
+      }
+    }
+  }
+
+  /**
+   * A word grow whose next character is on another row: move the handle onto that row's caret first,
+   * then grow along it as from any word boundary.
+   *
+   * Two stages because Chrome's granularity changes with the row. Measured 2026-09-24 on the rig, the
+   * seven-line paragraph, `small` selected at the end of line 1: one drag from the line-1 handle to
+   * 18 px into line 2 landed on 32, inside `frustration` (29..40), not on its end. A grow that changes
+   * line is character-granular there, so the landing is where the finger was, and taking it as a
+   * word both reported half a word and put 32 into [knownBoundaries], which the next two presses then
+   * grew from. On the same row, a grow from a word's start snaps as it always has.
+   *
+   * The row change lands on [next], the next row's first character. That is recorded as a boundary
+   * only when the character between the two rows has no box, i.e. the line wraps at a space, so
+   * [next] starts a word: a line broken inside a word (a hyphen, an overlong URL) has a box there.
+   * Anything else it lands on is reported as the step and recorded nowhere.
+   */
+  private fun changeRowThenGrow(
+    command: PadCommand,
+    before: SelectionObserver.Snapshot,
+    handle: PointF,
+    base: PointF,
+    next: Int,
+    onDone: (Outcome) -> Unit,
+  ) {
+    val origin = before.movingOffset()
+    val wrapsAtSpace = !locator.hasOwnBox(before, minOf(origin, next))
+    gestureCount++
+    gestures.drag(handle, base, DRAG_MS) { completed ->
+      if (!completed) {
+        onDone(Outcome.HandleLost)
+        return@drag
+      }
+      awaitChange(before) { after ->
+        Diag.log(
+          "  wrap: row change to (${base.x}, ${base.y}) -> " +
+            if (after == null) "nothing" else "${after.low()}..${after.high()}"
+        )
+        val growFromNext = {
+          syncBoundaryContext(after!!)
+          knownBoundaries += next
+          growOneUnit(command) { outcome ->
+            onDone(if (outcome is Outcome.Moved) Outcome.Moved(origin, outcome.toOffset) else outcome)
+          }
+        }
+        when {
+          after == null || !locator.grabbedAHandle(before, after) -> onDone(Outcome.HandleLost)
+          after.movingOffset() == next && wrapsAtSpace -> growFromNext()
+          /*
+           * Past the row's first character, which is the usual case: aimed at the next row's caret,
+           * the released drag landed on 31 rather than 29, measured. Shrinking along one row is
+           * exact, so walk back onto [next] and grow from there rather than from mid-word, where
+           * Chrome's grow does not stop at the word's end.
+           */
+          wrapsAtSpace && before.source == after.source && grownBy(next, after.movingOffset()) > 0 ->
+            walkBackTo(next, command, origin, { outcome ->
+              if (outcome is Outcome.Moved && outcome.toOffset == next) {
+                growFromNext()
+              } else {
+                onDone(outcome)
+              }
+            })
+          else -> {
+            Diag.log("  wrap: landed on ${after.movingOffset()}, not a known word start — taking it as the step")
+            onDone(Outcome.Moved(origin, after.movingOffset()))
+          }
         }
       }
     }
@@ -542,9 +642,17 @@ class SelectionDriver(
      */
     val characters = 1f
     val reach = (if (command.toRight) 1f else -1f) * perChar * characters
+    /*
+     * Across a line wrap the one character is the row change itself — the space the line wraps at
+     * has no width on either row — so the first travel goes to the other row's caret and no further.
+     * See [crossRowDelta].
+     */
+    val next = start + if (command.toRight) 1 else -1
+    val to = crossRowDelta(before, start, next, 0f)?.let { PointF(handle.x + it.x, handle.y + it.y) }
+      ?: PointF(handle.x + reach, handle.y)
 
     gestureCount++
-    gestures.grabAndHold(handle, PointF(handle.x + reach, handle.y)) { grabbed ->
+    gestures.grabAndHold(handle, to) { grabbed ->
       if (!grabbed) {
         Diag.log("  held: the grab was refused — falling back to the released path")
         releasedCharacterStep(command, onDone)
@@ -552,7 +660,7 @@ class SelectionDriver(
       }
       awaitChange(before) { after ->
         Diag.log(
-          "  held grab: handle=(${handle.x}, ${handle.y}) reach=$reach -> " +
+          "  held grab: handle=(${handle.x}, ${handle.y}) to=(${to.x}, ${to.y}) -> " +
             if (after == null) "nothing" else "${after.low()}..${after.high()}"
         )
         when {
@@ -588,7 +696,8 @@ class SelectionDriver(
             // snaps words lands on the next boundary instead (measured 8 -> 10 -> 18, straight
             // across one). That is a boundary learned by the `char →` button, which is exactly the
             // kind this set used to miss because only `word →` was thought to teach it anything.
-            recordBoundary(before, after, command)
+            // Unless the grab changed row, where a grow is character-granular: see [changeRowThenGrow].
+            if (to.y == handle.y) recordBoundary(before, after, command)
             locator.rememberAnchor(handle.x - reach.coerceAtLeast(0f))
             heldCorrect(targetOffset(before, after, command, start), start, command, onDone)
           }
@@ -761,9 +870,11 @@ class SelectionDriver(
      */
     val bias = if (toLose >= 0) BOUNDARY_BIAS else -BOUNDARY_BIAS
     val reach = measuredReach(before, current, target) ?: (direction * (toLose - bias) * perChar)
+    val to = crossRowDelta(before, current, target, BOUNDARY_BIAS)?.let { PointF(at.x + it.x, at.y + it.y) }
+      ?: PointF(at.x + reach, at.y)
 
     gestureCount++
-    if (!gestures.moveHeld(PointF(at.x + reach, at.y))) {
+    if (!gestures.moveHeld(to)) {
       Diag.log("  held: the move was refused — finishing on the released path")
       walkBackTo(target, command, origin, onDone)
       return
@@ -1188,10 +1299,17 @@ class SelectionDriver(
       // move is aiming afresh from where it landed, and lengthening it anyway is what carried a walk
       // from 13 past its target of 12 and on to 11, measured 2026-09-24.
       direction * silentProbes * perChar * FINAL_STEP_FRACTION
+    // A target on another row — a word ← from a line's first word — is aimed at on its own row.
+    val wrap = crossRowDelta(before, current, target, BOUNDARY_BIAS)
+    val to = if (wrap == null) {
+      PointF(handle.x + reach, handle.y)
+    } else {
+      PointF(handle.x + wrap.x + direction * silentProbes * perChar * FINAL_STEP_FRACTION, handle.y + wrap.y)
+    }
 
     gestureCount++
 
-    gestures.drag(handle, PointF(handle.x + reach, handle.y), DRAG_MS) { completed ->
+    gestures.drag(handle, to, DRAG_MS) { completed ->
       if (!completed) {
         onDone(Outcome.HandleLost)
         return@drag
@@ -1199,7 +1317,7 @@ class SelectionDriver(
       awaitChange(before) { after ->
         Diag.log(
           "  shrink ${guard + 1}: $current -> target $target, lose $toLose x ${perChar}px, " +
-            "handle=(${handle.x}, ${handle.y}) reach=$reach -> " +
+            "handle=(${handle.x}, ${handle.y}) to=(${to.x}, ${to.y}) -> " +
             if (after == null) "nothing" else "${after.low()}..${after.high()}"
         )
         when {
@@ -1306,6 +1424,36 @@ class SelectionDriver(
     val lastCrossed = if (target < current) widths.first() else widths.last()
     val sign = if (target > current) 1f else -1f
     return sign * (widths.sum() - BOUNDARY_BIAS * lastCrossed)
+  }
+
+  /**
+   * The move that carries the handle from the caret at [current] to the caret at [target] when the
+   * two are on DIFFERENT ROWS of a wrapped node, or null when they share a row or either is unmeasured.
+   *
+   * Every other reach here is horizontal, and across a line wrap a horizontal reach has nothing to
+   * enter. Measured 2026-09-24 on the rig against a seven-line paragraph: with `small` selected at the
+   * end of line 1 (the end edge on 28, the space line 1 wraps at), `word →` located the handle within
+   * 3 px, reached 18 px right past the line's end and announced nothing, three presses in three,
+   * because `frustration` starts line 2. With the toolbar also over the handle the escalation ran to
+   * a 360 px reach, off the screen. The rows come from the same per-character rectangles that located
+   * the handle, so this reads no text.
+   *
+   * The x lands [bias] of the target's glyph short of its caret, on the side it was approached from,
+   * the same aim the horizontal formulas take; `0` aims at the caret itself.
+   */
+  private fun crossRowDelta(snapshot: SelectionObserver.Snapshot, current: Int, target: Int, bias: Float): PointF? {
+    if (snapshot.sourceIsOneLine() || current == target) return null
+    val crossing = crossingToward(current, target)
+    val from = locator.characterGeometry(snapshot, activeEdge, crossing, current) ?: return null
+    val to = locator.characterGeometry(snapshot, activeEdge, crossing, target) ?: return null
+    if (kotlin.math.abs(to.lineBottom - from.lineBottom) <= HandleLocator.LIE_TOLERANCE) return null
+    val sign = if (target > current) 1f else -1f
+    val delta = PointF(to.caretX - from.caretX - sign * bias * to.characterWidth, to.lineBottom - from.lineBottom)
+    Diag.log(
+      "  wrap: $current and $target are on different rows (${from.lineBottom} -> ${to.lineBottom}) — " +
+        "travelling (${delta.x}, ${delta.y})"
+    )
+    return delta
   }
 
   /**
