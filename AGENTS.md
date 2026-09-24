@@ -745,7 +745,8 @@ Measured 2026-09-24 on the error page, Chrome force-stopped: `char →` from 21,
 into the set. The next `word →` then started from a "known boundary" mid-word, and a released
 walk-back from it recorded 24 as the next word's start. After the change, three presses of three still
 ended on 22 in 2 gestures, the set stayed `[10, 21]`, and the `word →` after each landed on 26 twice.
-The third run landed on 27, which is a separate defect.
+The third run landed on 27. That was a separate defect, a late walk announcement, and it is fixed
+(see *From the next word's START* below).
 
 The alternative was to keep the recording and detour the grab toward the anchor, as the word walk
 does. It was measured and refused. Chrome then landed on 22 exactly, 4 presses of 4. But on the
@@ -779,6 +780,15 @@ went 20, 21, 22 one character a push, was silent once at 22, and then jumped to 
 `down`. So on Chrome the walk stops on a boundary the set already KNOWS, which after a long-press is
 the word's own end: three presses of three landed on 21 in 2 gestures. A jump of more than one is
 still taken as the step and recorded nowhere.
+
+**From the next word's START, Chrome's walk reads silent and the push lands late.** Measured 2026-09-24
+on the error page, Chrome force-stopped: long-press `temporarily` (10..21), `char →` to 22, the start of
+`down`, then `word →`. The grab and the second push both read `10..22`. Then the walk let go and handed
+the press to the plain grow. By then the second push's announcement of 26, the end of `down`, had
+arrived. So the grow started from 26 and went one more, into `or`, and the press reported `26 -> 27`
+in 1 run of 3. `releaseThenGrow` now lifts, waits for the announcements to stop, and grows only if the
+edge is still where the press began. After the change, 6 runs of 6 reported `22 -> 26` in 2 gestures and
+0.8-2.0 s, every one through the late-push branch. The debug target's walk still went `21 -> 25` in 1.
 
 **Where the set knows no end, Chrome's walk stops on the next word's START**, at the first silent
 push, which is the one-push rule above. Measured 2026-09-24 on a served copy of the error page's
