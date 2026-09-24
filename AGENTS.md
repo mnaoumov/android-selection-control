@@ -669,12 +669,22 @@ a word's end, and that is recorded. Same fixture, same sitting: 21 walked 22, 23
 silent pushes, so the step ends on 25 in 2.0 s and 6 gestures. `⇤ word` from there then retraced to
 19 in one gesture. From 13 inside `charlie` the walk ended on 19.
 
-**Chrome does not hold at the word's end.** On the error page, from 19 inside `temporarily` (10..21),
-the walk went 20 and then 22 on one push, past the end. A jump of more than one is therefore taken as
-the step and recorded nowhere. A first version walked back to the offset before the jump and recorded
-both 20 and 22, and those were the very mid-word boundaries this rule exists to keep out. So on
-Chrome `word →` from mid-word now lands one past the word end, on the next word's start, and learns
-nothing from it.
+**Chrome does not hold at the word's end: it steps on through the space and holds at the next
+word's START.** Measured 2026-09-24 on the error page, from 19 inside `temporarily` (10..21): the walk
+went 20, 21, 22 one character a push, was silent once at 22, and then jumped to 26, the end of
+`down`. So on Chrome the walk stops on a boundary the set already KNOWS, which after a long-press is
+the word's own end: three presses of three landed on 21 in 2 gestures. A jump of more than one is
+still taken as the step and recorded nowhere. Where the set knows no end, Chrome's walk goes past the
+next word's start, and that case is not solved.
+
+**Two things made that walk look like a granularity problem when it was not.** It used to land on 22
+in one push from 20, which read as Chrome jumping the end. It was the `STEP_PX` = 12 floor on the
+walk's reaches, the same floor the held char step had already dropped. The 12 px grab over an 8 px
+`l` left the pointer 4 px into the `y`, so the next push, one `y` wide, ended 4 px into the space.
+With the floor gone, the grab's usual 60 px slop detour went past the destination first and carried
+the handle into `down`: four grabs of four landed on 23, and Chrome kept it there when the pointer
+came back. The walk's grab now detours toward the anchor (`grabAndHold(detourBack = true)`). The
+debug target's walk is unchanged by both: 21 -> 25 through `delta`, on the hold.
 
 **`word ←` onto the anchor does NOT collapse the selection — a dragged handle has a one-character
 floor.** This paragraph used to claim the opposite, reasoned from the desktop's `Ctrl+Shift+Left` and

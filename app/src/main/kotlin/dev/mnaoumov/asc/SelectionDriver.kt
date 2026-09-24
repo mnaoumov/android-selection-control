@@ -67,9 +67,11 @@ interface GestureDispatcher {
    * (measured: three links landed `10..12` and it was still `10..12` after the lift and 900 ms), so
    * a correction made while down is the last correction needed.
    */
-  fun grabAndHold(from: PointF, to: PointF, onGrabbed: (Boolean) -> kotlin.Unit)
+  fun grabAndHold(from: PointF, to: PointF, detourBack: Boolean = false, onGrabbed: (Boolean) -> kotlin.Unit)
   // [onGrabbed] reports when the grab has PLAYED, not when it was accepted — a caller that starts
-  // waiting for an announcement before the stroke has run always times out.
+  // waiting for an announcement before the stroke has run always times out. [detourBack] sends the
+  // grab's slop detour away from [to] instead of past it, for a caller whose first travel must not
+  // carry the handle into the next word on its way (see `growToWordEnd`).
 
   /**
    * Move the pointer that [grabAndHold] pressed. False when nothing is held, which is a real answer
@@ -1044,20 +1046,36 @@ class SelectionDriver(
    * handle HOLDS there until the finger passes the middle of the next word. That hold is the one
    * signal the walk needs, and it reads no text:
    *
+   *  - **+1 onto a boundary the set already knows** — the word's end, so stop there. On Chrome this
+   *    is the ONLY stop: it does not hold at a word's end but steps on through the space and holds at
+   *    the next word's START (see below).
    *  - **+1** — still inside the word; step again.
    *  - **nothing, twice** — the hold, so the edge is on the word's end. Two pushes because one silent
    *    push could be a step that stayed inside its own cell; two characters of travel from inside a
    *    word always move the handle.
    *  - **a jump of more than one** — taken as the step and reported, and recorded NOWHERE. On a
    *    `TextView` it is a snap to the end of a word short enough that one push passed its middle, so
-   *    the walk has gone a short word too far. On Chrome it is not even that: from 20, inside
-   *    `temporarily` (10..21), one push landed on 22 (measured 2026-09-24), so a jump says nothing
-   *    about where it started or where it landed. A first version walked back to the offset before
-   *    the jump and recorded both, which put 20 and 22 into the set and was the very poisoning this
-   *    exists to stop.
+   *    the walk has gone a short word too far. A first version walked back to the offset before the
+   *    jump and recorded both, which put mid-word offsets into the set and was the very poisoning
+   *    this exists to stop.
    *
    * So only the hold is recorded. Measured on the debug target: 21 -> 25 through `delta` and 13 -> 19
    * through `charlie`, each ending on two silent pushes.
+   *
+   * **Every travel is one MEASURED glyph, with no [STEP_PX] floor, and the grab detours toward the
+   * anchor rather than away from it.** Both were measured on Chrome's error page, 2026-09-24, from
+   * 19 inside `temporarily` (10..21), where the `l` it crosses is 8 px and the `y` 14 px:
+   *
+   *  - With the floor, the grab reached 12 px and left the pointer 4 px into the `y`; the next push,
+   *    one `y` wide, then ended 4 px into the space, and the walk read `20 -> 22` as a jump. That was
+   *    the whole of the "one past the word end" landing, not a Chrome granularity.
+   *  - Without the floor but with the usual outward detour, four grabs of four landed on 23, inside
+   *    the next word: the 60 px detour carries the handle into `down`, and Chrome keeps that history
+   *    when the pointer comes back.
+   *  - Detouring toward the anchor, the walk went 19 -> 20 -> 21 -> 22, one character a push, then held
+   *    at 22 and jumped to 26 on the next push. That is Chrome's real shape, and why the known
+   *    boundary is the stop: with `[10, 21]` seeded by the long-press, three presses of three landed
+   *    on 21 in 2 gestures. The debug target's walk is unchanged by either: 21 -> 25 through `delta`.
    *
    * Falls back to [growOneUnit] whenever the chain will not start: slower and less exact, but the
    * old behaviour rather than a regression.
@@ -1075,11 +1093,10 @@ class SelectionDriver(
     }
     val handle = uncovered(located, onDone) ?: return
     val origin = before.movingOffset()
-    val reach = (if (command.toRight) 1f else -1f) *
-      pixelsPerCharacter(before, crossingOf(command)).coerceAtLeast(STEP_PX)
+    val reach = (if (command.toRight) 1f else -1f) * pixelsPerCharacter(before, crossingOf(command))
 
     gestureCount++
-    gestures.grabAndHold(handle, PointF(handle.x + reach, handle.y)) { grabbed ->
+    gestures.grabAndHold(handle, PointF(handle.x + reach, handle.y), detourBack = true) { grabbed ->
       if (!grabbed) {
         Diag.log("  word walk: the grab was refused — falling back to a plain grow")
         growOneUnit(command, onDone = onDone)
@@ -1153,6 +1170,12 @@ class SelectionDriver(
         // back a character (see [heldSnapThrough]). Keep walking from where it is.
         pushHeld(command, origin, after, onDone, 0, stepped, pushes)
       }
+      // A boundary the set already knows is the word's end on every surface, and on Chrome it is the
+      // only one there is: Chrome does not hold at a word's end, it steps on through the space.
+      moved == 1 && after.movingOffset() in knownBoundaries -> {
+        Diag.log("  word walk: reached the known boundary ${after.movingOffset()}")
+        pullBackThenRelease(origin, after.movingOffset(), onDone)
+      }
       moved == 1 -> pushHeld(command, origin, after, onDone, 0, true, pushes)
       else -> {
         Diag.log("  word walk: jumped $current -> ${after.movingOffset()} — taking it as the step, recording nothing")
@@ -1182,8 +1205,7 @@ class SelectionDriver(
       releaseThenReport(origin, from.movingOffset(), onDone)
       return
     }
-    val reach = (if (command.toRight) 1f else -1f) *
-      pixelsPerCharacter(from, crossingOf(command)).coerceAtLeast(STEP_PX)
+    val reach = (if (command.toRight) 1f else -1f) * pixelsPerCharacter(from, crossingOf(command))
     val x = (at.x + reach).coerceIn(0f, (gestures.screenWidth() - 1).toFloat())
     gestureCount++
     if (!gestures.moveHeld(PointF(x, at.y))) {
@@ -1193,7 +1215,7 @@ class SelectionDriver(
     }
     awaitChange(from) { after ->
       Diag.log(
-        "  word walk push ${pushes + 1}: at ${from.movingOffset()}, x=$x -> " +
+        "  word walk push ${pushes + 1}: at ${from.movingOffset()}, reach=$reach x=$x -> " +
           if (after == null) "nothing" else "${after.low()}..${after.high()}"
       )
       if (after != null && !locator.grabbedAHandle(from, after)) {

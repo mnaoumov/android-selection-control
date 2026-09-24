@@ -89,7 +89,7 @@ class HeldPointer(
    * press that is held **is a long press** — and a long press that missed the handle would select a
    * fresh word under the finger instead of failing quietly.
    */
-  fun grab(from: PointF, towards: PointF, onGrabbed: (Boolean) -> kotlin.Unit) {
+  fun grab(from: PointF, towards: PointF, detourBack: Boolean, onGrabbed: (Boolean) -> kotlin.Unit) {
     // Never start a second chain on top of a live one: the old chain's next completion would lift
     // the new chain's stroke, and both pointers would be lost.
     if (stroke != null) {
@@ -109,8 +109,13 @@ class HeldPointer(
      * sixty links played healthily while the selection sat still. That run was on a WRAPPED node,
      * whose derived handle was nowhere near the real one, so it cannot support the inference. The
      * detour stays because the gesture spike measured its worth; the twitch was never the thing being tested.
+     *
+     * [detourBack] points the detour the other way. The slop is crossed either way, but an outward
+     * detour on a GROW travels 60 px past the destination first, and Chrome keeps what that visit did:
+     * from mid-word it carried the handle into the next word, and the pointer's return did not bring
+     * it back.
      */
-    val away = if (towards.x >= from.x) SLOP_DETOUR_PX else -SLOP_DETOUR_PX
+    val away = (if (towards.x >= from.x) SLOP_DETOUR_PX else -SLOP_DETOUR_PX) * (if (detourBack) -1f else 1f)
     val first = GestureDescription.StrokeDescription(
       Path().apply {
         moveTo(from.x, from.y)
