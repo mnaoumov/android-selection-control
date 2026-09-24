@@ -94,7 +94,13 @@ class HeldPointer(
    * press that is held **is a long press** — and a long press that missed the handle would select a
    * fresh word under the finger instead of failing quietly.
    */
-  fun grab(from: PointF, towards: PointF, detourBack: Boolean, onGrabbed: (Boolean) -> kotlin.Unit) {
+  fun grab(
+    from: PointF,
+    towards: PointF,
+    detourBack: Boolean,
+    shortDetourPx: Float?,
+    onGrabbed: (Boolean) -> kotlin.Unit,
+  ) {
     // Never start a second chain on top of a live one: the old chain's next completion would lift
     // the new chain's stroke, and both pointers would be lost.
     if (stroke != null) {
@@ -119,8 +125,12 @@ class HeldPointer(
      * detour on a GROW travels 60 px past the destination first, and Chrome keeps what that visit did:
      * from mid-word it carried the handle into the next word, and the pointer's return did not bring
      * it back.
+     *
+     * [shortDetourPx] shortens it instead: the detour goes as far as [towards], or that far when
+     * [towards] is nearer, so a miss still crosses the slop while a hit barely overshoots.
      */
-    val away = (if (towards.x >= from.x) SLOP_DETOUR_PX else -SLOP_DETOUR_PX) * (if (detourBack) -1f else 1f)
+    val distance = shortDetourPx?.let { maxOf(kotlin.math.abs(towards.x - from.x), it) } ?: SLOP_DETOUR_PX
+    val away = (if (towards.x >= from.x) distance else -distance) * (if (detourBack) -1f else 1f)
     val start = onScreen(from)
     val detour = onScreen(PointF(from.x + away, from.y))
     val end = onScreen(towards)
@@ -143,7 +153,7 @@ class HeldPointer(
       if (played) link() else lost("grab not played")
       onGrabbed(played)
     }
-    Diag.log("held: grab at ${from.x} accepted=$accepted")
+    Diag.log("held: grab at ${from.x} accepted=$accepted via ${detour.x} to ${end.x}")
     // A refused dispatch never calls back, so this is the one path that has to report for itself —
     // and it must report exactly once, like the other.
     if (!accepted) {

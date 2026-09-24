@@ -85,11 +85,19 @@ interface GestureDispatcher {
    * (measured: three links landed `10..12` and it was still `10..12` after the lift and 900 ms), so
    * a correction made while down is the last correction needed.
    */
-  fun grabAndHold(from: PointF, to: PointF, detourBack: Boolean = false, onGrabbed: (Boolean) -> kotlin.Unit)
+  fun grabAndHold(
+    from: PointF,
+    to: PointF,
+    detourBack: Boolean = false,
+    pastTarget: Boolean = true,
+    onGrabbed: (Boolean) -> kotlin.Unit,
+  )
   // [onGrabbed] reports when the grab has PLAYED, not when it was accepted — a caller that starts
   // waiting for an announcement before the stroke has run always times out. [detourBack] sends the
   // grab's slop detour away from [to] instead of past it, for a caller whose first travel must not
-  // carry the handle into the next word on its way (see `growToWordEnd`).
+  // carry the handle into the next word on its way (see `growToWordEnd`). [pastTarget] false keeps
+  // the detour on [to]'s side but no further than one pixel past the touch slop, as [drag]'s does
+  // (see `heldCharacterStep`).
 
   /**
    * Move the pointer that [grabAndHold] pressed. False when nothing is held, which is a real answer
@@ -817,8 +825,27 @@ class SelectionDriver(
     val to = crossRowDelta(before, start, next, 0f)?.let { PointF(handle.x + it.x, handle.y + it.y) }
       ?: PointF(handle.x + reach, handle.y)
 
+    /*
+     * On Blink the grab's detour stops just past the touch slop, not 60 px out.
+     *
+     * The 60 px detour grows the selection far past the destination first, often past the next
+     * word's middle, where Chrome snaps to its end. The pointer's return is then a shrink, and Chrome
+     * keeps the lead that the snap built up: the edge stops one character past the finger. Measured
+     * 2026-09-24 on the rig, logging every announcement of the grab: `char →` from 9 of `Chrome is made
+     * by Google` announced 10, 14, 13, 12, 11 and stopped on 11 over a pointer at 10's caret, and from
+     * 17 it snapped to 23, the end of `Google`, and came back only to 20. A detour that stayed short
+     * of a word's middle (from 8: 10, then 9) came back exactly. Every +2 landing that the
+     * measured-caret aim left in place was the first shape, which is why moving the grab did not
+     * move them.
+     *
+     * Detouring toward the anchor instead was measured the same day and is worse: the return is then
+     * a grow, which Chrome ends one character SHORT as often as the outward detour ended long.
+     *
+     * Not on a `TextView`, which snaps a grow by word from a boundary and rounds the first move as a
+     * shrink ([heldSnapThrough]'s note); its outward detour is what moves it one character there.
+     */
     gestureCount++
-    gestures.grabAndHold(handle, to) { grabbed ->
+    gestures.grabAndHold(handle, to, pastTarget = !before.isBlink) { grabbed ->
       if (!grabbed) {
         Diag.log("  held: the grab was refused — falling back to the released path")
         releasedCharacterStep(command, onDone)
@@ -841,7 +868,21 @@ class SelectionDriver(
            * Measured 2026-09-24 from a word's end: the fallback's first drag came back not completed
            * every time, so the press reported `HandleLost` in about 500 ms with the selection
            * untouched and the released path never having run.
+           *
+           * Except a Blink GROW, where silence after the short detour is Chrome holding the edge at a
+           * word's START until the finger passes that word's middle: push the held pointer on
+           * through the snap, as a `TextView` correction does, and walk back from there. Measured
+           * 2026-09-24: every such press (from 10 and 18 of `Chrome is made by Google`, 12 and 20 of
+           * `alpha bravo charlie delta`, 9 of `mint oil ink lilt wax`, and 17 and 14 leftward on the
+           * START edge) landed exactly, in 3-4 gestures and 1.35-1.75 s. Releasing instead fell to the released grow, which took 3-7
+           * gestures and once ended where it started (`Moved(9, 9)`, 4.1 s). A grab that really
+           * missed is already past the slop, so a push reads to the page as a scroll, and
+           * [heldSnapThrough] gives up after [MAX_SNAP_THROUGH_ATTEMPTS].
            */
+          after == null && before.isBlink && growsSelection(command) -> {
+            Diag.log("  held: silent from $start on Blink — pushing through the word's middle")
+            heldSnapThrough(next, start, command, onDone, guard = 1, frame = before)
+          }
           after == null -> gestures.releaseHeld {
             awaitSelectionOnScreen { onScreen ->
               if (onScreen) {
