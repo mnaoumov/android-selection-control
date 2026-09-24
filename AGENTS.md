@@ -492,8 +492,9 @@ number was known before the press):
  character" test, `char ←` on the END edge by `growsSelection` — and both were exercised.
 
 What is still unmeasured is the fourth claim: that a boundary learned in a node a grow has just
-crossed into survives the next press. It needs a node crossing, which needs a target the app can
-actually drive, which is the `HANDLE_DROP` gotcha below.
+crossed into survives the next press. It needs a node crossing, which Chrome's `ERR_INVALID_URL` page
+now gives: since the handle aim was fixed (the `HANDLE_DROP_DP` gotcha below), a `word →` from the end
+of `terms` in `chrome://terms/` grabs the handle and grows into the wrapped paragraph after it.
 
 **`word ←` onto the anchor does NOT collapse the selection — a dragged handle has a one-character
 floor.** This paragraph used to claim the opposite, reasoned from the desktop's `Ctrl+Shift+Left` and
@@ -520,35 +521,40 @@ discovering a floor that is already known, which is most of a 3.6 s press; and t
 selection one character wide rather than empty, so the next command starts from 12..13 and not from a
 caret.
 
-**`HANDLE_DROP` is 57 px, the real drop is about 28, and a `TextView` hides it while Chrome does not.**
-`HandleLocator` aims at the source node's `bounds.bottom + HANDLE_DROP`; the constant is documented in
-the source as a measurement taken on the owner's handset. Measured 2026-09-23 on the rig by scanning a
-live selection's own handle colour out of a screenshot — a diagnosis, never something to aim at:
+**The handle aim is in dp: `HANDLE_DROP_DP` = 14 and `HANDLE_INSET_DP` = 9. It was once raw pixels
+taken off the handset, and on any other density that missed Chrome's handle entirely.**
+`HandleLocator` aims at the source node's `bounds.bottom + handleDrop`, and `caret ± handleInset`,
+both scaled by the live display density. They used to be the literals 57 and 30 — the gesture spike's
+measurement on the handset, which is 560 dpi (3.5x). On the rig (320 dpi, 2x) that put the aim ~30 px
+below the handle. Measured 2026-09-23 by scanning a live selection's own handle colour out of a
+screenshot — a diagnosis, never something to aim at:
 
-| target | node bottom | end handle | centre | real drop | aimed at | outcome |
+| target | node bottom | end handle | centre | real drop | old aim | outcome |
 |---|---|---|---|---|---|---|
 | `TextView` (debug target), 320 dpi | 545 | y 545..588 | 566 | 21 px | 602 | grabbed, every step exact |
 | Chrome page content, 320 dpi | 767 | y 774..817, x 218..261 | 794 | 27 px | 824 | `HandleLost`, selection destroyed |
-| Chrome page content, 480 dpi | 1151 | y ~1155..1205 | ~1180 | 29 px | 1208 | `HandleLost` |
+| Chrome page content, `wm density 480` | 1151 | y ~1155..1205 | ~1180 | 29 px | 1208 | `HandleLost` |
 
-So the aim is ~30 px low on both and lands **outside** a ~25 px-radius circle. The `TextView` case is
-further out still and works anyway, because the platform's own `HandleView` extends its touch region
-well past the drawn circle; Chrome's composited handle does not, and a touch that misses lands on the
-page, which collapses the selection. **`HandleLost` on page content is therefore not evidence about
-the node, the row or the rung — it is this constant.**
+**Both real devices agree once the pixels are divided by the density.** The handset put the handle
+centre 50..57 px below the text, which is 14..16 dp; the rig puts it 27..29 px below, which is 14 dp.
+The inset is 30 px there and ~21 px here, 8.5 and ~10 dp. The one outlier is the `wm density 480`
+override of a running guest, where the drop stayed at 29 px while the handle grew. That was once read
+as "density does not explain it". It is one override of a guest nobody restarted, against two real
+devices that agree, so it does not decide the question. At 14 dp the override case is aimed 13 px off
+centre, still inside the handle.
 
-**Proved by driving the handle by hand at its measured centre.** With a Chrome selection at 4..11, an
-`input swipe 238 794 -> 280 794` moved the end edge to the node's own end, which the app's next press
-reported itself as `edge=END at 4..15`. The app's own press from that same state, aiming 30 px lower,
-lost the handle again.
+**Why a `TextView` never showed it.** Its handle was 35 px from the old aim and every press worked,
+because the platform's own `HandleView` takes touches well past its drawn circle. Chrome's composited
+handle does not: a ~25 px-radius circle, and a touch outside it lands on the page and collapses the
+selection. So **a debug-target pass says nothing about the aim on page content** — measure on Chrome.
 
-**It is not un-scaled density, which was the obvious guess and is wrong.** Taken to `wm size 1080x2280`
-/ `wm density 480` — the handset's geometry class, where the 57 px was measured — the drop went 27 px
-to 29 px, i.e. near-constant in raw pixels while the handle itself grew. A density scale factor would
-not fix it; the drop has to come from the handle's actual position.
+**Measured after the change, 2026-09-24, on the rig:** every grab on `chrome://terms/` aimed at
+y 795 against the 794 centre. `word →` from `9..14` grabbed and grew across the node's edge into the
+wrapped paragraph; `char ←`, `char →` and `word →` after it each moved. Before, every one of those
+presses was `HandleLost`. The debug target still steps exactly at y 573 (545 + 28).
 
-**And no new fixture gets round it.** Every multi-node target draws Chrome's compositor handles, a
-`WebView` in the debug app included, so anything built to exercise node-crossing hits this first.
+**Not yet re-measured on the handset.** There the aim moved from 57 px to 49 px and from 30 to 31.5,
+well inside the ~48 px-radius handle the gesture spike measured, but no press has confirmed it.
 
 ## The no-INTERNET property
 
@@ -962,7 +968,9 @@ sequence. One notification tap cost a whole 25-step run this way.
 
 Handle geometry is derived by interpolating the offset across the source node's bounds, then
 `HANDLE_INSET` px outside the end and `HANDLE_DROP` px below the text — 30 and 57, the gesture spike's measured
-Chrome numbers. They are **Chrome's**; Keep draws circles at the selection's corners instead.
+Chrome numbers. They are **Chrome's**; Keep draws circles at the selection's corners instead. They are also
+the HANDSET's raw pixels (560 dpi): the spike never scaled them, so on the rig it aims ~30 px below the
+handle. The app works in dp (the `HANDLE_DROP_DP` gotcha above).
 
 #### Overlay commands (the pad build Phase 1a)
 
