@@ -308,6 +308,8 @@ class SelectionDriver(
     attempt: Int = 0,
     // Where the press began, which a retry after a backwards landing has to keep reporting from.
     first: SelectionObserver.Snapshot? = null,
+    // Set once Chrome has parked the edge on the next word's start: see [landedOnNextWordStart].
+    resume: ResumedReach? = null,
     onDone: (Outcome) -> Unit,
   ) {
     val before = observer.latestWithFreshBounds()
@@ -326,7 +328,8 @@ class SelectionDriver(
     // Escalate in characters rather than in a fixed pixel count: the distance that matters is the
     // width of the next word, and the node's own geometry says how wide a character is here. A
     // constant step wastes attempts on wide text and overshoots on narrow.
-    val step = (pixelsPerCharacter(before, crossingOf(command)) * CHARS_PER_ATTEMPT).coerceAtLeast(STEP_PX)
+    val step = resume?.step
+      ?: (pixelsPerCharacter(before, crossingOf(command)) * CHARS_PER_ATTEMPT).coerceAtLeast(STEP_PX)
     val sign = if (command.toRight) 1 else -1
     val reach = step * (attempt + 1) * sign
 
@@ -350,12 +353,15 @@ class SelectionDriver(
      */
     val width = gestures.screenWidth().toFloat()
     val onScreen = { x: Float -> x >= 0f && x <= width - 1 }
-    if (attempt > 0 && !onScreen(base.x + step * attempt * sign)) {
-      Diag.log("  grow: the last reach already left the screen at x ${base.x + step * attempt * sign} — stopping")
-      onDone(Outcome.HandleLost)
+    // Measured from where the press began once Chrome has moved the handle a character on, so the
+    // escalation keeps the schedule a silent try would have had rather than stacking on that character.
+    val from = if (resume != null && crossing == null) resume.x else base.x
+    if (attempt > 0 && !onScreen(from + step * attempt * sign)) {
+      Diag.log("  grow: the last reach already left the screen at x ${from + step * attempt * sign} — stopping")
+      onDone(heldOrLost(origin, before, resume))
       return
     }
-    val to = PointF((base.x + reach).coerceIn(0f, width - 1), base.y)
+    val to = PointF((from + reach).coerceIn(0f, width - 1), base.y)
 
     gestureCount++
     gestures.drag(handle, to, DRAG_MS) { completed ->
@@ -379,7 +385,16 @@ class SelectionDriver(
           after != null && locator.grabbedAHandle(before, after) && !progressed(origin, after, command) &&
             attempt + 1 < MAX_ATTEMPTS -> {
             Diag.log("  grow: landed on ${after.movingOffset()}, not past ${origin.movingOffset()} — reaching further")
-            growOneUnit(command, attempt + 1, origin, onDone)
+            growOneUnit(command, attempt + 1, origin, resume, onDone)
+          }
+          after != null && locator.grabbedAHandle(before, after) &&
+            landedOnNextWordStart(command, origin, before, after) && attempt + 1 < MAX_ATTEMPTS -> {
+            Diag.log(
+              "  grow: landed on ${after.movingOffset()}, one past the boundary ${origin.movingOffset()} — " +
+                "the next word's start, reaching further"
+            )
+            knownBoundaries += after.movingOffset()
+            growOneUnit(command, attempt + 1, origin, resume ?: ResumedReach(handle.x, step), onDone)
           }
           after != null && locator.grabbedAHandle(before, after) -> {
             /*
@@ -389,7 +404,15 @@ class SelectionDriver(
              * `bravo` to inside `charlie`, went into the set, and the next `word ←` walked to 14.
              */
             // Nor is a grow that changed row, which is character-granular: see [changeRowThenGrow].
-            if (before.movingOffset() == origin.movingOffset() && crossing == null) recordBoundary(before, after, command)
+            // A resumed one grew from the hold on the next word's start, where Chrome is snapping by
+            // word, so its landing is that word's end even one character on: see [landedOnNextWordStart].
+            val resumedInNode = resume != null && before.source == after.source &&
+              grownBy(before.movingOffset(), after.movingOffset()) > 0
+            when {
+              crossing != null -> {}
+              resumedInNode -> knownBoundaries += after.movingOffset()
+              before.movingOffset() == origin.movingOffset() || resume != null -> recordBoundary(before, after, command)
+            }
             locator.rememberAnchor(handle.x - reach.coerceAtLeast(0f))
             onDone(Outcome.Moved(origin.movingOffset(), after.movingOffset()))
           }
@@ -399,17 +422,62 @@ class SelectionDriver(
           // where a selection still visibly exists.
           attempt + 1 < MAX_ATTEMPTS -> awaitSelectionOnScreen { onScreen ->
             if (onScreen) {
-              growOneUnit(command, attempt + 1, origin, onDone)
+              growOneUnit(command, attempt + 1, origin, resume, onDone)
             } else {
               Diag.log("  grow: the selection is gone from screen — stopping rather than poking the page")
               onDone(Outcome.HandleLost)
             }
           }
-          else -> onDone(Outcome.HandleLost)
+          else -> onDone(heldOrLost(origin, before, resume))
         }
       }
     }
   }
+
+  /** Where a resumed grow measures its reach from, and the step it escalates by. */
+  private class ResumedReach(val x: Float, val step: Float)
+
+  /**
+   * How a grow that ran out of reach ends. A resumed one has already moved the edge onto the next
+   * word's start, so it reports that move rather than a lost handle: the selection did change.
+   */
+  private fun heldOrLost(
+    origin: SelectionObserver.Snapshot,
+    before: SelectionObserver.Snapshot,
+    resume: ResumedReach?,
+  ): Outcome = if (resume != null) Outcome.Moved(origin.movingOffset(), before.movingOffset()) else Outcome.HandleLost
+
+  /**
+   * Whether a word grow from a known boundary stopped exactly one character on, which on Chrome is
+   * not the step: it is the next word's START.
+   *
+   * Chrome's grow from a word's end steps through the space and then holds at the next word's start
+   * until the finger passes that word's middle, the same hold the word walk found. A reach short of
+   * the middle therefore lands one past the boundary: measured 2026-09-24 as 43 -> 44, from the end
+   * of `of` to the start of `selecting`. A `TextView` does not land there, since from a boundary it
+   * announces nothing until the middle is passed, and then the word's end. So the landing is
+   * escalated through, as a silent try would be.
+   *
+   * The hold is a word's start, so it goes into [knownBoundaries], and so does where the resumed try
+   * lands: from the hold Chrome is snapping by word, so the landing is that word's end, even a
+   * one-letter word's one character on (measured: 53 -> 54 -> 55 over ` a`). The next `word →` then
+   * starts on a known boundary instead of falling into the walk, which on Chrome has no stop.
+   *
+   * The one case this gets wrong is a ONE-LETTER word grown from its own start, where one character
+   * on is the word's end: the press escalates on and ends at the next word's start, a space too far.
+   * No geometry tells the two apart, since a space is as wide as a narrow letter.
+   *
+   * Only while the grow still stands where the press began, so a resumed try is taken as it lands.
+   */
+  private fun landedOnNextWordStart(
+    command: PadCommand,
+    origin: SelectionObserver.Snapshot,
+    before: SelectionObserver.Snapshot,
+    after: SelectionObserver.Snapshot,
+  ): Boolean =
+    command.unit == PadCommand.Unit.WORD && growsSelection(command) &&
+      before.movingOffset() == origin.movingOffset() && origin.movingOffset() in knownBoundaries &&
+      before.source == after.source && grownBy(origin.movingOffset(), after.movingOffset()) == 1
 
   /**
    * A word grow whose next character is on another row: move the handle onto that row's caret first,

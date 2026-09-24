@@ -701,6 +701,20 @@ the handle into `down`: four grabs of four landed on 23, and Chrome kept it ther
 came back. The walk's grab now detours toward the anchor (`grabAndHold(detourBack = true)`). The
 debug target's walk is unchanged by both: 21 -> 25 through `delta`, on the hold.
 
+**The same hold catches a released `word →` from a word's end: one character on is the next word's
+START, not a step.** Measured 2026-09-24 on the served seven-line paragraph, Chrome force-stopped:
+from 43, the end of `of`, a 1.5-glyph reach landed on 44, the start of `selecting`, and the pad used to
+report that as the word. A `TextView` never lands there from a boundary; it announces nothing until the
+middle is passed. So `growOneUnit` now takes a one-character landing from a known boundary as Chrome's
+hold (`landedOnNextWordStart`). It records the hold as a boundary and escalates from the ORIGIN's
+handle, so the reaches follow the schedule a silent try would have had. It also records wherever the
+resumed try lands, because from the hold Chrome snaps by word. Three presses of three: 43 -> 53
+(`selecting`) in 5 gestures and 2.2-2.6 s, and 53 -> 55 over the one-letter ` a` in 2 gestures. The
+next press then starts on a known boundary instead of falling into the walk. The one case it gets
+wrong is a one-letter word grown from its own START, where +1 really is the word; the press then ends
+a space too far. The same press can also land two characters on, mid-word (40 -> 42 inside `of`),
+which is still recorded as a snap. That is a separate open defect.
+
 **`word ←` onto the anchor does NOT collapse the selection — a dragged handle has a one-character
 floor.** This paragraph used to claim the opposite, reasoned from the desktop's `Ctrl+Shift+Left` and
 never measured. Measured 2026-09-23 on the rig, three times from two different starting selections,
