@@ -803,8 +803,22 @@ resumed try lands, because from the hold Chrome snaps by word. Three presses of 
 (`selecting`) in 5 gestures and 2.2-2.6 s, and 53 -> 55 over the one-letter ` a` in 2 gestures. The
 next press then starts on a known boundary instead of falling into the walk. The one case it gets
 wrong is a one-letter word grown from its own START, where +1 really is the word; the press then ends
-a space too far. The same press can also land two characters on, mid-word (40 -> 42 inside `of`),
-which is still recorded as a snap. That is a separate open defect.
+a space too far.
+
+**A word grow's drag goes straight at its reach: the slop detour must not travel PAST it.** Every
+released drag used to detour 32 px (twice the touch slop) beyond the handle before coming back, so a
+miss reads as a scroll rather than a tap. Chrome sees that visit. From 40, the end of `frustration`, the
+detour passed the middle of `of` (41..43) and snapped to its end, and the return shrank one character at
+a time to the finger: `word →` landed on 42, mid-word, three cold runs of three, and 42 went into the
+set as a snap. `growOneUnit` now drags word grows with `pastTarget = false`, which keeps the detour at
+the reach, or at one pixel past the touch slop when the reach is shorter. Measured 2026-09-24 on the rig,
+Chrome force-stopped before each run, three `word →` from `frustration`, three runs of three: 40 -> 41,
+escalated to 43 (`of`) in 2 gestures and 0.7 s; 43 -> 53 (`selecting`) in 5; 53 -> 55 (` a`) in 2. The
+set held `[29, 40, 41, 43, 44, 53]` and nothing mid-word. The debug target's `TextView` went 11 -> 19 ->
+25 -> 30 from `bravo`, every press exact. Two variants were measured and refused. A detour toward the
+anchor was exact on Chrome, but on the `TextView` it put the handle back inside `bravo`, and from mid-word
+the grow is character-granular (11 -> 12 -> 14, recorded). A 1 px pull-back before the lift changed
+nothing on Chrome, so it is not there.
 
 **`word ←` onto the anchor does NOT collapse the selection — a dragged handle has a one-character
 floor.** This paragraph used to claim the opposite, reasoned from the desktop's `Ctrl+Shift+Left` and
