@@ -418,7 +418,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
   override fun moveHeld(to: PointF): Boolean = heldPointer.moveTo(to)
 
-  override fun releaseHeld() = heldPointer.release()
+  override fun releaseHeld(onLifted: () -> Unit) = heldPointer.release(onLifted)
 
   override fun heldAt(): PointF? = heldPointer.position
 

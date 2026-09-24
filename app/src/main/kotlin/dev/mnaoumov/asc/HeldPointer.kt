@@ -166,9 +166,21 @@ class HeldPointer(
    * reach. Afterwards every grab was refused in silence and twelve escalating drags moved nothing.
    * So a release is a REQUEST — the chain notices it when the current link finishes and closes
    * itself with a stroke that does not continue.
+   *
+   * [onLifted] fires once the lift has **played**, which is the only moment from which the target
+   * app's own finalisation can be read. It is what a caller needs and could not previously have: a
+   * release is asynchronous by up to a link plus the lift, so a caller that reported its result in
+   * the same breath answered before the app had finished revising — and every one of the five
+   * presses that announced a step and left the selection where it started was announced that way.
+   * It fires exactly once on every path, including the ones that lift nothing, so a caller waiting
+   * on it can never be left hanging.
    */
-  fun release() {
-    if (stroke == null) return
+  fun release(onLifted: () -> kotlin.Unit = {}) {
+    if (stroke == null) {
+      onLifted()
+      return
+    }
+    lifted = onLifted
     releasing = true
   }
 
@@ -188,7 +200,15 @@ class HeldPointer(
     val previous = stroke
     val from = at
     forget()
-    if (previous == null || from == null) return
+    // Whoever is waiting for the lift is told exactly once, whatever happens below — including the
+    // paths that cannot lift anything. A callback that fires on the happy path only is a caller left
+    // waiting for ever on precisely the presses that went wrong.
+    val report = lifted
+    lifted = null
+    if (previous == null || from == null) {
+      report?.invoke()
+      return
+    }
 
     /*
      * The lift travels one pixel.
@@ -206,11 +226,15 @@ class HeldPointer(
     val lift = runCatching { previous.continueStroke(path, 0, TICK_MS, false) }.getOrNull()
     if (lift == null) {
       Diag.log("held: could not build the lift; the pointer may still be down")
+      report?.invoke()
       return
     }
     Diag.log("held: lifting after $links link(s)")
     links = 0
-    if (!dispatch(gestureOf(lift)) {}) Diag.log("held: lift refused")
+    if (!dispatch(gestureOf(lift)) { report?.invoke() }) {
+      Diag.log("held: lift refused")
+      report?.invoke()
+    }
   }
 
   /**
@@ -319,9 +343,18 @@ class HeldPointer(
     Diag.log("held: LOST after $links link(s) — $why")
     links = 0
     forget()
+    // A chain that dies under a pending release still owes that caller an answer. Without this the
+    // press it belongs to never finishes at all: the pad shows its spinner for ever and the next
+    // press is refused by the busy guard, which is a worse failure than the one being reported.
+    val report = lifted
+    lifted = null
+    report?.invoke()
   }
 
   private var releasing = false
+
+  /** Who to tell when the lift has played. Cleared as it is called, so it can never fire twice. */
+  private var lifted: (() -> kotlin.Unit)? = null
 
   /** Links since the last grab, for the log: it is the only way to see the chain is alive. */
   private var links = 0
