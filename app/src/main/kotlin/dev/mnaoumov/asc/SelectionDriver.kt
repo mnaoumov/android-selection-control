@@ -1508,11 +1508,26 @@ class SelectionDriver(
       direction * silentProbes * perChar * FINAL_STEP_FRACTION
     // A target on another row — a word ← from a line's first word — is aimed at on its own row.
     val wrap = crossRowDelta(before, current, target, BOUNDARY_BIAS)
-    val to = if (wrap == null) {
+    val aim = if (wrap == null) {
       PointF(handle.x + reach, handle.y)
     } else {
       PointF(handle.x + wrap.x + direction * silentProbes * perChar * FINAL_STEP_FRACTION, handle.y + wrap.y)
     }
+
+    /*
+     * And never past the screen's edge, as [growOneUnit] does not go. Measured 2026-09-24: a walk
+     * back from 64 to 63 just after a row change went silent six times while its reach escalated
+     * leftward from a handle at x 84, and the seventh aimed below 0, which threw and killed the
+     * service. A silent try whose aim was already clamped has nothing further on to reach.
+     */
+    val width = gestures.screenWidth().toFloat()
+    val previousX = aim.x - direction * perChar * FINAL_STEP_FRACTION
+    if (silentProbes > 0 && (previousX < 0f || previousX > width - 1)) {
+      Diag.log("  shrink: the last reach already left the screen at x $previousX — stopping at $current")
+      onDone(Outcome.Moved(origin, current))
+      return
+    }
+    val to = PointF(aim.x.coerceIn(0f, width - 1), aim.y)
 
     gestureCount++
 

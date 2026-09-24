@@ -61,6 +61,11 @@ import android.graphics.PointF
  * chain runs itself. Read the result from the selection stream, as everything else here does.
  */
 class HeldPointer(
+  /**
+   * Moves a point onto the screen. Every point a link visits goes through it, because a stroke
+   * whose path has negative bounds throws, and the throw takes the service down.
+   */
+  private val onScreen: (PointF) -> PointF,
   /** Dispatches a gesture; the callback fires when the framework has finished playing it. */
   private val dispatch: (GestureDescription, (Boolean) -> kotlin.Unit) -> Boolean,
 ) {
@@ -116,18 +121,21 @@ class HeldPointer(
      * it back.
      */
     val away = (if (towards.x >= from.x) SLOP_DETOUR_PX else -SLOP_DETOUR_PX) * (if (detourBack) -1f else 1f)
+    val start = onScreen(from)
+    val detour = onScreen(PointF(from.x + away, from.y))
+    val end = onScreen(towards)
     val first = GestureDescription.StrokeDescription(
       Path().apply {
-        moveTo(from.x, from.y)
-        lineTo(from.x + away, from.y)
-        lineTo(towards.x, towards.y)
+        moveTo(start.x, start.y)
+        lineTo(detour.x, detour.y)
+        lineTo(end.x, end.y)
       },
       0,
       GRAB_MS,
       true,
     )
     stroke = first
-    at = PointF(towards.x, towards.y)
+    at = end
     goal = null
     val accepted = dispatch(gestureOf(first)) { played ->
       // Continue the chain FIRST and tell the caller second: a continuation must be dispatched from
@@ -224,9 +232,12 @@ class HeldPointer(
      * cancelled link rather than an exception (the held-pointer fix, and see [link]). The lift is a continuation, so
      * it has to travel.
      */
+    // Leftward when the pointer sits on the right edge, or the clamp would leave the lift no length.
+    val nudged = onScreen(PointF(from.x + LIFT_NUDGE_PX, from.y))
+    val liftTo = if (nudged.x != from.x) nudged else PointF(from.x - LIFT_NUDGE_PX, from.y)
     val path = Path().apply {
       moveTo(from.x, from.y)
-      lineTo(from.x + LIFT_NUDGE_PX, from.y)
+      lineTo(liftTo.x, liftTo.y)
     }
     val lift = runCatching { previous.continueStroke(path, 0, TICK_MS, false) }.getOrNull()
     if (lift == null) {
@@ -279,7 +290,7 @@ class HeldPointer(
       Diag.log("held: a link ran with no position — the chain was forgotten under it")
       return
     }
-    val to = goal ?: PointF(from.x, from.y + idleNudge())
+    val to = goal?.let(onScreen) ?: PointF(from.x, from.y + idleNudge())
     goal = null
 
     /*

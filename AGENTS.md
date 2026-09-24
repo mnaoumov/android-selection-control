@@ -195,6 +195,14 @@ own (`HandleLocator.hasOwnBox`), i.e. the line wraps at a space. No grow that ch
 ends once the previous reach was already off it. Measured `word →` from the end of a paragraph's last
 line: six tries, the last clamped to x 719, instead of the escalation running on to a 360 px reach.
 
+**So does the walk-back's, and every dispatched point is clamped under both.** `StrokeDescription`
+THROWS on a path with negative bounds (`Path bounds must not be negative`), and the throw kills the
+process: the pad vanishes mid-press and the system restarts the service a second later. Measured
+2026-09-24 on the rig: a walk back from 64 to 63 at the start of a line escalated leftward from a handle
+at x 84, and its seventh try aimed below 0. `walkBackTo` now stops once its previous reach was already
+off the screen, and `AscAccessibilityService.onScreen` clamps every point a stroke visits, the slop
+detours and `HeldPointer`'s links included, so no caller's arithmetic can take the service down again.
+
 **The lie is DETECTABLE, and that is what makes the priming safe.** A rectangle that is both as wide and
 as tall as the node it came from is the node's bounds repeated, and a rectangle that is genuinely one
 character is smaller than its node by whole characters *and* whole lines — nothing real sits in between.
@@ -593,6 +601,17 @@ footprint hits the overlay — it will even fire the overlay's own button — an
 sitting under it cannot be driven at all, at any reach. Removing the overlay unblocks the identical
 drag at the identical pixel immediately. So anything that dispatches must first ensure it is not
 covering the point it is about to touch.
+
+**A press can carry the handle UNDER the pad, so the check is made at every touch-down, not once
+per press.** Measured 2026-09-24 on the rig, the served seven-line paragraph: `word →` from `phrase`,
+at the end of line 2, changed row onto line 3 at y 1193, inside the docked pad (y 1152–1472). Every drag
+after that landed on the pad. The walk back onto the row's first character announced nothing at any
+reach, and the next press's fourteen grows did the same. The per-press check had missed it twice:
+it ran before the row change, and it placed the handle at the wrapped node's `bounds.bottom`, which
+is the last line (y 1487), below the pad. `clearThePadFor` now makes the pad transparent the moment a
+drag, a hold or a grab is about to touch down inside it, and the press's end makes it solid again.
+After that, three cold runs of three went `62 -> 65` (the end of `on`) in 4 gestures and 1.5 s, and
+the walk back reached 63 on its second try.
 
 **The announced offsets are LOCAL to the event's source node.** When a selection grows past a node's edge
 the source switches to the newly-covered node and the offsets restart from it — the run below stepped
