@@ -609,7 +609,8 @@ Device Manager, close Studio, copy its directory and `.ini` under `~/.android/av
 above plus `fastboot.forceColdBoot=yes`. `rig.ps1 avd` prints this recipe verbatim when the AVD is
 missing, which is where it belongs — the reader who needs it is at a console, not in this file.
 
-Cold boot is ~40 s on an unloaded machine. **On a loaded one it is much worse, and adb goes with
+Cold boot is ~30 s headless on an unloaded machine (75 s was measured windowed, before the rig
+stopped booting that way — below). **On a loaded one it is much worse, and adb goes with
 it**: with several other projects' emulators and builds running, `adb devices` itself has been
 measured taking over a minute, and an `adb install` that normally takes seconds does not return.
 That is contention, not a broken rig — check what else is running before believing a hang.
@@ -638,7 +639,9 @@ emulator -avd asc_test -port 5570 -no-snapshot-save -no-boot-anim -no-window -gp
 it booted in 30 s and then survived an install, four rebinds, six activity launches and about sixty
 injected presses without a wobble. `screencap` works headless, so nothing the rig does is lost. The
 crash dialog is the reason a wedge looks like a hang rather than a crash: the emulator is waiting for
-consent nobody can give, on a window that is minimised. `scripts\rig.ps1` still boots windowed.
+consent nobody can give, on a window that is minimised. **`scripts\rig.ps1 up` boots with exactly
+those flags now**, so the rig is headless by default; boot by hand only to look at the guest, and
+expect the wedge above if you do.
 
 ### The debug target
 
