@@ -13,8 +13,7 @@ does, and the held-pointer fix for everything a continued stroke will and will n
 
 Open work is split by shape, one item each in that same store, and named there rather than here:
 driving the page / start / end buttons to completion; locating a handle that the aimed-at drop misses;
-Play distribution, which ECM makes mandatory rather than optional; and the one boundary claim a node
-crossing is needed to measure. The test rig is now a repo asset — see *The test rig* below.
+and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
 A handle inside a **wrapped** node was on that list and is no longer: the row it needs comes from the
 platform's own per-character rectangle, which Chrome does supply for page content once the node has
@@ -491,10 +490,31 @@ number was known before the press):
  directions are caught by different halves of `recordBoundary` — `char →` by the "moved more than one
  character" test, `char ←` on the END edge by `growsSelection` — and both were exercised.
 
-What is still unmeasured is the fourth claim: that a boundary learned in a node a grow has just
-crossed into survives the next press. It needs a node crossing, which Chrome's `ERR_INVALID_URL` page
-now gives: since the handle aim was fixed (the `HANDLE_DROP_DP` gotcha below), a `word →` from the end
-of `terms` in `chrome://terms/` grabs the handle and grows into the wrapped paragraph after it.
+**A boundary learned by a grow that crossed into the next node survives the next press.** This is
+the fourth claim, and it needed a node crossing, so it was measured on Chrome's `ERR_INVALID_URL`
+page on 2026-09-24. A long-press on `terms` seeded `[9, 14]` in the 15-character `"chrome://terms/"`
+node. One `word →` then grew across into the 81-character wrapped paragraph and landed on `0..1`.
+The press after it read:
+
+```
+WORD_RIGHT edge=END at 9..14 moving=14 srcLen=15 oneLine=true boundaries=[9, 14]
+  grow try 1: handle=(470.0, 795.0) reach=21.0 -> 0..1 bounds=Rect(48, 731 - 584, 863)
+WORD_RIGHT edge=END at 0..1 moving=1 srcLen=81 oneLine=false boundaries=[1]
+```
+
+So `[9, 14]`, the offsets of the node that was left, are gone, and `1`, the crossing's landing, is
+kept. That is the ordering `recordBoundary` exists for: it re-keys before it adds. The controls:
+
+- **A grow inside one node does not re-key.** Three `word →` presses from `4..11` in the first node
+ gave `[4, 11]`, then `[4, 11, 13]`, then `[4, 11, 13, 15]`.
+- **A node change with no grow clears.** A long-press in the second node seeded `[9, 14]`, and one
+ in the first node then seeded `[4, 11]` and not the union. Both nodes are 15 characters long, so
+ the bounds in the key are what told them apart.
+- **A scroll does NOT clear, and that is correct.** `Google` seeded `[0, 6]` on `chrome://version/`.
+ After the page scrolled ~90 px, the next press still read `[0, 6]`, and its grab was aimed at the
+ new row (y 375). The key is taken from the last *announcement*, and a scroll announces nothing. The
+ node and its offsets are unchanged, so keeping the set is the right answer. The earlier plan
+ expected a clear here, and that expectation was wrong.
 
 **`word ←` onto the anchor does NOT collapse the selection — a dragged handle has a one-character
 floor.** This paragraph used to claim the opposite, reasoned from the desktop's `Ctrl+Shift+Left` and
@@ -590,9 +610,19 @@ app logged, and takes a screenshot:
 
 ```powershell
 .\scripts\rig.ps1 go # the lot, cold; -NoBuild to skip Gradle
-.\scripts\rig.ps1 press 'char/right'
+.\scripts\rig.ps1 press '→/char'
 .\scripts\rig.ps1 log 40
 ```
+
+`press` matches the label the pad logs (`⇥/word`, `→/char`, `⤓/end`), glyph first. A partial label
+works only when it is unique, so `char` alone matches two buttons and `char/right` matches none.
+
+**The pad's rectangles are per foreground app, and only a relayout logs new ones.** Measured
+2026-09-24: over the debug target the button row sat at y 1360, and over Chrome it sat at y 1312.
+Switching app logged nothing, so `press` aimed at the old row 48 px low and hit `⇟ page` instead of
+`⇥ word`. After changing the foreground app, run `rig.ps1 pad`. It rebinds the service, so the pad
+logs where it really is (the process survives, and so does the boundary set). Never clear logcat
+before a `press`, because that also discards the rectangles it reads.
 
 Each step is also an action of its own — `up`, `down`, `build`, `install`, `rebind`, `target`, `pad`,
 `buttons`, `blocks`, `press`, `tap`, `shot`, `log`, `status`, `avd`.

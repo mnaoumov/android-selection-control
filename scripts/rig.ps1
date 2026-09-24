@@ -33,7 +33,7 @@
   # rectangle it and the target logged, and take a screenshot. The whole loop, cold, in one command.
 
 .EXAMPLE
-  .\scripts\rig.ps1 press 'char/right'
+  .\scripts\rig.ps1 press '→/char'
   .\scripts\rig.ps1 log 40
   # One press, then what the pad said about it.
 
@@ -737,7 +737,7 @@ switch ($Action) {
     'status' { Show-Status }
 
     'press' {
-        if ($Rest.Count -lt 1) { throw 'press needs a button label, e.g. rig.ps1 press ''char/right''' }
+        if ($Rest.Count -lt 1) { throw 'press needs a button label, e.g. rig.ps1 press ''→/char''' }
         Invoke-Press -Label $Rest[0]
     }
 
