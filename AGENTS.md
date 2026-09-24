@@ -309,11 +309,27 @@ the same run moved. The press used to release on the overshoot and report `Moved
 `char` presses over three lines moved exactly one character, four of them this way, at 1.4–1.6 s
 and 3 gestures against ~0.8 s and 1.
 
-Why the grab overshot to +2 in the first place: a one-line node's handle is still INTERPOLATED by the
-node's average character (`HandleLocator.locate`'s first branch), while the reach is a measured glyph.
-The grabs on that line sat exactly 16 px apart per offset (146, 162, … 258), across glyphs measured
-from 8 to 30 px. So the grab point is some pixels off the real handle, and a whole-glyph reach from
-there can pass the middle of the next glyph.
+**A one-line node's grab is aimed at the MEASURED caret now, but that was not what caused most of the
++2s.** `HandleLocator.locate`'s one-line branch used to interpolate by the node's average character, so
+the grabs on `Chrome is made by Google` sat exactly 16 px apart per offset (146, 162, … 258) across glyphs
+of 8 to 30 px. It now takes the caret from `characterGeometry`, which the primer has usually already
+asked, and keeps the average only where the platform declines. The row stays `bounds.bottom`. Measured
+2026-09-24 on the rig, Chrome force-stopped before each run, old build against new in one sitting, `char →`
+along three served one-line nodes:
+
+| line | presses | detours, old aim | detours, measured aim |
+|---|---|---|---|
+| `Chrome is made by Google`, from 6 | 16 | 6, 9, 10, 18 | 9, 10, 18 (two runs, identical) |
+| `alpha bravo charlie delta`, from 11 | 12 | 12, 19, 20 | 12, 19, 20 |
+| `mint oil ink lilt wax`, from 4 | 12 | 6, 11, 15 | 6, 11, 15 |
+
+Every press moved exactly one character in both builds. The measured aim removed the one detour where
+the average was furthest off (16 px at offset 6 of the first line). Everywhere else the same offsets
+overshoot whichever aim is used: at offset 6 of `mint oil ink lilt wax` the grab moved 14.6 px and the
+press still landed on 8. At offset 9 of the first line, the average and the measured caret were the same
+pixel. So the rest of the +2 landings depend on where the step goes, not on where the grab starts, and
+remain unexplained. The debug target's `TextView` took 16 of 16 presses, 8 each way from `bravo`, exactly
+one character each, with an aim that moved by up to 14 px.
 
 A second +2 sat beside it: the held first travel was floored at `STEP_PX` = 12 even when the glyph
 had been measured, so the 8 px `i` and `l` of `oil` were overshot, 6 -> 8, and a held correction
