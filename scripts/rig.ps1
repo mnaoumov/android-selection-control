@@ -67,7 +67,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 trap {
     # $Error[0] reports the real fault line; a different exception there means it is stale.
-    if ($Error.Count -gt 0 -and [object]::ReferenceEquals($Error[0].Exception, $_.Exception)) {
+    if ($Error.Count -gt 0 -and $Error[0] -is [System.Management.Automation.ErrorRecord] -and [object]::ReferenceEquals($Error[0].Exception, $_.Exception)) {
         throw $Error[0]
     }
     throw $_
