@@ -720,6 +720,23 @@ replaces BOTH edges, while a handle drag moves one and leaves the anchor. That i
 free boundaries be harvested, and it fails safe: an unrecognised long-press seeds nothing, which is
 the old behaviour.
 
+**Across a node change, "both edges changed" says nothing, because the offsets restart in the new
+node's frame.** A hand drag of the END handle from row 003 into row 015 of a served page logged
+`seeded from a fresh selection at 0..27`, with 27 simply where the finger stopped. So a crossing is
+judged against what the selection last announced in the node it lands in (`isFreshSelection`). A node it
+has not been in announces a drag as `0..focus`, so an announcement there starting at 0 is a drag.
+Measured 2026-09-28 on the rig, Chrome, a served page of one-line rows:
+
+| announcement | before the fix | now |
+|---|---|---|
+| END dragged from `bravo` (row 004) to `bra\|vo` in row 005 | would seed `[0, 17]`, mid-word | `0..19` then `0..17`, nothing seeded; `⇤ word` then says "no known word boundary yet" |
+| the same END dragged back into row 004, inside `charlie` | would seed `[14, 21]` | `14..21`, not fresh; the set keeps `[14, 19]` |
+| long-press `alpha` in row 005, while row 002's `charlie` is selected | seeded | `[8, 13]`, seeded |
+| long-press `row`, the FIRST word of row 006 | seeded | `0..3`, nothing seeded |
+
+The last row is the price. A long-press on a node's first word looks exactly like a drag into it,
+so it seeds nothing, which is the fail-safe direction.
+
 **All three of those claims are now measured, not reasoned** (2026-09-23, the rig, against the debug
 target's `alpha bravo charlie delta echo` whose boundaries are 5, 11, 19 and 25, so every expected
 number was known before the press):
