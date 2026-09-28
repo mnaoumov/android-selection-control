@@ -964,8 +964,16 @@ y 795 against the 794 centre. `word →` from `9..14` grabbed and grew across th
 wrapped paragraph; `char ←`, `char →` and `word →` after it each moved. Before, every one of those
 presses was `HandleLost`. The debug target still steps exactly at y 573 (545 + 28).
 
-**Not yet re-measured on the handset.** There the aim moved from 57 px to 49 px and from 30 to 31.5,
-well inside the ~48 px-radius handle the gesture spike measured, but no press has confirmed it.
+**At the handset's density it grabs: measured 2026-09-28 on the `handset` emulator profile** (the
+phone's 1272x2772 at 560 dpi, *The AVD* below), Chrome force-stopped before each run, against a
+served page of one-line nodes. There the aim is 49 px below the node and 31.5 px outside the caret.
+Chrome drew the END handle's circle about 37 px below the node's bottom and 39 px right of the caret,
+with a radius of about 39 px, so the aim sat 12-15 px from its centre. Three long-pressed words
+(`bravo`, `charlie`, `made`), each followed by `char →`, `char ←` and `word →`: nine presses of nine
+grabbed, none `HandleLost`. Every char press moved exactly one character in one gesture (0.58-0.75 s),
+and the word presses went `19 -> 25` (to the end of `delta`) and `14 -> 17` (to the end of `by`).
+The real phone has not confirmed it yet. It went from 57 px to 49 px there and from 30 to 31.5,
+inside the ~48 px-radius handle the gesture spike measured.
 
 ### Page, start and end
 
@@ -1214,6 +1222,27 @@ environment, which is how the Obsidian integration harness capped the same flood
   because the Obsidian suites' emulators share it. netsimd can outlive its emulator: in the incident,
   qemu restarted it at 11:37 after it was killed, with no `RUST_LOG`. Killing a guest leaves a short-lived
   `emulator -kill <pid> -sleep 20` helper behind, so the helper is not counted as an emulator.
+
+### The handset profile
+
+**`-RigProfile handset` is a second AVD with the OnePlus 15's density**, for the one thing the rig
+cannot show: every dp the app aims by is 3.5 px there against 2 px on the rig. It is `asc_handset`
+on `emulator-5572`, **1272x2772 at 560 dpi with 4096 MB**. That is the phone's own screen, so Chrome's
+and the pad's dp layouts have the phone's shape too, not only its density. Every action takes the
+flag (`rig.ps1 go -RigProfile handset`, `press '→/char' -RigProfile handset`), and its watchdog and
+heartbeat files are its own, so the two emulators can run side by side. `rig.ps1 avd -RigProfile
+handset` prints the recipe, which is the rig's with the shape above. It was cloned from `asc_test`,
+skipping the `*.qcow2` overlays, so its userdata starts fresh and Chrome's first run has to be
+clicked through once, with the service off, as on the rig.
+
+The rig's note that the phone's full size wedged the guest predates headless boots. Headless, this
+profile booted in ~40 s and ran three measurement sittings. Two things were different from the rig:
+
+- **Right after the first boot the guest is busy**, dexopting GMS for about a minute. The first press
+  sitting ran into it: Chrome's task was closed under the press and the target activity came to the
+  front. Wait a minute after the first `go` before measuring.
+- **4 GB is tight.** `top` showed 0.4 GB free and swap in use while idle. Nothing was killed after the
+  first minute, but a Chrome that vanishes mid-press on this profile is the memory before it is the app.
 
 ### The debug target
 
