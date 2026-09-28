@@ -1809,6 +1809,15 @@ class SelectionDriver(
               onDone(Outcome.Moved(origin, current))
             }
           !locator.grabbedAHandle(before, after) -> onDone(Outcome.HandleLost)
+          /*
+           * An announcement that leaves the edge where it was is as silent as none. Chrome re-announces
+           * the selection during a drag and settles back, so the walk used to reset its probe count
+           * and repeat the identical drag. Measured 2026-09-28 on the rig: `word ←` from 22 inside
+           * `charlie` reached 20 and then dragged to x 340.8 seven times, `14..20` every time, never
+           * crossing the 8 px space onto 19.
+           */
+          after.movingOffset() == current && !crossedNodes(before, after) ->
+            walkBackTo(target, command, origin, onDone, guard + 1, retriesLeft, silentProbes + 1, targetFrame)
           else -> walkBackTo(target, command, origin, onDone, guard + 1, retriesLeft, frame = targetFrame)
         }
       }
