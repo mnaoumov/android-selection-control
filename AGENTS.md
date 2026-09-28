@@ -3,17 +3,18 @@
 Android app giving **cursor and selection control where no keyboard can reach** — text that is
 selectable by touch but *not* editable: a web page in a browser, a read-only view.
 
-Tracked centrally in a private tracker. Five items are closed and hold the history: **the first spike**
+Tracked centrally in a private tracker. Six items are closed and hold the history: **the first spike**
 (NO-GO — the accessibility selection actions stop at the editable-buffer boundary), **the gesture spike** (GO —
 `dispatchGesture` drives the target app's own selection UI, plus the per-app observation matrix),
 **The pad build** (the pad itself, built and measured), **the held-pointer fix** (the held pointer, and why a
-character step now costs one gesture), and **the swap-edge fix** (the swap button, and the one reading of "where
-the moving edge is" that both edges now share). Read the gesture spike for the mechanism, the pad build for what the pad
+character step now costs one gesture), **the swap-edge fix** (the swap button, and the one reading of "where
+the moving edge is" that both edges now share), and **the paging fix** (page, start and end, driven to the
+document's ends on the rig). Read the gesture spike for the mechanism, the pad build for what the pad
 does, and the held-pointer fix for everything a continued stroke will and will not tolerate.
 
 Open work is split by shape, one item each in that same store, and named there rather than here:
-driving the page / start / end buttons to completion; locating a handle that the aimed-at drop misses;
-and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
+locating a handle that the aimed-at drop misses; confirming the paging on the handset; and Play
+distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
 A handle inside a **wrapped** node was on that list and is no longer: the row it needs comes from the
 platform's own per-character rectangle, which Chrome does supply for page content once the node has
@@ -755,7 +756,8 @@ kept. That is the ordering `recordBoundary` exists for: it re-keys before it add
  gave `[4, 11]`, then `[4, 11, 13]`, then `[4, 11, 13, 15]`.
 - **A node change with no grow clears.** A long-press in the second node seeded `[9, 14]`, and one
  in the first node then seeded `[4, 11]` and not the union. Both nodes are 15 characters long, so
- the bounds in the key are what told them apart.
+ the bounds in the key are what told them apart. (The key is the node's own identity since
+ 2026-09-28, which tells them apart too; see *Page, start and end* for why bounds stopped being enough.)
 - **A scroll does NOT clear, and that is correct.** `Google` seeded `[0, 6]` on `chrome://version/`.
  After the page scrolled ~90 px, the next press still read `[0, 6]`, and its grab was aimed at the
  new row (y 375). The key is taken from the last *announcement*, and a scroll announces nothing. The
@@ -965,6 +967,85 @@ presses was `HandleLost`. The debug target still steps exactly at y 573 (545 + 2
 **Not yet re-measured on the handset.** There the aim moved from 57 px to 49 px and from 30 to 31.5,
 well inside the ~48 px-radius handle the gesture spike measured, but no press has confirmed it.
 
+### Page, start and end
+
+**Chrome does not auto-scroll a held selection handle. Not the pad's, and not a finger's.** The
+page buttons used to drag the handle to the screen's corner and hold it there, waiting for the
+target app's edge auto-scroll. Measured 2026-09-28 on the rig, a served page of 400 one-line rows:
+the pad's press reported `Moved` after 1560 ms and the page did not move by a pixel. The selection
+simply stopped at the last visible row. The control was an injected finger (`input motionevent`)
+dragged from the handle to y 1460 and held there five seconds, still and then jiggling by 20 px.
+The selection followed the finger, and the page never scrolled. The spike's old `scrollY=3` was
+the whole of the auto-scroll evidence, and it does not hold up.
+
+**So a page step scrolls with a swipe and then drags the handle across the visible band.**
+Scrolling does not move a selection at all; only the drag does. A handle scrolled off screen
+cannot be grabbed. So the swipe puts the moving handle at the near end of the band, and the drag
+takes it to the far end (`SelectionDriver.pageStep`). The band is the page's outermost scrollable
+node with the docked pad cut off: `[0,313][720,1152]` for Chrome on the rig. Measured the same day,
+Chrome force-stopped first:
+
+| press | result | time, gestures |
+|---|---|---|
+| `page ↓` from `bravo` on row 003 | row 014, same column, scroll 346 px | 1.25 s, 2 |
+| `page ↓` × 3 more | 11 rows each (a 689 px band), the column kept | 1.22–1.28 s, 2 each |
+| `end` from row 002 | the last character of row 400, 36 pages | 56.9 s, 72 |
+| `page ↑` × 3, START edge | 11 rows each | ~1.3 s, 2 each |
+| `start` from row 310, START edge | offset 0 of row 001, 30 pages | 50.4 s, 60 |
+| `char →`, then `word →`, after 4 pages | 19 → 20 → 27, the anchor far off screen | 0.7 s, 1; 1.5 s, 4 |
+
+The swipe stands still for 150 ms before it lifts, so it cannot fling. It scrolls 10–25 px less
+than it travels, which is Chrome's touch slop, and the handle is re-located from the node's re-read
+bounds after it, never predicted. The swipe starts at the band's far edge, beyond the moving handle,
+in the half of the band the handle is not in, a quarter of the way in. It never starts within 42 dp
+of the screen's top or bottom. Where nothing scrolls (the debug target's `TextView`), there is no
+swipe: `page ↓` there went 11 → 30 in 1 gesture, and `page ↑` on the START edge 6 → 0.
+
+**The anchor scrolling off screen costs nothing.** The announcing node follows the moving edge, so
+the moving handle is always the one on screen. The pad never needs to locate the other one.
+
+**A scroll that falls short means the document's edge, and the last drag then goes to the SCREEN's
+corner.** The band's corner is not enough, because a document's last rows scroll no higher than the
+viewport's bottom, which the docked pad covers: `end` stopped on row 394 of 400 until the target
+moved. The down is on the handle, so the moves belong to the page wherever they go.
+
+**Rows of a scrolled page land in identical rectangles, so a node is known by its identity, not by
+its bounds.** Rows 047 and 058, both 27 characters long, were both at `(32, 1007 - 424, 1045)`
+either side of one page step. The bounds-and-length key read that as "did not move" and stopped
+`end` after one page. `nodeKey` now uses `AccessibilityNodeInfo.hashCode`, which is the node's
+own id and window, and falls back to the bounds only where an event carries no node. For the same
+reason, `Moved` carries `crossedNode`. Offsets from two different nodes compare as nothing: a
+page step went `19 → 19` four times running, one row-shape apart.
+
+**Chrome announces a node that does not hold the anchor as `0..focus`.** Grow the END into later
+nodes and that reads correctly as `0..19`. Carry the START into an earlier node and Chrome still
+says `0..14` for a START on column 14, where the covered range would be `14..27`. `low()` read the
+START at column 0, where there is no handle, and the next grab scrolled the page instead.
+`SelectionDriver.inMovingFrame` rewrites such an announcement to `focus..length` for the START edge.
+
+**After a swap on a selection spanning nodes, the edge to move is in no announced node, so the
+press refuses (`EdgeUnknown`, "nudge its handle once").** The announcement describes the edge that
+last moved. A `page ↑` after `end` + `⇄ swap` located the START at the END row's offset 0,
+`(14, 1469)`, under the pad, and dragged across the page from there. A fresh selection, or the
+user dragging that handle inside one node, lifts the refusal.
+
+**Chrome hides its handles while the page scrolls, and a grab before they fade back finds
+nothing.** The eighth page of a `start` sweep grabbed where the handle belonged, announced nothing,
+and scrolled the page back. The grab now waits for the toolbar to return, which took 150–250 ms,
+and 150 ms more. After that, 36 pages and 30 pages ran without a miss.
+
+**A stop touch also cuts the swipe short, which reads like the document's edge.** A tap on
+`← char` 8 s into `end` left one scroll 140 px short, and the corner drag took the selection to
+the bottom of the screen. Every press now clears a stop flag at its start. A touch on any direction
+button sets it, and a page step checks it after its scroll, before it drags. After the change, a
+tap 6 s into `start` ended with `stopped by a touch during the scroll` and the selection where the
+last page had left it.
+
+**A zero-length continuation that does NOT itself continue plays fine.** The old edge hold was
+`continueStroke(moveTo(end), 0, holdMs, willContinue = false)`, and the 1200 ms hold reported
+completed. It is a zero-length link that continues the chain that is refused (the held-pointer
+entries above). The page scroll's stillness before the lift is exactly that final stroke.
+
 ## The no-INTERNET property
 
 `spike/app/src/main/AndroidManifest.xml` declares **no permissions at all**, deliberately, from the
@@ -1022,6 +1103,10 @@ before a `press`, because that also discards the rectangles it reads.
 
 Each step is also an action of its own — `up`, `down`, `build`, `install`, `rebind`, `target`, `pad`,
 `buttons`, `blocks`, `press`, `tap`, `shot`, `log`, `status`, `avd`.
+
+**`install` does not build.** It installs whatever APK is on disk, so after an edit run `build`
+first, or `go`. Two measurements on 2026-09-28 ran against the previous APK because of it, and read
+as a fix that had not worked.
 
 **It exists because a measurement should not wait on a phone being unlocked.** Almost everything
 measured here before it was measured on the owner's handset, which meant every run waited on a
@@ -1415,7 +1500,7 @@ fired one from the previous one's callback. Its parts are logged as `[1/3 hold]`
 | `servo <start\|end> <dx> <count> [settleMs]` | `nudge` repeated — the closed-loop walk, and the instrument that actually measures granularity |
 | `findhandle <y> <centreX> [step] [maxProbes]` | Hunt for a handle by probing outward from a centre, for the surfaces where interpolation cannot reach it |
 | `track <anchorX> <y> <dx> <count> [settleMs]` | The closed loop **without** node bounds: derive the moving handle as `2 × toolbarCentre − anchorX` before every step |
-| `draghold <x1> <y1> <x2> <y2> [dragMs] [holdMs]` | Drag then **hold without lifting** (two chained strokes), for the edge auto-scroll that plain `drag` can never trigger |
+| `draghold <x1> <y1> <x2> <y2> [dragMs] [holdMs]` | Drag then **hold without lifting** (two chained strokes), for the edge auto-scroll that plain `drag` can never trigger. Chrome on the rig never auto-scrolls a held handle at all; see *Page, start and end* |
 
 Read either walk's output as a **sequence of offsets**, not of pixels: values landing inside a word
 prove character granularity; values that only ever sit on word boundaries, with several silent steps

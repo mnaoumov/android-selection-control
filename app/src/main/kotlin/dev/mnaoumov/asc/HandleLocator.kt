@@ -157,7 +157,10 @@ class HandleLocator(private val density: () -> Float) {
     if (length <= 0) return null
 
     val offset = (at ?: if (edge == Edge.START) snapshot.low() else snapshot.high()).coerceIn(0, length)
-    val key = "${snapshot.atMs}|$offset|$crossing"
+    // The bounds are in the key because a scroll moves every rectangle without announcing anything:
+    // a page step re-reads the node after its scroll, and the memo from before it is screen pixels
+    // where the text used to be.
+    val key = "${snapshot.atMs}|${snapshot.bounds}|$offset|$crossing"
     if (key == memoKey) return memoValue
     memoKey = null
     memoValue = null
