@@ -2538,20 +2538,55 @@ class SelectionDriver(
   fun noteSelectionEvent(before: SelectionObserver.Snapshot?) {
     val now = observer.latest ?: return
     if (now.isEmpty()) return
-    val freshSelection = before == null || (now.low() != before.low() && now.high() != before.high())
-    if (!freshSelection) {
+    if (before != null && !isFreshSelection(before, now)) {
+      lastSeenInNode[nodeKey(now)] = now
       // The user dragged one handle inside one node, and whichever it was, that node holds both
       // edges. So a moving edge nothing had announced since a swap is announced now.
-      if (sameNode(before, now)) activeEdgeAnnounced = true
+      if (sameNode(before, now)) {
+        activeEdgeAnnounced = true
+      } else {
+        Diag.log("a handle dragged into another node at ${now.low()}..${now.high()}: not a fresh selection")
+      }
       return
     }
     activeEdgeAnnounced = true
     syncBoundaryContext(now)
     anchorNodeKey = nodeKey(now)
+    lastSeenInNode.clear()
+    lastSeenInNode[nodeKey(now)] = now
     knownBoundaries += now.low()
     knownBoundaries += now.high()
     Diag.log("seeded from a fresh selection at ${now.low()}..${now.high()}: boundaries=$knownBoundaries")
   }
+
+  /**
+   * Whether [now] starts a new selection, rather than moving one edge of the one [before] described.
+   *
+   * Inside one node that is "both edges changed". **Across a node change it is not**: the offsets
+   * restart in the new node's frame, so both edges always differ, and a user's handle drag into
+   * another row read as a long-press. Measured 2026-09-28 on the rig, a served page of one-line
+   * rows: an injected finger dragged the END handle from row 003 into row 015, and the service
+   * logged `seeded from a fresh selection at 0..27`, where the 27 was only where the finger stopped.
+   *
+   * So a crossing is judged against what this selection last announced in the node it lands in,
+   * when it has been there: a drag back into the anchor's node keeps the anchor, a long-press
+   * replaces both edges. A node it has not been in announces a drag in Chrome's anchor-elsewhere
+   * frame, `0..focus` (see [inMovingFrame]), so an announcement there that starts at 0 is a drag.
+   * A long-press on a node's FIRST word looks the same and seeds nothing, which is the fail-safe
+   * direction: it is the behaviour from before any seeding existed.
+   */
+  private fun isFreshSelection(before: SelectionObserver.Snapshot, now: SelectionObserver.Snapshot): Boolean {
+    val previous = if (sameNode(before, now)) before else lastSeenInNode[nodeKey(now)]
+    if (previous == null) return now.from != 0
+    return now.low() != previous.low() && now.high() != previous.high()
+  }
+
+  /**
+   * The last announcement [noteSelectionEvent] saw in each node since the last fresh selection,
+   * which [isFreshSelection] judges a crossing against. A fresh selection clears it, since its edges
+   * make every other node's record stale.
+   */
+  private val lastSeenInNode = mutableMapOf<String, SelectionObserver.Snapshot>()
 
   /**
    * The announcing node, by its own identity where the event carried one, and by its bounds and
