@@ -993,6 +993,13 @@ through Android Studio's Device Manager.
 
 ## The test rig
 
+**Emulator first, handset last (owner, 2026-09-27).** A change is developed and proven on the rig
+until it fully works there. The OnePlus 15 comes in only afterwards, as a confirmation pass on the
+finished behaviour. So "needs the phone" is never a reason for an item to wait before the rig work
+is done. Where the handset differs in a way that matters (560 dpi against the rig's 320), reproduce
+that difference in an emulator profile first. The handset confirmation is its own short item,
+waiting on the owner, minted when the rig work ends.
+
 **`scripts\rig.ps1` is the whole loop in one command.** It boots this project's own emulator, builds,
 installs, rebinds the accessibility service, launches the debug target, reports every rectangle the
 app logged, and takes a screenshot:
