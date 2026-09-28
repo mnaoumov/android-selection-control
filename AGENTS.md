@@ -949,6 +949,17 @@ the handle's own window for the toolbar: from `6..11` (`bravo`), `word ←` went
 and the next one ended `AtFloor` with 0 gestures. `char ←` from a one-character selection is not guarded either. The anchor it would need is the same
 unknown across a node seam.
 
+**A walk-back correction that Chrome answers with the SAME offset is a silent one, and has to lengthen.**
+Chrome re-announces the selection during a drag and settles back, so `awaitChange` returns a snapshot
+rather than nothing. `walkBackTo` used to lengthen its reach only when nothing was announced, so it reset
+its silent count and repeated the identical drag. Measured 2026-09-28 on the rig, a served page of
+one-line rows: long-press `bravo` (`14..19`), END dragged by hand to 22 inside `charlie`, `⇤ word`. The
+first drag landed on 20, one short of the 8 px space, and seven more went to x 340.8 and announced
+`14..20` each time (`Moved(22, 20)` in 2.9 s and 8 gestures). An unchanged offset in the same node now
+counts as a silent probe. After the change, Chrome force-stopped before each run, three runs of three:
+`22 -> 20 -> 20 -> 19`, the third drag 4.4 px longer, in 3 gestures and 1.06-1.11 s. The debug target's
+`TextView` retrace (`charlie`, three `char →`, `⇤ word`) still went `22 -> 19` in 1 gesture.
+
 **The handle aim is in dp: `HANDLE_DROP_DP` = 14 and `HANDLE_INSET_DP` = 9. It was once raw pixels
 taken off the handset, and on any other density that missed Chrome's handle entirely.**
 `HandleLocator` aims at the source node's `bounds.bottom + handleDrop`, and `caret ± handleInset`,
