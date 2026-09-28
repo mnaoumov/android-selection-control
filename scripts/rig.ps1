@@ -60,7 +60,12 @@ param(
 
     # Minutes with no rig command before the emulator is taken down, for `up` and `go`. 0 = never.
     # Negative means "the default"; see $DefaultIdleMinutes.
-    [int] $IdleMinutes = -1
+    [int] $IdleMinutes = -1,
+
+    # Which emulator: `rig` (the default, 320 dpi) or `handset` (the OnePlus 15's 560 dpi). See
+    # $RigProfiles.
+    [ValidateSet('rig', 'handset')]
+    [string] $RigProfile = 'rig'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -77,10 +82,20 @@ trap {
 # What this rig is, in constants.
 # --------------------------------------------------------------------------------------------------
 
-# The console port is deliberately far from the 5554 the first emulator on a machine takes, so this
-# project's emulator can never be confused with another project's by a serial typed from memory.
-$RigConsolePort = 5570
-$RigAvdName = 'asc_test'
+# The console ports are deliberately far from the 5554 the first emulator on a machine takes, so
+# this project's emulators can never be confused with another project's by a serial typed from memory.
+#
+# `rig` is where everything is developed. `handset` exists for the one thing the rig cannot show:
+# the owner's OnePlus 15 is 560 dpi against the rig's 320, and every dp the app aims by is a
+# different number of pixels there. Its screen is the phone's own 1272x2772, so a dp layout on it
+# (Chrome's, the pad's) has the phone's shape too, not only its density.
+$RigProfiles = @{
+    rig     = @{ Avd = 'asc_test'; Port = 5570; Width = 720; Height = 1520; Density = 320; RamMb = 2560 }
+    handset = @{ Avd = 'asc_handset'; Port = 5572; Width = 1272; Height = 2772; Density = 560; RamMb = 4096 }
+}
+$Shape = $RigProfiles[$RigProfile]
+$RigConsolePort = $Shape.Port
+$RigAvdName = $Shape.Avd
 $RigSerial = if ($Serial) { $Serial } else { "emulator-$RigConsolePort" }
 
 $AppId = 'dev.mnaoumov.asc'
@@ -101,8 +116,10 @@ $AvdHome = $env:USERPROFILE | Join-Path -ChildPath '.android\avd'
 
 # The idle watchdog's two files. Under build\, which git ignores, and per checkout, so two clones
 # of this repo cannot keep each other's emulator alive.
-$HeartbeatPath = $ShotDir | Join-Path -ChildPath 'last-used'
-$WatchdogPidPath = $ShotDir | Join-Path -ChildPath 'watchdog.pid'
+# And per profile, so the two emulators are watched independently.
+$ProfileSuffix = if ($RigProfile -eq 'rig') { '' } else { "-$RigProfile" }
+$HeartbeatPath = $ShotDir | Join-Path -ChildPath "last-used$ProfileSuffix"
+$WatchdogPidPath = $ShotDir | Join-Path -ChildPath "watchdog$ProfileSuffix.pid"
 
 # How long the emulator may sit with no rig command before the watchdog takes it down. Generous,
 # because a measurement sitting also runs adb by hand (am start, adb reverse, uiautomator dump),
@@ -263,6 +280,9 @@ function Assert-RigAttached {
     renderer the guest wedged three times in an hour, once taking the whole VM down with it.
   - Console port 5570. Nothing technical forces it; it is far enough from the default 5554 that a
     serial typed from memory cannot reach another project's emulator.
+
+  The `handset` profile breaks the first on purpose: it has the phone's shape at the phone's
+  density, because density is what it exists to reproduce. It boots headless like the rig.
 #>
 function Show-AvdState {
     $ini = $AvdHome | Join-Path -ChildPath "$RigAvdName.ini"
@@ -270,33 +290,35 @@ function Show-AvdState {
 
     Write-Host -Object "AVD           : $RigAvdName"
     Write-Host -Object "Console port  : $RigConsolePort  (serial $RigSerial)"
-    Write-Host -Object "Expected shape: 720x1520, 320 dpi, 2560 MB RAM, x86_64"
+    Write-Host -Object "Profile       : $RigProfile"
+    Write-Host -Object "Expected shape: $($Shape.Width)x$($Shape.Height), $($Shape.Density) dpi, $($Shape.RamMb) MB RAM, x86_64"
     Write-Host -Object "Location      : $dir"
 
     if (-not (Test-Path -Path $ini) -or -not (Test-Path -Path $dir)) {
         Write-Host -Object ''
         Write-Host -Object 'NOT PRESENT on this machine.'
         Write-Host -Object ''
-        Write-Host -Object @'
-There is no cmdline-tools install here, so there is no `avdmanager` to create one with, and a
+        Write-Host -Object @"
+There is no cmdline-tools install here, so there is no ``avdmanager`` to create one with, and a
 hand-written config.ini boots to a hung QEMU rather than to an error. The route that works:
 
-  1. In Android Studio's Device Manager, create any x86_64 AVD on a recent system image.
-  2. Close Studio. Copy its directory to `asc_test.avd` and its `.ini` to `asc_test.ini`, both
-     under ~/.android/avd, SKIPPING `snapshots/` and the `*.img.qcow2` backing files (about half
-     the bytes, and all of them regenerate).
-  3. In `asc_test.ini` set `path` and `path.rel` to the new directory.
-  4. In `asc_test.avd/config.ini` set:
-       AvdId=asc_test
-       avd.ini.displayname=asc_test
-       hw.lcd.width=720
-       hw.lcd.height=1520
-       hw.lcd.density=320
-       hw.ramSize=2560
-       skin.name=720x1520
+  1. Start from a provisioned x86_64 AVD: another profile's (``asc_test``, when this is not it), or
+     one made in Android Studio's Device Manager on a recent system image.
+  2. Close Studio and take that AVD down. Copy its directory to ``$RigAvdName.avd`` and its ``.ini``
+     to ``$RigAvdName.ini``, both under ~/.android/avd, SKIPPING ``snapshots/``, ``*.lock`` and the
+     ``*.img.qcow2`` backing files (about half the bytes, and all of them regenerate).
+  3. In ``$RigAvdName.ini`` set ``path`` and ``path.rel`` to the new directory.
+  4. In ``$RigAvdName.avd/config.ini`` set:
+       AvdId=$RigAvdName
+       avd.ini.displayname=$RigAvdName
+       hw.lcd.width=$($Shape.Width)
+       hw.lcd.height=$($Shape.Height)
+       hw.lcd.density=$($Shape.Density)
+       hw.ramSize=$($Shape.RamMb)
+       skin.name=$($Shape.Width)x$($Shape.Height)
        fastboot.forceColdBoot=yes
-  5. `.\scripts\rig.ps1 up` — first boot takes about 40 s.
-'@
+  5. ``.\scripts\rig.ps1 up -RigProfile $RigProfile`` — first boot takes about 40 s.
+"@
         return
     }
 
@@ -304,10 +326,10 @@ hand-written config.ini boots to a hung QEMU rather than to an error. The route 
 
     $config = $dir | Join-Path -ChildPath 'config.ini'
     $expected = [ordered]@{
-        'hw.lcd.width'   = '720'
-        'hw.lcd.height'  = '1520'
-        'hw.lcd.density' = '320'
-        'hw.ramSize'     = '2560'
+        'hw.lcd.width'   = "$($Shape.Width)"
+        'hw.lcd.height'  = "$($Shape.Height)"
+        'hw.lcd.density' = "$($Shape.Density)"
+        'hw.ramSize'     = "$($Shape.RamMb)"
     }
     $actual = @{}
     Get-Content -Path $config | ForEach-Object -Process {
@@ -485,7 +507,7 @@ function Start-Watchdog {
     }
 
     Update-Heartbeat
-    $arguments = @('-NoProfile', '-NonInteractive', '-File', $PSCommandPath, 'watchdog', '-IdleMinutes', "$minutes")
+    $arguments = @('-NoProfile', '-NonInteractive', '-File', $PSCommandPath, 'watchdog', '-IdleMinutes', "$minutes", '-RigProfile', $RigProfile)
     if ($Serial) { $arguments += @('-Serial', $Serial) }
     $process = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $arguments -WindowStyle Hidden -PassThru
     Set-Content -Path $WatchdogPidPath -Value "$($process.Id)" -NoNewline
