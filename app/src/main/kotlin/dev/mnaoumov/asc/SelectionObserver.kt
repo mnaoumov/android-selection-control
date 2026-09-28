@@ -97,9 +97,18 @@ class SelectionObserver {
     }
   }
 
+  /** The last announcement as it arrived, before [frame] reads it. */
   @Volatile
-  var latest: Snapshot? = null
-    private set
+  private var announced: Snapshot? = null
+
+  /**
+   * Rewrites an announcement into the frame its reader needs, or null to leave it as it arrived.
+   * The driver sets it, because only the driver knows which edge is moving and where the anchor is.
+   */
+  var frame: ((Snapshot) -> Snapshot)? = null
+
+  val latest: Snapshot?
+    get() = announced?.let { snapshot -> frame?.invoke(snapshot) ?: snapshot }
 
   /**
    * The latest snapshot with its geometry re-read from the live node, because remembered bounds go
@@ -129,7 +138,7 @@ class SelectionObserver {
 
     val source = event.source ?: return false
     val bounds = Rect().also { source.getBoundsInScreen(it) }
-    latest = Snapshot(
+    announced = Snapshot(
       from = event.fromIndex,
       to = event.toIndex,
       bounds = bounds,
@@ -153,7 +162,7 @@ class SelectionObserver {
   fun refreshFromNodes(root: AccessibilityNodeInfo?, packageName: String?) {
     val node = root?.let { firstNodeWithRange(it, 0) } ?: return
     val bounds = Rect().also { node.getBoundsInScreen(it) }
-    latest = Snapshot(
+    announced = Snapshot(
       from = node.textSelectionStart,
       to = node.textSelectionEnd,
       bounds = bounds,
@@ -171,7 +180,7 @@ class SelectionObserver {
   }
 
   fun forget() {
-    latest = null
+    announced = null
   }
 
   private fun firstNodeWithRange(node: AccessibilityNodeInfo, depth: Int): AccessibilityNodeInfo? {

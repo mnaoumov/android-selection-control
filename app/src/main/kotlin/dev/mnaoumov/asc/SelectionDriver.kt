@@ -20,7 +20,13 @@ enum class PadCommand(val unit: Unit, val toRight: Boolean) {
 
 /** What a press achieved, for the pad to show and for the loop to reason about. */
 sealed interface Outcome {
-  data class Moved(val fromOffset: Int, val toOffset: Int) : Outcome
+  /**
+   * [fromOffset] and [toOffset] are each local to their own node, so when [crossedNode] is set they
+   * are in different frames and comparing them says nothing: equal numbers can be a page apart.
+   */
+  data class Moved(val fromOffset: Int, val toOffset: Int, val crossedNode: Boolean = false) : Outcome {
+    fun madeProgress(): Boolean = crossedNode || fromOffset != toOffset
+  }
   data object NoSelection : Outcome
   data object HandleLost : Outcome
 
@@ -58,8 +64,21 @@ sealed interface Outcome {
    * floor that is already known.
    */
   data object AtFloor : Outcome
+
+  /**
+   * The edge being moved is in a node nothing has announced since the swap, so nothing was touched.
+   * See `SelectionDriver.activeEdgeAnnounced`.
+   */
+  data object EdgeUnknown : Outcome
   data class Degraded(val reason: String) : Outcome
 }
+
+/**
+ * Where a selection's text can be seen and a handle reached, and whether anything there scrolls. A
+ * page step swipes only where [scrolls]: a window that does not scroll gains nothing from a swipe,
+ * and its band reaches the status bar, where a downward swipe pulls down the notification shade.
+ */
+class ContentBand(val visible: Rect, val scrolls: Boolean)
 
 /** The gestures the driver needs, kept behind an interface so it does not depend on the service. */
 interface GestureDispatcher {
@@ -133,6 +152,8 @@ class SelectionDriver(
   private val locator: HandleLocator,
   private val handler: Handler,
   private val toolbarBounds: () -> Rect?,
+  /** Where the page's text can be seen and reached around [SelectionObserver.Snapshot.source]. */
+  private val contentBand: (SelectionObserver.Snapshot) -> ContentBand?,
 ) {
 
   /** The floating toolbar's horizontal centre, which tracks the selection's. */
@@ -208,9 +229,52 @@ class SelectionDriver(
     set(value) {
       // After a swap the anchor is the edge that was moving, which is in the announcing node only
       // when the whole selection is. Otherwise nothing says where it is.
-      if (value != field && observer.latest?.let(::nodeKey) != anchorNodeKey) anchorNodeKey = null
+      if (value != field) {
+        val wholeSelectionHere = observer.latest?.let(::nodeKey) == anchorNodeKey && anchorNodeKey != null
+        // The edge that moves now is the old anchor, so the announcing node holds it exactly when it
+        // held the anchor.
+        activeEdgeAnnounced = wholeSelectionHere
+        if (!wholeSelectionHere) anchorNodeKey = null
+      }
       field = value
     }
+
+  /**
+   * Whether the last announcement's node holds the edge being moved.
+   *
+   * The source node follows whichever edge last MOVED, and its offsets are local to it. So after a
+   * swap on a selection spanning nodes, the announcement describes the edge that is now the anchor,
+   * and the moving edge's offset read from it is where that node starts or ends, not where the
+   * selection does. Measured 2026-09-28 on the rig: `end` left the END edge on row 400 of a served
+   * page with the START on row 387, and after `⇄ swap` a `page ↑` located the START handle at row
+   * 400's offset 0, `(14, 1469)`, under the pad, and dragged from there across the page. The press
+   * then refuses until the moving edge has been announced again: by a fresh selection, or by the
+   * user dragging that handle once.
+   */
+  private var activeEdgeAnnounced = true
+
+  init {
+    observer.frame = ::inMovingFrame
+  }
+
+  /**
+   * [snapshot] with the START edge's offset where [SelectionObserver.Snapshot.low] reads it, when the
+   * announcing node does not hold the anchor.
+   *
+   * Chrome announces such a node as `0..focus`: the anchor, which is elsewhere, reads as 0, and the
+   * edge that was dragged is the focus. For the END edge that is already right, because the focus is
+   * [SelectionObserver.Snapshot.high]. For the START edge it is not: measured 2026-09-28 on the rig,
+   * a `page ↑` carried the START from column 14 of one row to column 14 of a row eleven above and
+   * Chrome announced `0..14`, so `low()` put the next press's grab at column 0, where there was no
+   * handle, and the drag scrolled the page instead. The START's node covers `focus..length`, and that
+   * is the range this returns.
+   */
+  private fun inMovingFrame(snapshot: SelectionObserver.Snapshot): SelectionObserver.Snapshot {
+    if (activeEdge != Edge.START || snapshot.sourceLength <= 0) return snapshot
+    if (nodeKey(snapshot) == anchorNodeKey) return snapshot
+    if (snapshot.from != 0 || snapshot.to <= 0 || snapshot.to >= snapshot.sourceLength) return snapshot
+    return snapshot.copy(from = snapshot.to, to = snapshot.sourceLength)
+  }
 
   /**
    * The node the ANCHOR is known to be in, as [nodeKey] reads it, or null when that is not known.
@@ -298,11 +362,17 @@ class SelectionDriver(
   fun perform(command: PadCommand, onDone: (Outcome) -> Unit) {
     val startedAt = android.os.SystemClock.uptimeMillis()
     gestureCount = 0
+    stopRequested = false
 
     val snapshot = observer.latest
     if (snapshot == null || snapshot.isEmpty()) {
       Diag.log("$command: nothing announced — the pad cannot see a selection")
       onDone(Outcome.NoSelection)
+      return
+    }
+    if (!activeEdgeAnnounced) {
+      Diag.log("$command: the $activeEdge edge is not in the announcing node — refusing to guess where it is")
+      onDone(Outcome.EdgeUnknown)
       return
     }
     syncBoundaryContext(snapshot)
@@ -334,8 +404,8 @@ class SelectionDriver(
       // has to undo a snap, and it falls back to the released path by itself when a chain will not
       // run. [releasedCharacterStep] is what it falls back to.
       PadCommand.Unit.CHARACTER -> heldCharacterStep(command, report)
-      PadCommand.Unit.PAGE -> sweepToEdge(command, PAGE_HOLD_MS, report)
-      PadCommand.Unit.DOCUMENT -> sweepToEdge(command, DOCUMENT_HOLD_MS, report)
+      PadCommand.Unit.PAGE -> sweepPage(command, report)
+      PadCommand.Unit.DOCUMENT -> sweepToDocumentEdge(command, report)
     }
   }
 
@@ -1877,6 +1947,7 @@ class SelectionDriver(
   private fun awaitChange(
     before: SelectionObserver.Snapshot?,
     waited: Long = 0,
+    maxMs: Long = MAX_SETTLE_MS,
     onResult: (SelectionObserver.Snapshot?) -> Unit,
   ) {
     val after = observer.latest
@@ -1885,11 +1956,11 @@ class SelectionDriver(
       awaitQuiet(after, 0, onResult)
       return
     }
-    if (waited >= MAX_SETTLE_MS) {
+    if (waited >= maxMs) {
       onResult(null)
       return
     }
-    handler.postDelayed({ awaitChange(before, waited + POLL_MS, onResult) }, POLL_MS)
+    handler.postDelayed({ awaitChange(before, waited + POLL_MS, maxMs, onResult) }, POLL_MS)
   }
 
   /**
@@ -1991,44 +2062,301 @@ class SelectionDriver(
   }
 
   /**
-   * Page and document steps: drag the handle to the screen edge and HOLD, which is what triggers the
-   * target app's own auto-scroll. A plain drag lifts on arrival and can never trigger one.
-   *
-   * This is the least-measured part of the pad. The mechanism is proven — a held drag fired
-   * `TYPE_VIEW_SCROLLED` and the selection kept extending — but it was never driven to a document's
-   * end, and the hold time here is a guess at "one screen" rather than a measurement.
+   * A stop asked for while a press runs. A document sweep is one press that can take many pages, and
+   * the busy guard refuses every tap until it ends, so a touch on a direction button sets this and
+   * the page steps check it. Cleared at the start of every press.
    */
-  private fun sweepToEdge(command: PadCommand, holdMs: Long, onDone: (Outcome) -> Unit) {
+  @Volatile
+  private var stopRequested = false
+
+  fun requestStop() {
+    Diag.log("stop requested")
+    stopRequested = true
+  }
+
+  /** What one page step did, for [sweepPage] to report and [sweepToDocumentEdge] to continue from. */
+  private class PageStep(
+    val outcome: Outcome,
+    /** The scroll ran out before its full distance: the page is at the document's end. */
+    val atDocumentEdge: Boolean,
+  )
+
+  /**
+   * `page ↓` / `page ↑`: one page step.
+   *
+   * **The page is scrolled by a swipe, not by holding the handle at the edge.** The edge hold was the
+   * original design, and it cannot work on Chrome: measured 2026-09-28 on the rig, neither the pad's
+   * held drag nor an injected FINGER held at the bottom edge for five seconds, still or jiggling,
+   * scrolled the page by a single pixel. The selection simply stopped at the last visible line. So the
+   * press does the two halves itself, see [pageStep].
+   */
+  private fun sweepPage(command: PadCommand, onDone: (Outcome) -> Unit) {
     val before = observer.latestWithFreshBounds() ?: run {
       onDone(Outcome.NoSelection)
       return
     }
-    val located = locator.locate(before, activeEdge, toolbarCentre()) ?: run {
-      acquireThenRetry(command, onDone)
+    pageStep(command, before) { step -> onDone(step.outcome) }
+  }
+
+  /**
+   * `start` / `end`: page steps until the scroll runs out, then one last drag to the far corner of
+   * what is visible, which is the document's own edge.
+   *
+   * There is no "go to the end" gesture to borrow. Scrolling alone does not move a selection, and a
+   * handle scrolled off screen cannot be grabbed, so the selection can only travel a band's height per
+   * page, and a long document costs one page step per screenful. A touch on any direction button
+   * stops it between pages ([requestStop]).
+   */
+  private fun sweepToDocumentEdge(command: PadCommand, onDone: (Outcome) -> Unit) {
+    val origin = observer.latestWithFreshBounds() ?: run {
+      onDone(Outcome.NoSelection)
       return
     }
-    val handle = uncovered(located, onDone) ?: return
-    val target = PointF(
-      if (command.toRight) (gestures.screenWidth() - EDGE_INSET).toFloat() else EDGE_INSET.toFloat(),
-      if (command.toRight) (gestures.screenHeight() - EDGE_INSET).toFloat() else EDGE_INSET.toFloat(),
-    )
-    gestureCount++
-    gestures.dragAndHold(handle, target, DRAG_MS, holdMs) { completed ->
-      awaitChange(before) { after ->
+    fun finish(last: SelectionObserver.Snapshot?, pages: Int, fallback: Outcome) {
+      val now = last ?: observer.latest
+      Diag.log("  document: $pages page step(s)")
+      if (now == null || now.atMs == origin.atMs) {
+        onDone(fallback)
+        return
+      }
+      onDone(Outcome.Moved(origin.movingOffset(), now.movingOffset(), !sameNode(origin, now)))
+    }
+    fun next(pages: Int) {
+      if (stopRequested) {
+        Diag.log("  document: stopped by a touch")
+        finish(null, pages, Outcome.Moved(origin.movingOffset(), origin.movingOffset()))
+        return
+      }
+      val before = observer.latestWithFreshBounds() ?: run {
+        finish(null, pages, Outcome.NoSelection)
+        return
+      }
+      pageStep(command, before) { step ->
+        val outcome = step.outcome
+        val moved = outcome is Outcome.Moved && outcome.madeProgress()
         when {
-          !completed -> onDone(Outcome.HandleLost)
-          after == null -> onDone(Outcome.Moved(before.movingOffset(), before.movingOffset()))
-          after.isEmpty() -> onDone(Outcome.HandleLost)
-          else -> {
-            // A sweep that grew landed where the app snapped it, same as any other grow. It will
-            // usually have crossed into another node, which [recordBoundary] handles by re-keying,
-            // and records only from a known boundary like any other grow.
-            recordBoundary(before, after, command)
-            onDone(Outcome.Moved(before.movingOffset(), after.movingOffset()))
+          !moved -> finish(null, pages + 1, outcome)
+          step.atDocumentEdge -> finish(null, pages + 1, outcome)
+          pages + 1 >= MAX_DOCUMENT_PAGES -> {
+            Diag.log("  document: stopping at the $MAX_DOCUMENT_PAGES-page cap")
+            finish(null, pages + 1, outcome)
           }
+          else -> handler.post { next(pages + 1) }
         }
       }
     }
+    next(0)
+  }
+
+  /**
+   * One page: scroll the moving handle to the near end of the visible band, then drag it to the far
+   * end. The selection travels exactly the drag, one band, and the page scrolls with it.
+   *
+   * **Why that order.** Scrolling does not move a selection at all, only the drag does, and the drag
+   * can only start where the handle can be seen and end where the finger can reach. So the scroll's
+   * one job is to put the handle at the start of the longest drag available. After the first page the
+   * handle is left at the band's far end and every later page scrolls a whole band and drags a whole
+   * band, which is `PageDown`'s shape.
+   *
+   * **The swipe starts where no handle can be.** A swipe that starts on a handle drags that handle.
+   * The start is the band's far edge in the direction of travel, beyond the moving handle, which the
+   * drag stops [PAGE_CLEARANCE_DROPS] short of, and in the half of the band away from it. The anchor is
+   * behind the moving edge, so for a grow it is the other way. A selection change during the scroll
+   * would mean it touched one anyway, and ends the press rather than dragging from a stale reading.
+   *
+   * **The scroll holds still before it lifts** ([GestureDispatcher.dragAndHold]), so it has no
+   * velocity to fling with and travels the distance asked, and the handle is re-located from the
+   * node's re-read bounds afterwards rather than predicted.
+   */
+  private fun pageStep(
+    command: PadCommand,
+    before: SelectionObserver.Snapshot,
+    onResult: (PageStep) -> Unit,
+  ) {
+    val ended: (Outcome) -> Unit = { onResult(PageStep(it, atDocumentEdge = false)) }
+    if (before.isEmpty()) {
+      ended(Outcome.NoSelection)
+      return
+    }
+    val content = contentBand(before)
+    val band = content?.visible ?: Rect(0, 0, gestures.screenWidth(), gestures.screenHeight())
+    val located = locator.locate(before, activeEdge, toolbarCentre()) ?: run {
+      Diag.log("  page: the moving handle cannot be located")
+      ended(Outcome.HandleLost)
+      return
+    }
+    val handle = uncovered(located, ended) ?: return
+    val forward = command.toRight
+    // The handle hangs below its line, so the highest a handle can sit with its text still inside the
+    // band is a line and a drop below the band's top.
+    val line = before.bounds?.takeIf { before.sourceIsOneLine() }?.height()?.toFloat() ?: (2 * locator.handleDrop)
+    val top = band.top + line + locator.handleDrop
+    val bottom = band.bottom - locator.handleDrop * PAGE_CLEARANCE_DROPS
+    if (bottom - top < locator.handleDrop * 2) {
+      Diag.log("  page: the visible band $band is too short to page in")
+      ended(Outcome.HandleLost)
+      return
+    }
+    val from = if (forward) top else bottom
+    val to = if (forward) bottom else top
+    val scrollBy = handle.y - from
+    Diag.log(
+      "$command page: band=$band handle=(${handle.x}, ${handle.y}) travel ${from}..${to} scroll=$scrollBy"
+    )
+
+    fun dragAcross(scrolled: SelectionObserver.Snapshot, atDocumentEdge: Boolean) {
+      val relocated = locator.locate(scrolled, activeEdge, toolbarCentre()) ?: run {
+        Diag.log("  page: the handle cannot be located after the scroll")
+        ended(Outcome.HandleLost)
+        return
+      }
+      val grab = uncovered(relocated, ended) ?: return
+      Diag.log("  page: grab at (${grab.x}, ${grab.y}) bounds=${scrolled.bounds}")
+      // At the document's edge the SCREEN's far corner is the document's end: a drag past the last
+      // line puts the caret after the last character, or before the first. Not the band's corner,
+      // because the document's last lines scroll no higher than the viewport's bottom, which the
+      // docked pad covers: measured 2026-09-28, the band's corner left `end` on row 394 of 400. The
+      // down is on the handle, so the moves belong to the page wherever they go.
+      val target = if (atDocumentEdge) {
+        PointF(
+          if (forward) (gestures.screenWidth() - EDGE_INSET).toFloat() else EDGE_INSET.toFloat(),
+          if (forward) (gestures.screenHeight() - EDGE_INSET).toFloat() else EDGE_INSET.toFloat(),
+        )
+      } else {
+        PointF(grab.x, to)
+      }
+      gestureCount++
+      gestures.drag(grab, target, PAGE_DRAG_MS, pastTarget = false) { completed ->
+        if (!completed) {
+          ended(Outcome.HandleLost)
+          return@drag
+        }
+        awaitChange(scrolled, maxMs = MAX_PAGE_SETTLE_MS) { after ->
+          val outcome = when {
+            after == null -> Outcome.Moved(before.movingOffset(), before.movingOffset())
+            after.isEmpty() -> Outcome.HandleLost
+            else -> {
+              // A page lands wherever the finger stopped, character-granular, so it is no word
+              // boundary. Forget the set's node and record nothing.
+              val crossed = !sameNode(before, after)
+              if (crossed) forgetBoundaries(after)
+              Outcome.Moved(before.movingOffset(), after.movingOffset(), crossed)
+            }
+          }
+          Diag.log("  page: drag to (${target.x}, ${target.y}) -> $outcome announced=${after != null}")
+          onResult(PageStep(outcome, atDocumentEdge))
+        }
+      }
+    }
+
+    if (content?.scrolls != true) {
+      // Nothing to scroll, so the whole document is on screen and its edge is the screen's corner.
+      Diag.log("  page: nothing here scrolls")
+      dragAcross(before, atDocumentEdge = true)
+      return
+    }
+    if (kotlin.math.abs(scrollBy) < MIN_PAGE_SCROLL_PX) {
+      dragAcross(before, atDocumentEdge = false)
+      return
+    }
+    val swipe = swipeStart(band, handle, forward) ?: run {
+      Diag.log("  page: nowhere to start a scroll clear of the toolbar")
+      ended(Outcome.HandleCovered)
+      return
+    }
+    gestureCount++
+    gestures.dragAndHold(
+      swipe,
+      PointF(swipe.x, swipe.y - scrollBy),
+      PAGE_SCROLL_MS,
+      PAGE_SCROLL_HOLD_MS,
+    ) { completed ->
+      if (!completed) {
+        ended(Outcome.HandleLost)
+        return@dragAndHold
+      }
+      awaitBoundsSettled { scrolled ->
+        if (scrolled == null || scrolled.atMs != before.atMs) {
+          Diag.log("  page: the selection changed during the scroll — it touched a handle")
+          ended(Outcome.HandleLost)
+          return@awaitBoundsSettled
+        }
+        /*
+         * A stop touch that lands during the swipe also cuts the swipe short, and a short scroll reads
+         * exactly like the document's edge, which ends in a drag to the screen's corner. Measured
+         * 2026-09-28: a tap on `← char` 8 s into `end` left the scroll 140 px short, and the corner
+         * drag took the selection to the bottom of the screen. So a stop is honoured here, before any
+         * drag, with the selection where the last page left it.
+         */
+        if (stopRequested) {
+          Diag.log("  page: stopped by a touch during the scroll")
+          ended(Outcome.Moved(before.movingOffset(), before.movingOffset()))
+          return@awaitBoundsSettled
+        }
+        val travelled = (before.bounds?.top ?: 0) - (scrolled.bounds?.top ?: 0)
+        // Short by more than a line: the scroll ran into the document's edge.
+        val atEdge = kotlin.math.abs(scrollBy) - kotlin.math.abs(travelled) > line
+        Diag.log("  page: scrolled $travelled of $scrollBy${if (atEdge) " — the document's edge" else ""}")
+        /*
+         * Chrome hides its handles while a page scrolls and fades them back in once it stops, with the
+         * toolbar. A grab before that finds no handle: measured 2026-09-28, the eighth page of a
+         * `start` sweep grabbed where the handle belonged, announced nothing, and scrolled the page
+         * instead. So the grab waits for the toolbar, and a little past it for the fade.
+         */
+        awaitSelectionOnScreen { visible ->
+          if (!visible) Diag.log("  page: no toolbar after the scroll — grabbing anyway")
+          handler.postDelayed({
+            dragAcross(observer.latestWithFreshBounds() ?: scrolled, atEdge)
+          }, HANDLE_FADE_IN_MS)
+        }
+      }
+    }
+  }
+
+  /**
+   * Where a scroll swipe can put its finger down without landing on a handle or the toolbar: the
+   * band's far edge in the direction of travel, in whichever half of the band the moving handle is
+   * not in. Null when the toolbar covers both candidates.
+   */
+  private fun swipeStart(band: Rect, handle: PointF, forward: Boolean): PointF? {
+    val margin = locator.handleDrop / 2
+    // Never within reach of the screen's own edges, where a swipe opens the notification shade from
+    // the top and goes home from the bottom. A floating pad leaves the band running to either edge.
+    val guard = locator.handleDrop * SCREEN_EDGE_GUARD_DROPS
+    val y = if (forward) {
+      minOf(band.bottom - margin, gestures.screenHeight() - guard)
+    } else {
+      maxOf(band.top + margin, guard)
+    }
+    val near = band.left + band.width() * SWIPE_COLUMN_FRACTION
+    val far = band.right - band.width() * SWIPE_COLUMN_FRACTION
+    val columns = if (handle.x < band.exactCenterX()) listOf(far, near) else listOf(near, far)
+    val toolbar = toolbarBounds()
+    return columns.map { PointF(it, y) }.firstOrNull { point ->
+      toolbar == null || !toolbar.contains(point.x.toInt(), point.y.toInt())
+    }
+  }
+
+  /**
+   * The snapshot with its bounds re-read once they have stopped moving, or null when the source node
+   * has gone. A scroll's accessibility bounds trail the pixels by a frame or more, so one read taken
+   * as soon as the swipe lifts can describe the page mid-flight.
+   */
+  private fun awaitBoundsSettled(
+    previous: Rect? = null,
+    waited: Long = 0,
+    onResult: (SelectionObserver.Snapshot?) -> Unit,
+  ) {
+    val now = observer.latestWithFreshBounds()
+    val bounds = now?.bounds
+    // Two equal reads are believed only after a minimum wait: straight after the lift both can still
+    // be the bounds from before the scroll.
+    val settled = waited >= MIN_SCROLL_SETTLE_MS && bounds != null && bounds == previous
+    if (now == null || settled || waited >= MAX_SCROLL_SETTLE_MS) {
+      onResult(now)
+      return
+    }
+    handler.postDelayed({ awaitBoundsSettled(bounds, waited + SCROLL_POLL_MS, onResult) }, SCROLL_POLL_MS)
   }
 
   /**
@@ -2211,7 +2539,13 @@ class SelectionDriver(
     val now = observer.latest ?: return
     if (now.isEmpty()) return
     val freshSelection = before == null || (now.low() != before.low() && now.high() != before.high())
-    if (!freshSelection) return
+    if (!freshSelection) {
+      // The user dragged one handle inside one node, and whichever it was, that node holds both
+      // edges. So a moving edge nothing had announced since a swap is announced now.
+      if (sameNode(before, now)) activeEdgeAnnounced = true
+      return
+    }
+    activeEdgeAnnounced = true
     syncBoundaryContext(now)
     anchorNodeKey = nodeKey(now)
     knownBoundaries += now.low()
@@ -2219,8 +2553,35 @@ class SelectionDriver(
     Diag.log("seeded from a fresh selection at ${now.low()}..${now.high()}: boundaries=$knownBoundaries")
   }
 
+  /**
+   * The announcing node, by its own identity where the event carried one, and by its bounds and
+   * length only where it did not. Bounds alone cannot tell rows of a scrolled list apart: see
+   * [sameNode]. The identity is `AccessibilityNodeInfo.hashCode`, which is the node's id and window.
+   */
   private fun nodeKey(snapshot: SelectionObserver.Snapshot): String =
-    "${snapshot.packageName}|${snapshot.bounds}|${snapshot.sourceLength}"
+    "${snapshot.packageName}|${snapshot.source?.hashCode() ?: snapshot.bounds}|${snapshot.sourceLength}"
+
+  /**
+   * Whether two snapshots were announced from the same node, by the node's own identity where both
+   * have one.
+   *
+   * [nodeKey] cannot answer this across a scroll. It is the node's bounds and length, and a page
+   * scrolls the next row of a list into exactly the rectangle the last one had: measured 2026-09-28,
+   * rows 047 and 058 of a served page, both 27 characters, both at `(32, 1007 - 424, 1045)` either
+   * side of one page step, which then read as "did not move" and stopped `end` after one page.
+   */
+  private fun sameNode(a: SelectionObserver.Snapshot, b: SelectionObserver.Snapshot): Boolean {
+    val first = a.source
+    val second = b.source
+    return if (first != null && second != null) first == second else nodeKey(a) == nodeKey(b)
+  }
+
+  /** Clears the boundary set outright and keys it to [snapshot]'s node, whatever its key says. */
+  private fun forgetBoundaries(snapshot: SelectionObserver.Snapshot) {
+    knownBoundaries.clear()
+    boundariesNodeKey = nodeKey(snapshot)
+    locator.forgetAnchor()
+  }
 
   /** Offsets are local to the source node, so a change of node invalidates every remembered one. */
   private fun syncBoundaryContext(snapshot: SelectionObserver.Snapshot) {
@@ -2351,7 +2712,43 @@ class SelectionDriver(
     const val MAX_CHAR_PX = 60f
 
     const val EDGE_INSET = 24
-    const val PAGE_HOLD_MS = 1200L
-    const val DOCUMENT_HOLD_MS = 6000L
+
+    /**
+     * How far above the band's bottom a page drag leaves the handle, in handle drops, so the next
+     * scroll can start below it: three drops is 42 dp, beyond the handle's own touch target.
+     */
+    const val PAGE_CLEARANCE_DROPS = 3f
+
+    /** A scroll shorter than this is not worth a gesture: the drag starts where the handle already is. */
+    const val MIN_PAGE_SCROLL_PX = 8f
+
+    /** The scroll swipe, and the stillness before its lift that keeps it from flinging. */
+    const val PAGE_SCROLL_MS = 400L
+    const val PAGE_SCROLL_HOLD_MS = 150L
+    const val PAGE_DRAG_MS = 300L
+
+    /**
+     * How long a page drag's announcement is waited for. A drag across a whole band is announced
+     * later than a character step's, and [MAX_SETTLE_MS] is tuned to the latter.
+     */
+    const val MAX_PAGE_SETTLE_MS = 800L
+    const val SCROLL_POLL_MS = 50L
+    const val MIN_SCROLL_SETTLE_MS = 150L
+
+    /** How long past the toolbar's return a page grab waits for Chrome's handles to fade back in. */
+    const val HANDLE_FADE_IN_MS = 150L
+    const val MAX_SCROLL_SETTLE_MS = 800L
+
+    /**
+     * Where across the band a scroll swipe starts, from whichever side the handle is not on. Not
+     * nearer the edge: Chrome parks floating buttons of its own against the right edge of the page.
+     */
+    const val SWIPE_COLUMN_FRACTION = 0.25f
+
+    /** How far from the screen's top and bottom a scroll swipe starts at the nearest, in handle drops (42 dp). */
+    const val SCREEN_EDGE_GUARD_DROPS = 3f
+
+    /** A document sweep's own end, if the scroll never runs out. */
+    const val MAX_DOCUMENT_PAGES = 300
   }
 }

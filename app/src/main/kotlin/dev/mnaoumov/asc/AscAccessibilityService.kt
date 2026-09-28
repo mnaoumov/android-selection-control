@@ -86,6 +86,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
           screenWidth = screenWidth(),
         )
       },
+      contentBand = ::contentBand,
     )
 
     pad = Pad(
@@ -240,6 +241,8 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   private fun onStopRepeat(): Boolean {
     val wasRunning = repeating != null
     repeating = null
+    // A document sweep is one press of many pages, so it is stopped the same way a run is.
+    if (busy && ::driver.isInitialized) driver.requestStop()
     return wasRunning
   }
 
@@ -306,9 +309,10 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
    * to a single character, which is less than asked for but is still progress.
    */
   private fun madeProgress(outcome: Outcome): Boolean = when (outcome) {
-    is Outcome.Moved -> outcome.fromOffset != outcome.toOffset
+    is Outcome.Moved -> outcome.madeProgress()
     is Outcome.Degraded -> true
-    Outcome.NoSelection, Outcome.HandleLost, Outcome.RowUnknown, Outcome.HandleCovered, Outcome.AtFloor -> false
+    Outcome.NoSelection, Outcome.HandleLost, Outcome.RowUnknown, Outcome.HandleCovered, Outcome.AtFloor,
+    Outcome.EdgeUnknown -> false
   }
 
   /** Whether this press has made the pad transparent to touch, so its end must make it solid again. */
@@ -331,17 +335,52 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
    */
   private fun clearThePadFor(down: PointF) {
     if (padCleared) return
-    val padBounds = windows.orEmpty()
-      .firstOrNull {
-        it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY &&
-          it.root?.packageName?.toString() == packageName
-      }
-      ?.let { window -> android.graphics.Rect().also { window.getBoundsInScreen(it) } }
-      ?: return
+    val padBounds = padBounds() ?: return
     if (!padBounds.contains(down.x.toInt(), down.y.toInt())) return
     Diag.log("  the pad at $padBounds covers the touch-down at (${down.x}, ${down.y}) — letting it through")
     pad?.setTransparentToTouch(true)
     padCleared = true
+  }
+
+  /** The pad's real screen rectangle, from the accessibility window list. */
+  private fun padBounds(): android.graphics.Rect? = windows.orEmpty()
+    .firstOrNull {
+      it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY &&
+        it.root?.packageName?.toString() == packageName
+    }
+    ?.let { window -> android.graphics.Rect().also { window.getBoundsInScreen(it) } }
+
+  /**
+   * The part of the screen where the selection's text can be seen and a handle reached: the
+   * OUTERMOST scrollable ancestor of the source node, which on Chrome is the page's viewport
+   * (`android.webkit.WebView`, `[0,313][720,1472]` on the rig), or the source's window where nothing
+   * scrolls. The docked pad is cut off it, because a handle dragged under the pad cannot be seen.
+   *
+   * Outermost, not nearest: a page's inner scrollers, a wide table or a code block, are scrollable
+   * too, and paging by one of those would page by a few lines.
+   */
+  private fun contentBand(snapshot: SelectionObserver.Snapshot): ContentBand? {
+    val source = snapshot.source ?: return null
+    var scroller: android.view.accessibility.AccessibilityNodeInfo? = null
+    var node: android.view.accessibility.AccessibilityNodeInfo? = source
+    var depth = 0
+    while (node != null && depth < MAX_ANCESTORS) {
+      if (node.isScrollable) scroller = node
+      node = node.parent
+      depth++
+    }
+    val band = scroller?.let { android.graphics.Rect().also(it::getBoundsInScreen) }
+      ?: source.window?.let { window -> android.graphics.Rect().also(window::getBoundsInScreen) }
+      ?: return null
+    val pad = padBounds()
+    if (pad != null && android.graphics.Rect.intersects(pad, band) && pad.width() * 2 > band.width()) {
+      if (pad.exactCenterY() > band.exactCenterY()) {
+        band.bottom = minOf(band.bottom, pad.top)
+      } else {
+        band.top = maxOf(band.top, pad.bottom)
+      }
+    }
+    return ContentBand(band, scrolls = scroller != null)
   }
 
   private fun onSwapEdge() {
@@ -352,8 +391,12 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   }
 
   private fun describe(outcome: Outcome): String = when (outcome) {
-    is Outcome.Moved ->
-      if (outcome.fromOffset == outcome.toOffset) "didn't move" else "moved ${outcome.fromOffset} → ${outcome.toOffset}"
+    is Outcome.Moved -> when {
+      // Two offsets in two different nodes: neither number says anything next to the other.
+      outcome.crossedNode -> "moved into another block"
+      outcome.fromOffset == outcome.toOffset -> "didn't move"
+      else -> "moved ${outcome.fromOffset} → ${outcome.toOffset}"
+    }
     // Distinguish "there is no selection" from "there is one but I cannot see it", because they need
     // opposite things from the user and the second is common: a selection event fires only on a
     // CHANGE, so one made before the service connected — or a long-press INSIDE an existing
@@ -367,6 +410,8 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     // Also not "reselect": the selection is untouched. Lower on screen, the toolbar goes above it.
     Outcome.HandleCovered -> "the menu covers the handle — scroll the text lower"
     Outcome.AtFloor -> "one character left — the app keeps it"
+    // Nothing was touched. Nudging that handle by hand announces where it is.
+    Outcome.EdgeUnknown -> "can't see the ${if (driver.activeEdge == Edge.END) "end" else "start"} — nudge its handle once"
     is Outcome.Degraded -> "one character (${outcome.reason})"
   }
 
@@ -431,8 +476,12 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   /**
    * Drag, then hold at the destination without lifting — two chained strokes, because
    * `continueStroke` produces a stroke for the *next* gesture and keeps the pointer down between
-   * them. A plain drag lifts on arrival and so can never trigger the target app's edge auto-scroll,
-   * which is what the page and document steps depend on.
+   * them. The page steps scroll with it: a swipe that stands still before it lifts has no velocity
+   * left to fling with, so the page travels the distance asked.
+   *
+   * The hold is a zero-length `moveTo` continuation that does not itself continue, and that shape
+   * plays: measured 2026-09-28, a 1200 ms hold reported completed and the press took 1560 ms. It is
+   * a zero-length continuation that is itself CONTINUED which is refused (see [HeldPointer]).
    */
   override fun dragAndHold(
     from: PointF,
@@ -552,6 +601,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
     /** How long an announcement stays trustworthy before the node rung is worth a walk. */
     const val STALE_MS = 4000L
+
+    /** How far [contentBand] walks up from a source node looking for the page's scroller. */
+    const val MAX_ANCESTORS = 64
 
     /**
      * How long after the last press the held pointer is lifted.
