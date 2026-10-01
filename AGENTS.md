@@ -691,6 +691,47 @@ share. After the fix, four cold runs of `char →`, `char →`, `char ←`, `cha
 That is 16 presses of 16 exact, with the seam walk-back taking 2 gestures and about 1 s. The held-correction
 branch is built but has not fired again on the rig.
 
+**From a block's last caret the next character is in another BLOCK, on another row, and a reach
+along the row has nothing to enter.** Measured 2026-10-01 on the rig, a served page of one-line `<p>`
+rows, `delta` (`28..33`, the END on the row's last caret): `word →` grew sideways eight times and
+`char →` pushed six times, all silent, on Chrome 143 and on Chromium r1709360 alike. `crossRowDelta`
+cannot help, because it only changes row inside one wrapped node. So `SelectionDriver.blockStep` finds
+the neighbouring text node in the tree (`HandleLocator.adjacentNodeCaret`, geometry and length only)
+and travels to its row. Three things about that had to be measured:
+
+- **The neighbour's first caret is announced as an EMPTY range.** A hand drag of the END handle onto
+ row 004's caret 0 was announced `0..0` in row 004's frame, which the pad reads as no selection, and
+ every press after it said so. The same drag onto caret 1 was announced `0..1`, exactly. So a grow
+ goes ONE character into the next block. A shrink back out (END at `0..1`, `char ←`) goes on to the
+ previous block's END rather than stopping on that empty caret. The START edge mirrors both.
+- **The order of the two moves is what makes it land.** A grab aimed straight at row 004's caret 1
+ was announced `0..0`. Going straight down onto the row first (`0..33`), then sliding left onto the
+ caret, was exact on `0..1`, because along the new row that slide is a shrink. A shrink back
+ goes the other way round: along its own row first, then onto the other row.
+- **A `<p>`'s inline text node reports the `<p>` as its parent, and the `<p>` reports NO children.**
+ So the walk climbs past a parent that does not list the node. What it finds next is the next `<p>`,
+ whose box is the block's (`32..688`, against the text's `32..502`). Its first per-character ask is
+ refused, so the primer asks it on the announcement. Where the second ask is refused too, a one-line
+ block is placed by its average, which is good for the row. The slide along the row is aimed again
+ from the landing's own geometry.
+
+Measured after the change, Chrome force-stopped before each run:
+
+| presses | result |
+|---|---|
+| `char →`, `char ←` from `delta` on row 003, three cold runs | `33 -> 1` (row 004) then `1 -> 33`, 2 gestures, 0.85–1.0 s each |
+| `char →` ×2, `char ←` ×3 after that | `1 -> 2 -> 1`, then `1 -> 33` back into row 003, all exact |
+| `word →` ×2 from `delta` | `33 -> 4` (row 004's `row `, 1.9 s, 4 gestures), then `4 -> 7` |
+| START edge from row 004's `0`: `char ←`, `char →`, `word ←` | `0 -> 32` (row 003), `32 -> 0`, `0 -> 28` (`delta`'s start) |
+| `char →`, `char ←`, `word →` from row 006 into the wrapped paragraph | `33 -> 1` (`A`), `1 -> 33`, `33 -> 2` |
+| the same END sequence on Chromium r1709360 | identical, press for press |
+
+The word grow ends on the next word's START (`row ` with its space), because after the crossing the
+edge is mid-word and Chrome's word walk steps on through the space (the word-walk entries below). Two
+controls are unchanged. `chrome://terms`'s inline seam, which is on ONE row, went 14 → 15 → 1 → 15 → 14
+in one gesture each, with no block step. And a `TextView` never takes one, because its selection
+cannot leave its view (`blockStep` is Blink-only).
+
 **A block-level node's `getBoundsInScreen` is the block box, not the text box.** Long-pressing the centre
 of an `h1` whose bounds run 56..1218 but whose glyphs end at 547 hits empty space and selects nothing.
 Inline nodes hug their text; block nodes do not.

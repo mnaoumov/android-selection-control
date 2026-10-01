@@ -395,6 +395,9 @@ class SelectionDriver(
     when (command.unit) {
       PadCommand.Unit.WORD -> when {
         !growing -> shrinkByWord(command, report)
+        // From a block's very end the next word is in the next block: see [wordIntoNextBlock].
+        locator.locate(snapshot, activeEdge, toolbarCentre())?.let { blockStep(snapshot, command, it) } != null ->
+          wordIntoNextBlock(command, report)
         // Only a grow from a boundary snaps to a word; from anywhere else it follows the finger one
         // character at a time and stops wherever the reach ran out. See [growToWordEnd].
         snapshot.movingOffset() in knownBoundaries -> growOneUnit(command, onDone = report)
@@ -892,7 +895,21 @@ class SelectionDriver(
      * See [crossRowDelta].
      */
     val next = start + if (command.toRight) 1 else -1
-    val to = crossRowDelta(before, start, next, 0f)?.let { PointF(handle.x + it.x, handle.y + it.y) }
+    val rowChange = crossRowDelta(before, start, next, 0f)?.let { PointF(handle.x + it.x, handle.y + it.y) }
+    // From a block's outer caret the step leaves the block: see [blockStep].
+    val nodeChange = if (rowChange == null) blockStep(before, command, handle) else null
+    /*
+     * Into another block in TWO moves, and the order is what makes it land. A grow goes straight onto
+     * the new block's row first, then along it onto the caret ([intoTheNextBlock]). Measured
+     * 2026-10-01 on the rig: the grab aimed straight at row 004's caret 1 from the end of row 003 was
+     * announced `0..0`, the block's empty first caret; a hand drag that entered row 004 above its own
+     * end (`0..19`) and slid left along it was exact on `0..1`, and so was the pad's. Along the row
+     * that second move is a shrink in the new block's frame, which is character-granular. A shrink
+     * goes the other way round: along its own row to the column of the other block's caret first,
+     * then onto that row, so it never sweeps back over the anchor's row on the way.
+     */
+    val to = rowChange
+      ?: nodeChange?.let { if (it.growing) PointF(handle.x, it.aim.y) else PointF(it.aim.x, handle.y) }
       ?: PointF(handle.x + reach, handle.y)
 
     /*
@@ -927,6 +944,14 @@ class SelectionDriver(
             if (after == null) "nothing" else "${after.low()}..${after.high()}"
         )
         when {
+          // A grab aimed into another block that announced nothing has no snap to push through:
+          // whatever the pointer is on, it is not that block's character.
+          after == null && nodeChange != null -> gestures.releaseHeld {
+            Diag.log("  held: silent on the way into the next block — stopping")
+            onDone(Outcome.HandleLost)
+          }
+          nodeChange != null && after != null ->
+            intoTheNextBlock(nodeChange, before, after, start, command, onDone)
           /*
            * Nothing announced, so the grab may have missed the handle and be resting on the page.
            * Let go BEFORE deciding anything: a held pointer sitting on a page is worse than no
@@ -1944,6 +1969,138 @@ class SelectionDriver(
         "travelling (${delta.x}, ${delta.y})"
     )
     return delta
+  }
+
+  /**
+   * A character step that leaves its block, and where its handle goes. [growing] says which way
+   * round the two moves are made: see [heldCharacterStep].
+   */
+  private class BlockStep(val aim: PointF, val growing: Boolean)
+
+  /**
+   * The step out of the edge's block into the neighbouring one, or null when the edge is not on the
+   * block's outer caret, the tree has no neighbour on screen, or the neighbour's caret is on the same
+   * row. On the same row, as with inline nodes on one line, the horizontal reach already crosses.
+   *
+   * Two shapes, one per direction:
+   *
+   * - **A grow from the block's very end** (its start, on the START edge) goes ONE character into
+   *   the next block. A reach along the row has nothing to enter there, and every reach of a `char →`
+   *   or `word →` from the last word of a `<p>` was silent, measured 2026-10-01 (see
+   *   [HandleLocator.adjacentNodeCaret]).
+   * - **A shrink that would stop on the block's first caret** (its last, on the START edge) goes on to
+   *   the previous block's end instead. Chrome announces that first caret as an empty range, `0..0`,
+   *   which reads as no selection: `char ←` from `0..1` of row 004 ended `HandleLost` there, and every
+   *   press after it said the pad could not see a selection. Only where the anchor is elsewhere,
+   *   since in its own block that caret is the anchor's floor ([shrinkByWord]).
+   *
+   * [handle] is where the edge's handle was located, which says which row the edge is on now.
+   */
+  private fun blockStep(snapshot: SelectionObserver.Snapshot, command: PadCommand, handle: PointF): BlockStep? {
+    val length = snapshot.sourceLength
+    // Blink only: a `TextView`'s selection cannot leave its view, so a neighbouring view's caret is
+    // somewhere its handle can never go, and the drag there would only pull the edge along its own text.
+    if (length <= 0 || !snapshot.isBlink) return null
+    val growing = growsSelection(command)
+    val forward = command.toRight
+    val moving = snapshot.movingOffset()
+    val leaves = when {
+      growing -> moving == if (forward) length else 0
+      anchorNodeKey == nodeKey(snapshot) -> false
+      else -> moving == if (forward) length - 1 else 1
+    }
+    if (!leaves) return null
+    val caret = locator.adjacentNodeCaret(snapshot, forward, oneIn = growing) ?: return null
+    val row = handle.y - locator.handleDrop
+    if (kotlin.math.abs(caret.lineBottom - row) <= HandleLocator.LIE_TOLERANCE) return null
+    val aim = PointF(handleX(caret.caretX), caret.lineBottom + locator.handleDrop)
+    Diag.log(
+      "  next block: the edge is on its block's ${if (forward) "last" else "first"} caret — " +
+        "${if (growing) "growing" else "shrinking"} into the ${if (forward) "next" else "previous"} one at (${aim.x}, ${aim.y})"
+    )
+    return BlockStep(aim, growing)
+  }
+
+  /** The active handle's x for a caret at [caretX]: Chrome draws the END handle right of it, START left. */
+  private fun handleX(caretX: Float): Float =
+    if (activeEdge == Edge.START) caretX - locator.handleInset else caretX + locator.handleInset
+
+  /**
+   * The second move of a [BlockStep]. A grow is on the new block's row already and slides along it
+   * onto the caret one character in, aimed by the landing's own geometry where it measures, since
+   * the block's box is the `<p>`'s and wider than its text. A shrink has travelled along its own row
+   * already and goes straight onto the other row. Then the held correction finishes, counted in the
+   * new block's frame ([crossedTarget]). A landing still in the old block, or empty, is not a step
+   * into the next one, so the press lets go and reports what is left.
+   */
+  private fun intoTheNextBlock(
+    step: BlockStep,
+    before: SelectionObserver.Snapshot,
+    first: SelectionObserver.Snapshot,
+    start: Int,
+    command: PadCommand,
+    onDone: (Outcome) -> Unit,
+  ) {
+    // A grow's first move is the one that crosses. One that did not would slide the edge back along
+    // its own row on the second, which is a shrink nobody asked for.
+    if (step.growing && !crossedNodes(before, first)) {
+      Diag.log("  next block: the move onto its row stayed at ${first.low()}..${first.high()} — letting go")
+      releaseThenReport(start, first.movingOffset(), onDone)
+      return
+    }
+    val aim = if (step.growing) {
+      val target = crossedTarget(before, first, command, start)
+      val caret = target?.let { locator.characterGeometry(first, activeEdge, crossingOf(command), it) }
+      caret?.let { PointF(handleX(it.caretX), step.aim.y) } ?: step.aim
+    } else {
+      step.aim
+    }
+    gestureCount++
+    if (!gestures.moveHeld(aim)) {
+      Diag.log("  held: the move into the next block was refused")
+      gestures.releaseHeld { onDone(Outcome.HandleLost) }
+      return
+    }
+    awaitChange(first) { second ->
+      val landed = second ?: first
+      Diag.log(
+        "  next block: first move -> ${first.low()}..${first.high()}, then to (${aim.x}, ${aim.y}) -> " +
+          "${landed.low()}..${landed.high()}"
+      )
+      if (!crossedNodes(before, landed) || landed.isEmpty()) {
+        Diag.log("  next block: not in the next block with a character selected — letting go")
+        releaseThenReport(start, landed.movingOffset(), onDone)
+        return@awaitChange
+      }
+      syncBoundaryContext(landed)
+      heldCorrect(targetOffset(before, landed, command, start), start, command, { outcome ->
+        onDone(if (outcome is Outcome.Moved) outcome.copy(crossedNode = true) else outcome)
+      }, frame = landed)
+    }
+  }
+
+  /**
+   * A `word` grow from the very end of a block: step one character into the next block, then grow
+   * to that word's end as from inside a word ([growToWordEnd]). Reported from where the press began,
+   * as a move into another node.
+   */
+  private fun wordIntoNextBlock(command: PadCommand, onDone: (Outcome) -> Unit) {
+    heldCharacterStep(command) { stepped ->
+      if (stepped !is Outcome.Moved || !stepped.crossedNode) {
+        onDone(stepped)
+        return@heldCharacterStep
+      }
+      growToWordEnd(command) { grown ->
+        onDone(
+          when (grown) {
+            is Outcome.Moved -> Outcome.Moved(stepped.fromOffset, grown.toOffset, crossedNode = true)
+            Outcome.HandleLost -> grown
+            // Anything else left the crossing standing: the edge is in the new block, one character in.
+            else -> stepped
+          }
+        )
+      }
+    }
   }
 
   /**
