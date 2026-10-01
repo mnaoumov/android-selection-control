@@ -131,7 +131,8 @@ class SelectionObserver {
    *
    * A selection event is a **change notification, not a state query** — re-selecting the same range
    * is silent, and nothing lets us ask what is selected, because `textSelectionStart/End` stays -1
-   * on page content. So the last announcement is the only state there is, and it must be kept.
+   * on page content. So the last announcement is the only state there is, and it must be kept. An
+   * announcement from a frame root with no range carries it on the root instead: [extendedRange].
    */
   fun onEvent(event: AccessibilityEvent): Boolean {
     if (event.eventType != AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED) return false
