@@ -41,7 +41,11 @@ if (!uploadKeyConfigured && uploadSettings.values.any { it != null }) {
 
 android {
   namespace = "dev.mnaoumov.asc"
-  compileSdk = 36
+  // 36.1, not 36: AccessibilityNodeInfo.getSelection is a 36.1 API, and Chrome announces a page
+  // selection through it once its extended-selection feature is on (SelectionObserver).
+  compileSdk {
+    version = release(36) { minorApiLevel = 1 }
+  }
 
   defaultConfig {
     applicationId = "dev.mnaoumov.asc"

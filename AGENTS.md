@@ -231,6 +231,22 @@ saying out loud, because the name sits close enough to the trust property to rea
 fires when the range CHANGES — re-selecting the same word is silent — and nothing lets you *ask* what is
 currently selected, because `textSelectionStart/End` stays `-1` on page nodes. Track it from the stream.
 
+**A newer Chrome announces a page selection from the frame's ROOT, with `-1..-1`, and the range is on
+that root's `AccessibilityNodeInfo.getSelection()`.** This is Chromium's `AccessibilityExtendedSelection`
+feature. In 154 it is off in the code and switched on by a server-side trial, which is how the handset's
+Chrome 154.0.8037.59 got it on 2026-09-30. On Chromium's `main` it is on by default. The event's source
+is the whole `WebView` (`srcLen=0`) and no page node reports a range, so to the old reader every press
+was "the pad cannot see a selection". The root's `Selection` holds an anchor and a focus, each a node and an
+offset. androidx records whether each offset counts characters or children in two
+`...SELECTION_START/END_OFFSET_TYPE` extras. `SelectionObserver.extendedRange` reads them and rewrites the
+range into the shape the old event had: the focus node as the source, `anchor..focus` when the anchor is
+in that node and `0..focus` when it is not. So nothing downstream changed. `getSelection` is a **36.1** API
+(`SDK_INT_FULL`), so the app compiles against 36.1. On a 36.0 device Chrome sends the root event and can
+attach no range at all. Measured 2026-10-01 on the rig (API 37) with Chromium snapshot r1709360
+(`AndroidDesktop_x64`'s `ChromePublic.apk`): `main`'s build said "cannot see a selection" on every press.
+The fix seeded `bravo` at `14..19` and stepped char, word, wrapped-line and START-edge presses. The press
+results were the rig's Chrome 143's to the gesture, on the same page and the same sequence.
+
 **`from`/`to` are ANCHOR and FOCUS, not min and max.** Drag the *start* handle below the anchor and they
 arrive reversed — `from=27 to=19`. Taking `from` as the left edge therefore derives the RIGHT handle's
 pixel, so each step grabs the wrong handle and the selection flips end over end; measured 2026-09-02 as six
@@ -1293,6 +1309,14 @@ earlier the launch splash alone outlasted the sleep. **So `(none logged)` has ha
 **What it cannot express: a node crossing.** Each block is one `TextView`, so it is one accessibility
 node, and a selection never leaves the view it started in. Anything about a grow carrying the moving
 edge into the next node needs a target with an inline node tree.
+
+### A newer Chrome on the guest
+
+The image's Chrome is 143, and Play cannot update it without a signed-in account. A current Chromium
+installs beside it as `org.chromium.chrome`. Get `AndroidDesktop_x64/<rev>/chrome-android-desktop.zip`
+from the `chromium-browser-snapshots` bucket (`LAST_CHANGE` names the newest revision; ~500 MB), then
+`adb install -r` its `apks/ChromePublic.apk`, which runs on the x86_64 guest. Click through its first run
+with the service off, as for Chrome, and open pages with `-p org.chromium.chrome`.
 
 ### A multi-node target on the guest, with no network
 
