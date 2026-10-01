@@ -228,6 +228,123 @@ class HandleLocator(private val density: () -> Float) {
     return characterRect(source, bounds, index) != null
   }
 
+  /**
+   * A caret in the text node after [snapshot]'s source ([forward]) or before it: ONE character into
+   * it when [oneIn], else its outer caret on the near side. Null where the tree has no such node on
+   * screen or its geometry cannot be read.
+   *
+   * For a step from the very end of a node, whose next character is in another block: a reach along
+   * the row has nothing to enter there. Measured 2026-10-01 on the rig, one-line `<p>` rows, END at
+   * the end of `delta` (`28..33`): `word →` grew sideways eight times and `char →` pushed six times,
+   * all silent, on Chrome 143 and on Chromium r1709360 alike.
+   *
+   * A grow goes one character in, not onto the node's first caret, because Chrome announces that
+   * caret as an empty range. A hand drag of the END handle onto the next row's caret 0 was announced
+   * `0..0` in that row's frame, which the pad reads as no selection at all; the same drag onto
+   * caret 1 was announced `0..1`, exactly. The START edge is the mirror: the previous node's last
+   * character, announced `0..len-1` and read through the START frame as `len-1..len`. A shrink back
+   * out of the block wants the outer caret instead (`oneIn = false`): the END of the previous block.
+   *
+   * Read by geometry and length only: the node is found by walking siblings and parents, and its
+   * character is asked for as a rectangle. Where Chrome has not yet laid the node's text out the
+   * first ask returns its bounds ([characterGeometry]'s note), so it is asked twice, and a ONE-line
+   * node that still declines is placed by its average character instead, as [locate] does. The node
+   * the walk finds is the `<p>` itself, whose box is the block's and wider than its text, so that
+   * average is coarse: good for the row, and the caller re-aims along the row once it is there.
+   */
+  fun adjacentNodeCaret(
+    snapshot: SelectionObserver.Snapshot,
+    forward: Boolean,
+    oneIn: Boolean = true,
+  ): CharacterGeometry? {
+    val source = snapshot.source ?: return null
+    val key = "${snapshot.atMs}|${snapshot.bounds}|${snapshot.sourceLength}|$forward|$oneIn"
+    // Only an answer is memoised, never a refusal, for the reason under "do not cache the no" in AGENTS.md.
+    if (key == adjacentMemoKey) return adjacentMemoValue
+
+    val node = adjacentTextLeaf(source, forward) ?: return null.also {
+      Diag.log("  adjacent: no text node ${if (forward) "after" else "before"} this one on screen")
+    }
+    val length = node.text?.length ?: return null
+    val bounds = Rect().also { node.getBoundsInScreen(it) }
+    val index = if (forward) 0 else length - 1
+    val rect = characterRect(node, bounds, index) ?: characterRect(node, bounds, index)
+    val geometry = when {
+      rect != null -> CharacterGeometry(
+        caretX = if (forward == oneIn) rect.right else rect.left,
+        lineBottom = rect.bottom,
+        characterWidth = rect.width(),
+      )
+      snapshot.copy(bounds = bounds, sourceLength = length, source = node).sourceIsOneLine() -> {
+        val average = bounds.width().toFloat() / length
+        CharacterGeometry(
+          caretX = (if (forward) bounds.left else bounds.right) + (if (oneIn) average else 0f) * (if (forward) 1 else -1),
+          lineBottom = bounds.bottom.toFloat(),
+          characterWidth = average,
+        )
+      }
+      else -> null
+    }
+    Diag.log(
+      "  adjacent: the ${if (forward) "next" else "previous"} node ($length chars at $bounds) " +
+        (geometry?.let { "puts the caret at (${it.caretX}, ${it.lineBottom})" + if (rect == null) ", by its average" else "" }
+          ?: "is wrapped and will not measure")
+    )
+    if (geometry != null) {
+      adjacentMemoKey = key
+      adjacentMemoValue = geometry
+    }
+    return geometry
+  }
+
+  private var adjacentMemoKey: String? = null
+  private var adjacentMemoValue: CharacterGeometry? = null
+
+  /**
+   * The first text leaf after [source] in tree order ([forward]), or the last one before it: the
+   * next sibling's first leaf, else the parent's next sibling's, and so on up. Visible nodes with
+   * text only, since a node off screen has no handle to drag onto it.
+   */
+  private fun adjacentTextLeaf(source: AccessibilityNodeInfo, forward: Boolean): AccessibilityNodeInfo? {
+    var node = source
+    repeat(MAX_ADJACENT_LEVELS) {
+      val parent = runCatching { node.parent }.getOrNull() ?: return null
+      val count = runCatching { parent.childCount }.getOrDefault(0).coerceAtMost(MAX_ADJACENT_SIBLINGS)
+      /*
+       * Chrome's parent does not always list the node: a `<p>`'s inline text node reports the `<p>`
+       * as its parent while the `<p>` reports no children at all (measured 2026-10-01, childCount 0).
+       * The node then stands for the parent's own text, so the search goes on from the parent.
+       */
+      val index = (0 until count).firstOrNull { runCatching { parent.getChild(it) }.getOrNull() == node }
+      val siblings = when {
+        index == null -> IntRange.EMPTY
+        forward -> index + 1 until count
+        else -> index - 1 downTo 0
+      }
+      for (i in siblings) {
+        val sibling = runCatching { parent.getChild(i) }.getOrNull() ?: continue
+        textLeaf(sibling, forward, MAX_ADJACENT_LEVELS)?.let { return it }
+      }
+      node = parent
+    }
+    return null
+  }
+
+  private fun textLeaf(node: AccessibilityNodeInfo, forward: Boolean, depth: Int): AccessibilityNodeInfo? {
+    if (!runCatching { node.isVisibleToUser }.getOrDefault(false)) return null
+    val count = runCatching { node.childCount }.getOrDefault(0).coerceAtMost(MAX_ADJACENT_SIBLINGS)
+    if (count > 0 && depth > 0) {
+      val order = if (forward) 0 until count else count - 1 downTo 0
+      for (i in order) {
+        val child = runCatching { node.getChild(i) }.getOrNull() ?: continue
+        textLeaf(child, forward, depth - 1)?.let { return it }
+      }
+    }
+    val hasText = (runCatching { node.text?.length }.getOrNull() ?: 0) > 0
+    val bounds = Rect().also { node.getBoundsInScreen(it) }
+    return node.takeIf { hasText && !bounds.isEmpty }
+  }
+
   /** One character's rectangle as the platform measures it, or null where it declines or lies. */
   private fun characterRect(source: AccessibilityNodeInfo, bounds: Rect, index: Int): RectF? {
     val args = Bundle().apply {
@@ -444,6 +561,13 @@ class HandleLocator(private val density: () -> Float) {
   fun primeCharacterRects(snapshot: SelectionObserver.Snapshot, edge: Edge) {
     if (snapshot.isEmpty()) return
     characterGeometry(snapshot, edge)
+    // An edge at its node's own end steps into the neighbouring node, so that one is asked too. Only on
+    // Blink, the one surface whose selection crosses nodes at all.
+    if (!snapshot.isBlink) return
+    when {
+      edge == Edge.END && snapshot.high() == snapshot.sourceLength -> adjacentNodeCaret(snapshot, forward = true)
+      edge == Edge.START && snapshot.low() == 0 -> adjacentNodeCaret(snapshot, forward = false)
+    }
   }
 
   /**
@@ -687,6 +811,10 @@ class HandleLocator(private val density: () -> Float) {
 
     /** The longest run [characterRun] will ask for: a step's worth of characters, never a node's. */
     const val MAX_SPAN = 64
+
+    /** How far [adjacentNodeCaret] climbs and descends, and how many siblings it reads per level. */
+    const val MAX_ADJACENT_LEVELS = 8
+    const val MAX_ADJACENT_SIBLINGS = 256
 
     /** Scanning: the step is the handle's own touch radius; finer only buys duplicate hits. */
     const val SCAN_STEP = 48f
