@@ -136,11 +136,13 @@ class SelectionObserver {
   fun onEvent(event: AccessibilityEvent): Boolean {
     if (event.eventType != AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED) return false
 
-    val source = event.source ?: return false
+    val announcer = event.source ?: return false
+    val extended = if (event.fromIndex < 0 && event.toIndex < 0) extendedRange(announcer) else null
+    val source = extended?.node ?: announcer
     val bounds = Rect().also { source.getBoundsInScreen(it) }
     announced = Snapshot(
-      from = event.fromIndex,
-      to = event.toIndex,
+      from = extended?.from ?: event.fromIndex,
+      to = extended?.to ?: event.toIndex,
       bounds = bounds,
       // A length, not the characters. See the class note.
       sourceLength = source.text?.length ?: -1,
@@ -183,6 +185,67 @@ class SelectionObserver {
     announced = null
   }
 
+  /** A range in the frame of [node], the node holding the focus: see [extendedRange]. */
+  private class NodeRange(val node: AccessibilityNodeInfo, val from: Int, val to: Int)
+
+  /**
+   * The range an EXTENDED selection describes, rewritten into the frame the event rung used to
+   * deliver, or null where there is none.
+   *
+   * Chrome's `AccessibilityExtendedSelection` feature (Finch-enabled on the handset's Chrome 154,
+   * on by default in Chromium's main) stops announcing a page selection from the node holding the
+   * focus. It announces from the frame's ROOT with `-1..-1`, and puts the range on that root's
+   * `AccessibilityNodeInfo.getSelection()` instead: an anchor and a focus, each a node and an
+   * offset. No page node reports `textSelectionStart/End` either, so this is the only place the
+   * range exists.
+   *
+   * The old event came from the focus node, as `anchor..focus` when the anchor was in it too and as
+   * `0..focus` when it was not, and everything downstream (the moving-edge frame, the seam reckoning,
+   * the fresh-selection test) is written against that shape. So it is reproduced here exactly
+   * rather than passed on as a new one.
+   */
+  private fun extendedRange(announcer: AccessibilityNodeInfo): NodeRange? {
+    if (!hasExtendedSelection()) return null
+    val selection = extendedSelection(announcer)
+      ?: runCatching { announcer.refresh() }.getOrNull()?.takeIf { it }?.let { extendedSelection(announcer) }
+      ?: return null
+    val extras = runCatching { announcer.extras }.getOrNull()
+    val focus = resolve(
+      selection.end.node ?: return null,
+      selection.end.offset,
+      extras?.getInt(END_OFFSET_TYPE_KEY, OFFSET_TYPE_TEXT) ?: OFFSET_TYPE_TEXT,
+    ) ?: return null
+    val anchor = selection.start.node?.let { node ->
+      resolve(node, selection.start.offset, extras?.getInt(START_OFFSET_TYPE_KEY, OFFSET_TYPE_TEXT) ?: OFFSET_TYPE_TEXT)
+    }
+    val from = if (anchor != null && anchor.node == focus.node) anchor.from else 0
+    return NodeRange(focus.node, from, focus.from)
+  }
+
+  @android.annotation.SuppressLint("NewApi") // guarded by hasExtendedSelection, a 36.1 check lint cannot read
+  private fun extendedSelection(node: AccessibilityNodeInfo): AccessibilityNodeInfo.Selection? =
+    runCatching { node.selection }.getOrNull()
+
+  /**
+   * A position as a node and a text offset in it. A `CHILD` position is an index between a
+   * container's children, so it is taken to the text leaf on that side of the gap: the start of the
+   * child after it, or the end of the last child. Only lengths and child counts are read.
+   */
+  private fun resolve(node: AccessibilityNodeInfo, offset: Int, offsetType: Int): NodeRange? {
+    if (offsetType == OFFSET_TYPE_TEXT) return NodeRange(node, offset, offset)
+    if (offsetType != OFFSET_TYPE_CHILD) return null
+    val count = node.childCount
+    if (count == 0) return null
+    var leaf = (if (offset < count) node.getChild(offset) else node.getChild(count - 1)) ?: return null
+    val atEnd = offset >= count
+    var depth = 0
+    while (leaf.childCount > 0 && depth++ < MAX_DEPTH) {
+      leaf = leaf.getChild(if (atEnd) leaf.childCount - 1 else 0) ?: return null
+    }
+    val at = if (atEnd) leaf.text?.length ?: return null else 0
+    return NodeRange(leaf, at, at)
+  }
+
   private fun firstNodeWithRange(node: AccessibilityNodeInfo, depth: Int): AccessibilityNodeInfo? {
     if (depth > MAX_DEPTH) return null
     if (node.textSelectionStart != -1 && node.textSelectionEnd != -1 &&
@@ -202,6 +265,22 @@ class SelectionObserver {
 
     /** The extra Chrome and WebView put on every node. See [Snapshot.isBlink]. */
     private const val CHROME_ROLE_KEY = "AccessibilityNodeInfo.chromeRole"
+
+    /**
+     * Where androidx (and so Chrome) records whether each end of an extended selection counts
+     * characters or children, until the platform carries it. `SelectionPositionCompat`'s values.
+     */
+    private const val START_OFFSET_TYPE_KEY =
+      "androidx.view.accessibility.AccessibilityNodeInfoCompat.SELECTION_START_OFFSET_TYPE"
+    private const val END_OFFSET_TYPE_KEY =
+      "androidx.view.accessibility.AccessibilityNodeInfoCompat.SELECTION_END_OFFSET_TYPE"
+    private const val OFFSET_TYPE_TEXT = 0
+    private const val OFFSET_TYPE_CHILD = 1
+
+    /** `AccessibilityNodeInfo.getSelection` is API 36.1, a minor level `SDK_INT` cannot express. */
+    private fun hasExtendedSelection(): Boolean =
+      android.os.Build.VERSION.SDK_INT >= 36 &&
+        android.os.Build.VERSION.SDK_INT_FULL >= android.os.Build.VERSION_CODES_FULL.BAKLAVA_1
 
     /**
      * Below this ratio of character width to box height, the box spans wrapped lines and
