@@ -540,6 +540,15 @@ class SelectionDriver(
             growOneUnit(command, attempt + 1, origin, resume, onDone)
           }
           after != null && locator.grabbedAHandle(before, after) &&
+            landedOnNextWordStart(command, origin, before, after) && endsItsBlock(command, after) -> {
+            Diag.log(
+              "  grow: landed on ${after.movingOffset()}, one past the boundary ${origin.movingOffset()}, " +
+                "and that is the block's outer caret — taking it as the step"
+            )
+            knownBoundaries += after.movingOffset()
+            onDone(Outcome.Moved(origin.movingOffset(), after.movingOffset()))
+          }
+          after != null && locator.grabbedAHandle(before, after) &&
             landedOnNextWordStart(command, origin, before, after) && attempt + 1 < MAX_ATTEMPTS -> {
             Diag.log(
               "  grow: landed on ${after.movingOffset()}, one past the boundary ${origin.movingOffset()} — " +
@@ -630,6 +639,24 @@ class SelectionDriver(
     command.unit == PadCommand.Unit.WORD && growsSelection(command) &&
       before.movingOffset() == origin.movingOffset() && origin.movingOffset() in knownBoundaries &&
       before.source == after.source && grownBy(origin.movingOffset(), after.movingOffset()) == 1
+
+  /**
+   * Whether a grow's one-character landing is its block's outer caret, from which the next character
+   * is in another block on another row ([blockStep]). That landing is not Chrome's hold on the next
+   * word's start, because along this row there is no next word to reach for.
+   *
+   * Measured 2026-10-05 on the handset, Wikipedia's `Text_editor`: `word →` from `cost` (`138..142`
+   * of a paragraph ending `cost.`) landed on 143, past the period, and [landedOnNextWordStart] took it
+   * for the hold. Eleven more reaches along the row announced nothing, `Moved(142, 143)` in 4.8 s and
+   * 12 gestures. The press now ends on 143, and the next `word →` takes the block step from there.
+   *
+   * An inline node's end is not this case: its neighbour is on the same row, so [blockStep] declines
+   * and the reach along the row crosses into it as before.
+   */
+  private fun endsItsBlock(command: PadCommand, after: SelectionObserver.Snapshot): Boolean {
+    val handle = locator.locate(after, activeEdge, toolbarCentre()) ?: return false
+    return blockStep(after, command, handle) != null
+  }
 
   /**
    * A word grow whose next character is on another row: move the handle onto that row's caret first,
