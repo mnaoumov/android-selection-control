@@ -14,7 +14,7 @@ does, and the held-pointer fix for everything a continued stroke will and will n
 
 Open work is split by shape, one item each in that same store, and named there rather than here:
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
-(two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is still waiting for it; the toolbar under a paged handle is fixed and confirmed on the phone, which
+(two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, though the block step that follows it is not yet; the toolbar under a paged handle is fixed and confirmed on the phone, which
 found four more under *Page, start and end*: a collapsing top bar read as the document's edge, `start` ending
 blind on an image, a START handle at the left margin, and a swipe that can open a heads-up notification; the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone); a
 grab that lands on the pad's own `✕` and closes it, and a heading's block-wide box taken for its text (both under
@@ -837,6 +837,13 @@ row 003 ends `charlie cost.`:
 | `word →` from `cost` (`28..32` of 33) | `32 -> 33` in 5.5 s, 12 gestures | `32 -> 33` in 0.35–0.41 s, 1 gesture, 3 runs of 3 |
 | `word →` again | not measured | `33 -> 4` of row 004 (`row `), 1.9 s, 4 gestures, 3 of 3 |
 | control: `word →` ×2 from `alpha` on the same row | not measured | `13 -> 19`, then `19 -> 20` read as the hold and escalated on to 27, as before |
+
+**The phone confirms the first press (2026-10-05, OnePlus 15, Chrome 154.0.8037.92 with the
+extended-selection flag Disabled, `en.m.wikipedia.org/wiki/Text_editor`).** Long-press `cost` seeded
+`138..142`, and `word →` logged `landed on 143, one past the boundary 142, and that is the block's outer
+caret — taking it as the step`. That is `Moved(142, 143)` in 1 gesture and 357 ms, against 12 gestures and
+4.8 s before the fix. It was one run, because the phone dropped off adb during the second `word →`, so the
+block step that follows is not yet confirmed on the phone.
 
 **A block-level node's `getBoundsInScreen` is the block box, not the text box.** Long-pressing the centre
 of an `h1` whose bounds run 56..1218 but whose glyphs end at 547 hits empty space and selects nothing.
