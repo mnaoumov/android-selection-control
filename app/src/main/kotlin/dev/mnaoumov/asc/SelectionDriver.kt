@@ -268,13 +268,25 @@ class SelectionDriver(
    * Chrome announced `0..14`, so `low()` put the next press's grab at column 0, where there was no
    * handle, and the drag scrolled the page instead. The START's node covers `focus..length`, and that
    * is the range this returns.
+   *
+   * **A START on the node's first caret is announced `0..0`, which reads as no selection.** It is
+   * where `⤒ start` ends, on the document's first node. Measured 2026-10-05 on the `handset` profile,
+   * a served page of 400 one-line rows: the sweep's last drag put the START on offset 0 of row 001,
+   * Chrome showed the selection from there, and the pad read `0..0` as `HandleLost` and every press
+   * after it as "the pad cannot see a selection". So `0..0` is read as `0..length` too. A caret the
+   * user tapped onto a node's first character looks the same, which is why [perform] believes such a
+   * reading only while the toolbar is up ([caretReadAsStart]).
    */
   private fun inMovingFrame(snapshot: SelectionObserver.Snapshot): SelectionObserver.Snapshot {
     if (activeEdge != Edge.START || snapshot.sourceLength <= 0) return snapshot
     if (nodeKey(snapshot) == anchorNodeKey) return snapshot
-    if (snapshot.from != 0 || snapshot.to <= 0 || snapshot.to >= snapshot.sourceLength) return snapshot
+    if (snapshot.from != 0 || snapshot.to < 0 || snapshot.to >= snapshot.sourceLength) return snapshot
+    if (snapshot.to == 0) caretReadAsStart = snapshot.atMs
     return snapshot.copy(from = snapshot.to, to = snapshot.sourceLength)
   }
+
+  /** The announcement time of the last `0..0` that [inMovingFrame] read as a START on offset 0. */
+  private var caretReadAsStart: Long? = null
 
   /**
    * The node the ANCHOR is known to be in, as [nodeKey] reads it, or null when that is not known.
@@ -373,6 +385,11 @@ class SelectionDriver(
     if (!activeEdgeAnnounced) {
       Diag.log("$command: the $activeEdge edge is not in the announcing node — refusing to guess where it is")
       onDone(Outcome.EdgeUnknown)
+      return
+    }
+    if (snapshot.atMs == caretReadAsStart && !selectionStillOnScreen()) {
+      Diag.log("$command: a caret on a node's first character and no toolbar — the pad cannot see a selection")
+      onDone(Outcome.NoSelection)
       return
     }
     syncBoundaryContext(snapshot)
@@ -2425,56 +2442,73 @@ class SelectionDriver(
       dragAcross(before, atDocumentEdge = false)
       return
     }
-    val swipe = swipeStart(band, handle, forward) ?: run {
-      Diag.log("  page: nowhere to start a scroll clear of the toolbar")
-      ended(Outcome.HandleCovered)
-      return
-    }
-    gestureCount++
-    gestures.dragAndHold(
-      swipe,
-      PointF(swipe.x, swipe.y - scrollBy),
-      PAGE_SCROLL_MS,
-      PAGE_SCROLL_HOLD_MS,
-    ) { completed ->
-      if (!completed) {
-        ended(Outcome.HandleLost)
-        return@dragAndHold
-      }
-      awaitBoundsSettled { scrolled ->
-        if (scrolled == null || scrolled.atMs != before.atMs) {
-          Diag.log("  page: the selection changed during the scroll — it touched a handle")
+    fun scrollFrom(swipe: PointF) {
+      Diag.log("  page: scroll swipe from (${swipe.x}, ${swipe.y})")
+      gestureCount++
+      gestures.dragAndHold(
+        swipe,
+        PointF(swipe.x, swipe.y - scrollBy),
+        PAGE_SCROLL_MS,
+        PAGE_SCROLL_HOLD_MS,
+      ) { completed ->
+        if (!completed) {
           ended(Outcome.HandleLost)
-          return@awaitBoundsSettled
+          return@dragAndHold
         }
-        /*
-         * A stop touch that lands during the swipe also cuts the swipe short, and a short scroll reads
-         * exactly like the document's edge, which ends in a drag to the screen's corner. Measured
-         * 2026-09-28: a tap on `← char` 8 s into `end` left the scroll 140 px short, and the corner
-         * drag took the selection to the bottom of the screen. So a stop is honoured here, before any
-         * drag, with the selection where the last page left it.
-         */
-        if (stopRequested) {
-          Diag.log("  page: stopped by a touch during the scroll")
-          ended(Outcome.Moved(before.movingOffset(), before.movingOffset()))
-          return@awaitBoundsSettled
+        awaitBoundsSettled { scrolled ->
+          if (scrolled == null || scrolled.atMs != before.atMs) {
+            Diag.log("  page: the selection changed during the scroll — it touched a handle")
+            ended(Outcome.HandleLost)
+            return@awaitBoundsSettled
+          }
+          /*
+           * A stop touch that lands during the swipe also cuts the swipe short, and a short scroll reads
+           * exactly like the document's edge, which ends in a drag to the screen's corner. Measured
+           * 2026-09-28: a tap on `← char` 8 s into `end` left the scroll 140 px short, and the corner
+           * drag took the selection to the bottom of the screen. So a stop is honoured here, before any
+           * drag, with the selection where the last page left it.
+           */
+          if (stopRequested) {
+            Diag.log("  page: stopped by a touch during the scroll")
+            ended(Outcome.Moved(before.movingOffset(), before.movingOffset()))
+            return@awaitBoundsSettled
+          }
+          val travelled = (before.bounds?.top ?: 0) - (scrolled.bounds?.top ?: 0)
+          // Short by more than a line: the scroll ran into the document's edge.
+          val atEdge = kotlin.math.abs(scrollBy) - kotlin.math.abs(travelled) > line
+          Diag.log("  page: scrolled $travelled of $scrollBy${if (atEdge) " — the document's edge" else ""}")
+          /*
+           * Chrome hides its handles while a page scrolls and fades them back in once it stops, with the
+           * toolbar. A grab before that finds no handle: measured 2026-09-28, the eighth page of a
+           * `start` sweep grabbed where the handle belonged, announced nothing, and scrolled the page
+           * instead. So the grab waits for the toolbar, and a little past it for the fade.
+           */
+          awaitSelectionOnScreen { visible ->
+            if (!visible) Diag.log("  page: no toolbar after the scroll — grabbing anyway")
+            handler.postDelayed({
+              dragAcross(observer.latestWithFreshBounds() ?: scrolled, atEdge)
+            }, HANDLE_FADE_IN_MS)
+          }
         }
-        val travelled = (before.bounds?.top ?: 0) - (scrolled.bounds?.top ?: 0)
-        // Short by more than a line: the scroll ran into the document's edge.
-        val atEdge = kotlin.math.abs(scrollBy) - kotlin.math.abs(travelled) > line
-        Diag.log("  page: scrolled $travelled of $scrollBy${if (atEdge) " — the document's edge" else ""}")
-        /*
-         * Chrome hides its handles while a page scrolls and fades them back in once it stops, with the
-         * toolbar. A grab before that finds no handle: measured 2026-09-28, the eighth page of a
-         * `start` sweep grabbed where the handle belonged, announced nothing, and scrolled the page
-         * instead. So the grab waits for the toolbar, and a little past it for the fade.
-         */
-        awaitSelectionOnScreen { visible ->
-          if (!visible) Diag.log("  page: no toolbar after the scroll — grabbing anyway")
-          handler.postDelayed({
-            dragAcross(observer.latestWithFreshBounds() ?: scrolled, atEdge)
-          }, HANDLE_FADE_IN_MS)
-        }
+      }
+    }
+
+    /*
+     * The swipe is placed only once the toolbar is back. Chrome takes it down for a handle drag and puts
+     * it back after, below the handle when the handle sits near the band's far edge, which is where the
+     * swipe starts. Placed while it was down, the swipe landed on the toolbar as it reappeared and
+     * scrolled nothing. Measured 2026-10-05 on the `handset` profile: the third page of an `end` sweep
+     * logged `toolbar=null` and `scrolled 0 of 1638`, which reads as the document's edge, so the last
+     * drag took the selection to the screen's corner, 3 pages into a 400-row page.
+     */
+    awaitSelectionOnScreen { visible ->
+      if (!visible) Diag.log("  page: no toolbar before the scroll — placing the swipe without it")
+      val swipe = swipeStart(band, handle, forward, scrollBy)
+      if (swipe == null) {
+        Diag.log("  page: nowhere to start a scroll clear of the toolbar")
+        ended(Outcome.HandleCovered)
+      } else {
+        scrollFrom(swipe)
       }
     }
   }
@@ -2482,9 +2516,19 @@ class SelectionDriver(
   /**
    * Where a scroll swipe can put its finger down without landing on a handle or the toolbar: the
    * band's far edge in the direction of travel, in whichever half of the band the moving handle is
-   * not in. Null when the toolbar covers both candidates.
+   * not in. Null when the toolbar covers every candidate.
+   *
+   * **When the toolbar covers both columns, the swipe starts on the band's side of it.** After a page
+   * drag the handle sits [PAGE_CLEARANCE_DROPS] short of the band's far edge, and Chrome puts its
+   * toolbar in that strip, beyond the handle. On the handset (1272 px wide) the toolbar is wider than
+   * half the screen, so it covers both columns at the band's edge. Measured 2026-10-05 on Wikipedia,
+   * Chrome 154: the third `page ↓` and the second page of `end` ended `HandleCovered` with 0 gestures.
+   * The fallback is just inside the toolbar's nearer edge, in the column away from the handle only:
+   * that row is the handle's own, and the other column is where the handle is. It is taken only when
+   * the swipe's end, [scrollBy] further on, is still on the screen, because a clamped swipe scrolls
+   * short and a short scroll reads as the document's edge.
    */
-  private fun swipeStart(band: Rect, handle: PointF, forward: Boolean): PointF? {
+  private fun swipeStart(band: Rect, handle: PointF, forward: Boolean, scrollBy: Float): PointF? {
     val margin = locator.handleDrop / 2
     // Never within reach of the screen's own edges, where a swipe opens the notification shade from
     // the top and goes home from the bottom. A floating pad leaves the band running to either edge.
@@ -2498,9 +2542,17 @@ class SelectionDriver(
     val far = band.right - band.width() * SWIPE_COLUMN_FRACTION
     val columns = if (handle.x < band.exactCenterX()) listOf(far, near) else listOf(near, far)
     val toolbar = toolbarBounds()
-    return columns.map { PointF(it, y) }.firstOrNull { point ->
-      toolbar == null || !toolbar.contains(point.x.toInt(), point.y.toInt())
-    }
+    fun clear(point: PointF) = toolbar == null || !toolbar.contains(point.x.toInt(), point.y.toInt())
+    columns.map { PointF(it, y) }.firstOrNull(::clear)?.let { return it }
+    toolbar ?: return null
+    val beside = if (forward) toolbar.top - margin else toolbar.bottom + margin
+    val end = beside - scrollBy
+    val fallback = PointF(columns.first(), beside)
+    val usable = beside > maxOf(band.top.toFloat(), guard) &&
+      beside < minOf(band.bottom.toFloat(), gestures.screenHeight() - guard) &&
+      end >= 0 && end <= gestures.screenHeight() && clear(fallback)
+    Diag.log("  page: the toolbar $toolbar covers both columns; ${if (usable) "starting the scroll at (${fallback.x}, $beside)" else "nothing clear beside it either"}")
+    return fallback.takeIf { usable }
   }
 
   /**
