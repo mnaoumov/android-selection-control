@@ -16,7 +16,7 @@ Open work is split by shape, one item each in that same store, and named there r
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
 (two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, though the block step that follows it is not yet; the toolbar under a paged handle is fixed and confirmed on the phone, which
 found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse, and not yet confirmed on the phone), `start` ending
-blind on an image, a START handle at the left margin, and a swipe that can open a heads-up notification; the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
+blind on an image (fixed on the rig and not yet confirmed on the phone), a START handle at the left margin, and a swipe that can open a heads-up notification; the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
 heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and not yet confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
 `✕` is fixed on the rig); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
@@ -1335,11 +1335,33 @@ the document's real edge.
  grab miss by the omnibox's 196 px.
 - **The wordmark is an `android.widget.Image` with no text**, so its `0..0` comes from a node of length 0, and
  `inMovingFrame`'s rewrite (above) skips any snapshot with `sourceLength <= 0`. Row 001 on the served
- page was text, which is why the profile passed.
+ page was text, which is why the profile passed. Fixed on the rig, below; not yet confirmed on the phone.
 - **A START handle at the left margin is not grabbed**, most likely because the touch-down falls in
  the system's back-gesture zone.
 - **An upward page swipe starts at y 361**, where heads-up notifications appear. Straight after one
  `start` press, a WhatsApp chat was in the foreground, with no real finger on the screen.
+
+**So `start` and `end` hold their last drag, and step off an image onto the text beyond it.**
+`toDocumentEdge` grabs, holds at the screen's corner, and reads where the edge landed. Where that is a
+node with no text (`srcLen <= 0`, or class `android.widget.Image`, whose text Chrome sets to the file
+name when nothing else names it), the pointer moves on to the outer caret of the next text node in
+tree order, without lifting: the first caret for `start`, the last for `end`. From the corner that move
+is a shrink, so it lands on the caret. The tree walk under it (`adjacentTextLeaf`) also skips images
+now. Before the change, on the rig against a served page opening with `<a><img alt=…></a>`, the corner
+drag was announced `0..1` from the link's text-less `android.view.View` (`srcLen=-1`), and the next
+`→ char` ended `HandleLost`. A bare `<img>` was announced `0..0` from the `Image`, with `srcLen=8`.
+Measured 2026-10-05 after the change, on the rig, Chrome force-stopped before each run:
+
+| page, press | result |
+|---|---|
+| `<a><img></a>` first, `⤒ start` on the START edge, then `→ char` ×2, `← char` | `0..0` of row 001, then `0 -> 1 -> 2 -> 1`, 1 gesture each, 3 runs of 3 |
+| the same page and a bare `<img>` first, `⤒ start` on the END edge | the move off the image fired 4 of 4, onto row 001's caret 0 (the END edge then goes blind, a separate defect) |
+| a bare `<img>` last, `⤓ end` | the corner flapped between the image and row 120, the move landed on `0..38`, then `38 -> 37 -> 36 -> 37`, 2 runs of 2 |
+| text only, `⤒ start` and `⤓ end` | unchanged: `0..0` of row 001 and `0..38` of row 120, the char presses after them exact |
+
+The START edge on the bare-`<img>` page never reached the image in four runs: the corner stopped on
+row 001's caret 0. The `Image` reading was therefore exercised only through the END-edge and `end` runs.
+A `start` now costs 3 gestures and ~2.0 s where the image is met, against 2 and ~1.6 s.
 
 **So a page step forgives a shortfall that the band's own move explains, and settles the band as well
 as the node.** `pageStep` re-reads the content band after the scroll, and the document's edge now needs
