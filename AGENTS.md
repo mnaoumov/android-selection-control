@@ -14,7 +14,7 @@ does, and the held-pointer fix for everything a continued stroke will and will n
 
 Open work is split by shape, one item each in that same store, and named there rather than here:
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
-(two block-step cases, under *Gotchas*, both fixed on the rig and waiting for the phone; the toolbar under a paged handle is fixed and confirmed on the phone, which
+(two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is still waiting for it; the toolbar under a paged handle is fixed and confirmed on the phone, which
 found four more under *Page, start and end*: a collapsing top bar read as the document's edge, `start` ending
 blind on an image, a START handle at the left margin, and a swipe that can open a heads-up notification; the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone); a
 grab that lands on the pad's own `✕` and closes it, and a heading's block-wide box taken for its text (both under
@@ -811,6 +811,16 @@ The correction move itself fired only in one run of a build whose node test also
 misread row 002 as another node: from `0..2` it moved the pointer 18 px and landed on `0..1`, the
 target, in one move. No landing in a wrong node has occurred with the final test, so that branch is
 unproven against a real wrong node.
+
+**The phone confirms the slide (2026-10-05, OnePlus 15, Chrome 154.0.8037.92 with the extended-selection
+flag Disabled, `en.m.wikipedia.org/wiki/Text_editor`).** This was the same case that failed on the phone before.
+Long-press `cost` (`138..142`), then `char →` to 143 in 1 gesture and 0.73 s. Then `char →` again: the
+straight-down move landed in the 58-character ` is text, …` node (`0..19`) and logged `landed in another
+node ... sliding to the neighbour's caret`. The slide then landed on `0..1` of the 3-character `As `, and
+the screenshot showed `A` highlighted and nothing else. That took 2 gestures and 0.95-0.97 s. `char ←` from
+there logged `srcLen=3` and went `1 -> 143`, back onto `cost.`, in 2 gestures and 0.82-0.85 s. Each
+direction worked 3 runs of 3. On the phone the slide alone was enough. The correction move (`moving the
+pointer`) never fired, so it is still unproven against a real wrong node.
 
 **`word →` from the word before a block's trailing `.` lands on the block's last caret, and that is
 not Chrome's next-word-start hold.** Measured 2026-10-05 on the handset, Wikipedia's `Text_editor`: from
