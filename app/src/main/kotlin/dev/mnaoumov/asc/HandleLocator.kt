@@ -125,6 +125,23 @@ class HandleLocator(private val density: () -> Float) {
   private var lineMemoKey: String? = null
   private var lineMemoValue: CharacterGeometry? = null
 
+  /**
+   * Debug-only: refuse every per-character ask, as Chrome did twice running on a heading on the
+   * handset, so the rig reproduces that phone case. The service sets it from a marker file that only `run-as` on
+   * a debuggable build can write.
+   */
+  var forceRefuseCharacterRects = false
+
+  /**
+   * Whether the selection's other edge, the anchor, is known to be in the snapshot's own node. The
+   * driver knows which node a fresh selection was made in, and sets this to ask it.
+   */
+  var anchorInSource: (SelectionObserver.Snapshot) -> Boolean = { false }
+
+  /** The target app's floating toolbar right now, and the screen's width, for [averageOutrunsToolbar]. */
+  var toolbarNow: () -> Rect? = { null }
+  var screenWidthNow: () -> Int = { Int.MAX_VALUE }
+
   fun forgetAnchor() {
     knownAnchorX = null
   }
@@ -367,6 +384,7 @@ class HandleLocator(private val density: () -> Float) {
 
   /** One character's rectangle as the platform measures it, or null where it declines or lies. */
   private fun characterRect(source: AccessibilityNodeInfo, bounds: Rect, index: Int): RectF? {
+    if (forceRefuseCharacterRects) return null
     val args = Bundle().apply {
       putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX, index)
       putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_LENGTH, 1)
@@ -605,6 +623,79 @@ class HandleLocator(private val density: () -> Float) {
   fun scanRowIsKnown(snapshot: SelectionObserver.Snapshot): Boolean = !snapshot.isKnownMultiLine()
 
   /**
+   * Whether the one-line box's AVERAGE caret for the moving edge is somewhere the selection cannot
+   * be, by the toolbar. Only asked once the platform has refused the character's own rectangle.
+   *
+   * A block-level node's box is the block's, not its text's, and the average across it puts the
+   * caret far past the glyphs. Measured 2026-10-05 on the handset: `editor`, the last word of
+   * Wikipedia's `Text editor` heading, was refused on both asks, and the END was aimed at x 2477
+   * against glyphs ending near 680. The grab touched the page and the press ended `HandleLost`.
+   * The rig's Chromium 157 gives the same heading a block-wide box (688 against text ending at 322),
+   * though there the second ask answers.
+   *
+   * The toolbar's centre tracks the selection's centre (AGENTS.md: within ~6 px), and the other edge
+   * cannot be outside the box, so `END <= 2 * centre - box.left` and `START >= 2 * centre - box.right`.
+   * On a selection spanning rows the toolbar centres on a wider span, which only loosens those two.
+   *
+   * **Where the other edge is in this node too, BOTH edges are tested, and either failing condemns
+   * the box.** The box is one box: if the average cannot place one of its offsets it cannot place the
+   * other. That is what catches a START after a swap, because a box wider than its text is wider to
+   * the RIGHT and a START's own bound only looks left. Measured on the rig: `editor` (`5..11`),
+   * `⇄ swap`, `char ←`. The START's average was 330 against glyphs starting near 161, and the grab
+   * went to x 312, where the END handle is drawn. It grabbed the END and shrank the selection to
+   * `5..9`. The END's average there is 688, which the toolbar rules out. Both edges are in the node
+   * when the driver says so ([anchorInSource]: the node a fresh selection was made in), or when the
+   * frame is not the `0..focus` / `focus..length` shape Chrome gives a node without the anchor: the
+   * END's `low > 0`, the START's `high < length`.
+   *
+   * "Each edge is on its own side of the centre" would be tighter, and is not used. A toolbar wider
+   * than the selection gets pushed in from the screen's edge, which moves its centre a long way. On
+   * that same `editor` the toolbar was held at the left margin, centred at 311 against the
+   * selection's ~241, and on the handset a toolbar half 529 px wide can move it by hundreds. So a
+   * short word near the margin would be refused where its average was fine. The two bounds above
+   * have the same weakness on one side each: a toolbar pushed in from the left raises the START's
+   * floor, and one pushed in from the right lowers the END's ceiling. So a toolbar within
+   * [BOUND_SLACK_DP] of a screen edge drops the bound it tightens and keeps the one it loosens. On
+   * `editor` the toolbar sat at x 32, so only the END's ceiling was asked, and it was enough. With
+   * no toolbar there is no bound, and the average is used as it always was.
+   */
+  fun averageOutrunsToolbar(snapshot: SelectionObserver.Snapshot, edge: Edge, toolbarCentreX: Float?): Boolean {
+    val centre = toolbarCentreX ?: return false
+    val bounds = snapshot.bounds ?: return false
+    val length = snapshot.sourceLength
+    if (length <= 0) return false
+    val average = { offset: Int -> bounds.left + (offset.toFloat() / length) * bounds.width() }
+    val slack = BOUND_SLACK_DP * density()
+    // A toolbar pushed in from one screen edge has its centre moved toward the other, which tightens
+    // the bound that looks toward that other edge. That bound is not asked: see the note above.
+    val toolbar = toolbarNow()
+    val margin = BOUND_SLACK_DP * density()
+    val pushedFromLeft = toolbar != null && toolbar.left <= margin
+    val pushedFromRight = toolbar != null && toolbar.right >= screenWidthNow() - margin
+    val endOutruns = { x: Float -> !pushedFromRight && x > 2 * centre - bounds.left + slack }
+    val startOutruns = { x: Float -> !pushedFromLeft && x < 2 * centre - bounds.right - slack }
+    val bothHere = anchorInSource(snapshot) ||
+      (edge == Edge.END && snapshot.low() > 0) ||
+      (edge == Edge.START && snapshot.high() < length)
+    val low = average(snapshot.low())
+    val high = average(snapshot.high())
+    val outruns = if (bothHere) {
+      endOutruns(high) || startOutruns(low)
+    } else if (edge == Edge.END) {
+      endOutruns(high)
+    } else {
+      startOutruns(low)
+    }
+    if (outruns) {
+      Diag.log(
+        "  locate: the box's average puts the carets at $low..$high, which the toolbar centred at " +
+          "$centre rules out — the box $bounds is wider than its text, and the platform will not measure it"
+      )
+    }
+    return outruns
+  }
+
+  /**
    * The moving handle's pixel, or null when nothing trustworthy is available and the caller should
    * acquire instead.
    *
@@ -630,6 +721,7 @@ class HandleLocator(private val density: () -> Float) {
       val average = bounds.left + (offset.toFloat() / snapshot.sourceLength) * bounds.width()
       val measured = characterGeometry(snapshot, edge)?.caretX
       if (measured != null) Diag.log("  locate: one-line caret measured=$measured average=$average")
+      if (measured == null && averageOutrunsToolbar(snapshot, edge, toolbarCentreX)) return null
       val anchorX = measured ?: average
       val x = if (edge == Edge.START) anchorX - handleInset else anchorX + handleInset
       return PointF(x, bounds.bottom + handleDrop)
@@ -828,6 +920,13 @@ class HandleLocator(private val density: () -> Float) {
      * characters and whole lines, so there is nothing in between for a tolerance to arbitrate.
      */
     const val LIE_TOLERANCE = 1f
+
+    /**
+     * How far past the toolbar's bound [averageOutrunsToolbar] lets an average caret sit before it
+     * refuses, in dp. The toolbar centre was measured within ~6 px (3 dp) of the selection's; the rest
+     * is room for a toolbar nudged in from the screen's edge. A block box's error is hundreds of dp.
+     */
+    const val BOUND_SLACK_DP = 24f
 
     /** The longest run [characterRun] will ask for: a step's worth of characters, never a node's. */
     const val MAX_SPAN = 64
