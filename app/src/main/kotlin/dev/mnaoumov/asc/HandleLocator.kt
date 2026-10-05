@@ -36,6 +36,23 @@ enum class Crossing { RIGHTWARD, LEFTWARD }
 data class CharacterGeometry(val caretX: Float, val lineBottom: Float, val characterWidth: Float)
 
 /**
+ * A caret in the node next to the selection's, and that node as far as an announcement can name it:
+ * its length and its box. An announcement's source is not always the node the tree walk found (a
+ * `<p>`'s inline text node is not listed under it), so [holds] compares the two by length and column
+ * rather than by identity.
+ *
+ * Not by row. Measured 2026-10-05 on the rig, one-line `<p>` rows: the walk read row 002's `<p>` at
+ * y 479..517, and the announcement from inside it a moment later gave its text node y 525..563, one
+ * row lower, for the same 33 characters. Two inline nodes of one row are told apart by their length
+ * or their columns, and the defect this exists for was a 3-character node against a 58-character one.
+ */
+data class NeighbourCaret(val geometry: CharacterGeometry, val length: Int, val bounds: Rect) {
+  fun holds(snapshot: SelectionObserver.Snapshot): Boolean =
+    snapshot.sourceLength == length &&
+      snapshot.bounds?.let { it.left < bounds.right && bounds.left < it.right } == true
+}
+
+/**
  * A run of the source node's characters as the platform measures them: each glyph's width, and the
  * run's outer edges, [left] and [right].
  *
@@ -251,12 +268,14 @@ class HandleLocator(private val density: () -> Float) {
    * node that still declines is placed by its average character instead, as [locate] does. The node
    * the walk finds is the `<p>` itself, whose box is the block's and wider than its text, so that
    * average is coarse: good for the row, and the caller re-aims along the row once it is there.
+   * Where a block's first row holds several inline nodes the walk finds the first of them, and the
+   * answer carries that node's length and box so the caller can tell whether a landing is in it.
    */
   fun adjacentNodeCaret(
     snapshot: SelectionObserver.Snapshot,
     forward: Boolean,
     oneIn: Boolean = true,
-  ): CharacterGeometry? {
+  ): NeighbourCaret? {
     val source = snapshot.source ?: return null
     val key = "${snapshot.atMs}|${snapshot.bounds}|${snapshot.sourceLength}|$forward|$oneIn"
     // Only an answer is memoised, never a refusal, for the reason under "do not cache the no" in AGENTS.md.
@@ -290,15 +309,16 @@ class HandleLocator(private val density: () -> Float) {
         (geometry?.let { "puts the caret at (${it.caretX}, ${it.lineBottom})" + if (rect == null) ", by its average" else "" }
           ?: "is wrapped and will not measure")
     )
-    if (geometry != null) {
+    val neighbour = geometry?.let { NeighbourCaret(it, length, bounds) }
+    if (neighbour != null) {
       adjacentMemoKey = key
-      adjacentMemoValue = geometry
+      adjacentMemoValue = neighbour
     }
-    return geometry
+    return neighbour
   }
 
   private var adjacentMemoKey: String? = null
-  private var adjacentMemoValue: CharacterGeometry? = null
+  private var adjacentMemoValue: NeighbourCaret? = null
 
   /**
    * The first text leaf after [source] in tree order ([forward]), or the last one before it: the
