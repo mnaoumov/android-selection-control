@@ -2554,6 +2554,31 @@ class SelectionDriver(
       dragAcross(before, atDocumentEdge = false)
       return
     }
+    /*
+     * Short by more than a line means the scroll ran into the document's edge, unless the band itself
+     * moved. Chrome's top controls hide on a downward swipe and show on an upward one, and that eats
+     * part of the swipe: measured 2026-10-05 on the handset (Chrome 154, Wikipedia), every earlier
+     * swipe fell 31-35 px short, and the one that hid the omnibox fell ~158 px short, `scrolled 1382 of
+     * 1537`, while the band's top went from 337 to 141. Read as the edge, it ended `page ↓` and `end`
+     * with a corner drag mid-article. So the band's own move is forgiven. A real edge hidden behind
+     * one shows up on the next page, which then scrolls nothing at all.
+     */
+    fun judgeAndDrag(scrolled: SelectionObserver.Snapshot) {
+      val travelled = (before.bounds?.top ?: 0) - (scrolled.bounds?.top ?: 0)
+      val bandNow = contentBand(scrolled)?.visible
+      val bandMoved = if (bandNow == null) 0 else
+        kotlin.math.abs(bandNow.top - band.top) + kotlin.math.abs(bandNow.bottom - band.bottom)
+      val shortfall = kotlin.math.abs(scrollBy) - kotlin.math.abs(travelled)
+      val atEdge = shortfall > line + bandMoved
+      val note = when {
+        atEdge -> " — the document's edge"
+        bandMoved > 0 && shortfall > line -> " — short, but the band moved $bandMoved px ($band -> $bandNow), so not the edge"
+        else -> ""
+      }
+      Diag.log("  page: scrolled $travelled of $scrollBy$note")
+      dragAcross(scrolled, atEdge)
+    }
+
     fun scrollFrom(swipe: PointF) {
       Diag.log("  page: scroll swipe from (${swipe.x}, ${swipe.y})")
       gestureCount++
@@ -2585,10 +2610,6 @@ class SelectionDriver(
             ended(Outcome.Moved(before.movingOffset(), before.movingOffset()))
             return@awaitBoundsSettled
           }
-          val travelled = (before.bounds?.top ?: 0) - (scrolled.bounds?.top ?: 0)
-          // Short by more than a line: the scroll ran into the document's edge.
-          val atEdge = kotlin.math.abs(scrollBy) - kotlin.math.abs(travelled) > line
-          Diag.log("  page: scrolled $travelled of $scrollBy${if (atEdge) " — the document's edge" else ""}")
           /*
            * Chrome hides its handles while a page scrolls and fades them back in once it stops, with the
            * toolbar. A grab before that finds no handle: measured 2026-09-28, the eighth page of a
@@ -2598,7 +2619,20 @@ class SelectionDriver(
           awaitSelectionOnScreen { visible ->
             if (!visible) Diag.log("  page: no toolbar after the scroll — grabbing anyway")
             handler.postDelayed({
-              dragAcross(observer.latestWithFreshBounds() ?: scrolled, atEdge)
+              /*
+               * Chrome's top controls can finish hiding (or showing) after the bounds were believed,
+               * and move the whole page by the omnibox's height. Measured 2026-10-05 on the handset:
+               * the grab aimed at y 487 against a node that next read 196 px higher, announced nothing
+               * and reported `15 -> 15`. So the bounds are re-read here, and a move since the settle
+               * waits for a second settle before anything is judged or grabbed.
+               */
+              val fresh = observer.latestWithFreshBounds() ?: scrolled
+              if (fresh.bounds == scrolled.bounds) {
+                judgeAndDrag(fresh)
+              } else {
+                Diag.log("  page: the page moved after the scroll settled (${scrolled.bounds} -> ${fresh.bounds}); settling again")
+                awaitBoundsSettled { again -> judgeAndDrag(again ?: fresh) }
+              }
             }, HANDLE_FADE_IN_MS)
           }
         }
@@ -2673,12 +2707,14 @@ class SelectionDriver(
    * as soon as the swipe lifts can describe the page mid-flight.
    */
   private fun awaitBoundsSettled(
-    previous: Rect? = null,
+    previous: List<Rect?>? = null,
     waited: Long = 0,
     onResult: (SelectionObserver.Snapshot?) -> Unit,
   ) {
     val now = observer.latestWithFreshBounds()
-    val bounds = now?.bounds
+    // The band is part of the reading: Chrome's top controls slide in or out after the scroll, and
+    // while they move the node and the band move together.
+    val bounds = now?.bounds?.let { node -> listOf(node, now.let(contentBand)?.visible) }
     // Two equal reads are believed only after a minimum wait: straight after the lift both can still
     // be the bounds from before the scroll.
     val settled = waited >= MIN_SCROLL_SETTLE_MS && bounds != null && bounds == previous
