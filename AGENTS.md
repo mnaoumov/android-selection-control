@@ -16,7 +16,7 @@ Open work is split by shape, one item each in that same store, and named there r
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
 (two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, though the block step that follows it is not yet; the toolbar under a paged handle is fixed and confirmed on the phone, which
 found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse, and not yet confirmed on the phone), `start` ending
-blind on an image (fixed on the rig and not yet confirmed on the phone), a START handle at the left margin, and a swipe that can open a heads-up notification; the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
+blind on an image (fixed on the rig and not yet confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, not yet confirmed on the phone), and a swipe that can open a heads-up notification; the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
 heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and not yet confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
 `✕` is fixed on the rig); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
@@ -1336,8 +1336,8 @@ the document's real edge.
 - **The wordmark is an `android.widget.Image` with no text**, so its `0..0` comes from a node of length 0, and
  `inMovingFrame`'s rewrite (above) skips any snapshot with `sourceLength <= 0`. Row 001 on the served
  page was text, which is why the profile passed. Fixed on the rig, below; not yet confirmed on the phone.
-- **A START handle at the left margin is not grabbed**, most likely because the touch-down falls in
- the system's back-gesture zone.
+- **A START handle at the left margin is not grabbed.** The touch-down falls in OxygenOS's own edge-gesture
+ strip, which stock Android's exclusion does not reach. Not fixable from the pad; it now says so, below.
 - **An upward page swipe starts at y 361**, where heads-up notifications appear. Straight after one
  `start` press, a WhatsApp chat was in the foreground, with no real finger on the screen.
 
@@ -1362,6 +1362,43 @@ Measured 2026-10-05 after the change, on the rig, Chrome force-stopped before ea
 The START edge on the bare-`<img>` page never reached the image in four runs: the corner stopped on
 row 001's caret 0. The `Image` reading was therefore exercised only through the END-edge and `end` runs.
 A `start` now costs 3 gestures and ~2.0 s where the image is met, against 2 and ~1.6 s.
+
+**A handle at the screen's side margin sits inside the system's edge-gesture zone, and only stock
+Android lets the grab through.** A START on a line's first character is drawn beyond the caret: on
+the phone, with Wikipedia's 16 dp margin, at x 0..56. Gesture navigation claims a 105 px (30 dp)
+zone on each side, on the phone and on the `handset` profile alike (`dumpsys window`, `type=systemGestures`).
+On stock Android that does not matter, because Chrome excludes its handles from the back gesture:
+with the START at the margin, `mSystemGestureExclusion` read `(0,1788,94,1865)`, the handle itself.
+Measured 2026-10-05 on the `handset` profile against a served page with a 16 px body margin: from `Source`
+(`0..6`, after `⇄ swap`), every grab at x 24.5 or 55.5 landed. `char →` went `0 -> 1`, `char ←` `1 -> 0`,
+1 gesture each, and `⤒ start` crossed into the paragraph above, 3 runs of 3. OxygenOS does not
+honour the exclusion, it seems: the same grab on the phone announced nothing. It runs an edge gesture
+of its own. `dumpsys input` lists an `edge-swipe` spy monitor and `gesture_displayid_0` regions
+`[0,141]-[84,2772]` on the left, and `[1188,141]-[1272,278]` plus `[1188,548]-[1272,2772]` on the right.
+`gesture_mistouch_prevention_side_enable=1` is set too. A handle drawn at x 0..56 has no pixel
+outside 84, and Chrome's touch target ends at the drawn circle, so no aim inside the handle can avoid
+the strip. A press there cannot be made to work. The pad now does three things:
+
+- **Every handle touch-down in a side zone is logged** (`the touch-down at (24.5, 2061.0) is in a
+  side gesture zone (left 105 px, right 105 px)`). The zone is read from the service's
+  `WindowMetrics` (`WindowInsets.Type.systemGestures()`), so it is empty on three-button navigation.
+  The OxygenOS strip is narrower than the AOSP zone, so the check flags a little more than OxygenOS takes.
+- **The grab is still made**, because stock Android takes it. Refusing every margin grab would break
+  the case measured working above.
+- **Only one unanswered touch-down per press.** A swallowed grab announces nothing, so the press used
+  to escalate twelve drags from the same pixel, reaching inward up to 630 px. From the left edge that
+  is the back gesture's own shape. Now, once a zone touch-down has been followed by no announcement,
+  every later touch-down in a zone is dropped (`went unanswered — not touching`). The press then ends
+  with `the handle is in the screen edge's swipe zone` on the status line, instead of `lost the handle`
+  or `didn't move`. The driver still counts and waits out its tries, so that ending takes ~3 s and
+  reports 13 "gestures" of which 1 touched the screen.
+
+**`adb shell run-as dev.mnaoumov.asc touch files/force-swallow-edge-zone`, then `rig.ps1 rebind`,
+drops every handle touch-down in a side zone** on a debuggable build, which is how the rig reproduces
+the phone. `rm` it and rebind to undo. With it, on the same page, `char →` from the margin logged
+`debug: swallowed it`, then 13 dropped touch-downs, ended `HandleLost` in 3.1 s, and showed the
+edge message with the selection intact. A mid-line START (`code`, `7..11`) logged no zone and stepped
+`7 -> 8 -> 7`. An END at the right margin goes through the same check but was not measured.
 
 **So a page step forgives a shortfall that the band's own move explains, and settles the band as well
 as the node.** `pageStep` re-reads the content band after the scroll, and the document's edge now needs

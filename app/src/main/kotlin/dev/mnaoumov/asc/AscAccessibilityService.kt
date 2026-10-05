@@ -82,6 +82,10 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     // Likewise for a node that never answers a per-character ask, which the rig's Chromium answers.
     locator.forceRefuseCharacterRects = debuggable && java.io.File(filesDir, FORCE_REFUSE_CHARACTER_RECTS).exists()
     if (locator.forceRefuseCharacterRects) Diag.log("debug: refusing every per-character ask")
+    // And for a ROM whose own edge gesture takes a touch the target app excluded, which AOSP does not.
+    forceSwallowEdgeZone = debuggable && java.io.File(filesDir, FORCE_SWALLOW_EDGE_ZONE).exists()
+    if (forceSwallowEdgeZone) Diag.log("debug: swallowing every handle touch-down in a side gesture zone")
+    Diag.log("side gesture zones: ${sideGestureZones()}")
 
     driver = SelectionDriver(
       gestures = this,
@@ -277,10 +281,18 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
      * time the handle is nowhere near the pad, and then the pad should keep absorbing taps.
      */
     padCleared = false
+    touchedEdgeZone = false
     driver.perform(command) { outcome ->
       if (padCleared) pad?.setTransparentToTouch(false)
       padCleared = false
-      pad?.showStatus(describe(outcome))
+      pad?.showStatus(
+        if (touchedEdgeZone && isStuck(outcome)) {
+          Diag.log("  the press touched down in a side gesture zone and went nowhere")
+          "the handle is in the screen edge's swipe zone"
+        } else {
+          describe(outcome)
+        }
+      )
       busy = false
       // The press just moved the selection, so the toolbar has just moved too. After `busy` clears,
       // or the guard in refreshMask would skip it.
@@ -325,6 +337,68 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     Outcome.NoSelection, Outcome.HandleLost, Outcome.RowUnknown, Outcome.ColumnUnknown, Outcome.HandleCovered,
     Outcome.AtFloor, Outcome.EdgeUnknown -> false
   }
+
+  /**
+   * A press that touched the selection, and so was not refused, but got nowhere. Only these can be
+   * the edge zone's doing: a refusal touched nothing.
+   */
+  private fun isStuck(outcome: Outcome): Boolean =
+    outcome == Outcome.HandleLost || (outcome is Outcome.Moved && !outcome.madeProgress())
+
+  /** Whether a handle touch-down of this press fell inside a side system-gesture zone. */
+  private var touchedEdgeZone = false
+
+  /** Debug only: [noteEdgeZone] drops such a touch-down, as a ROM's own edge gesture does. */
+  private var forceSwallowEdgeZone = false
+
+  /**
+   * The left and right system-gesture zones' widths in screen pixels. Zero on three-button
+   * navigation, where nothing claims the edges.
+   */
+  private fun sideGestureZones(): android.graphics.Insets =
+    getSystemService(WindowManager::class.java).currentWindowMetrics.windowInsets
+      .getInsets(android.view.WindowInsets.Type.systemGestures())
+      .let { android.graphics.Insets.of(it.left, 0, it.right, 0) }
+
+  /**
+   * Whether the caller must drop the touch-down at [down], having logged it when it is inside a side
+   * system-gesture zone.
+   *
+   * A START handle on a line's first character sits at the page's margin, and Chrome draws it beyond
+   * the caret, so at a 16 dp margin the whole handle is within 16 dp of the screen's edge. Stock
+   * Android lets the touch through, because Chrome excludes its handles from the back gesture: on
+   * the `handset` profile (gesture navigation, a 105 px zone each side) a grab at x 24.5 moved the
+   * START, with `mSystemGestureExclusion` covering the handle. On the OnePlus 15 the same grab
+   * announced nothing (2026-10-05). OxygenOS runs an edge gesture of its own, an `edge-swipe` spy
+   * monitor over `[0,141]-[84,2772]` on the left, and no aim inside a handle drawn at x 0..56 can
+   * leave that strip. So the grab is still made, and a press that went nowhere after one says why
+   * instead of "didn't move".
+   *
+   * **Only one unanswered touch-down per press.** A swallowed grab announces nothing, so the press
+   * escalates, and every retry starts from the same pixel with a longer reach inward: measured
+   * under the debug marker, twelve drags from x 24.5 reaching up to 630 px. From the left edge that
+   * is the back gesture's own shape. So once a touch-down in a zone has gone unanswered, every later
+   * one in the press is dropped. A zone grab that worked announced something, and is not held to it.
+   */
+  private fun noteEdgeZone(down: PointF): Boolean {
+    val zones = sideGestureZones()
+    if (down.x >= zones.left && down.x < screenWidth() - zones.right) return false
+    if (touchedEdgeZone && observer.announced === announcedAtEdgeDown) {
+      Diag.log("  the last touch-down in a side gesture zone went unanswered — not touching (${down.x}, ${down.y})")
+      return true
+    }
+    touchedEdgeZone = true
+    announcedAtEdgeDown = observer.announced
+    Diag.log(
+      "  the touch-down at (${down.x}, ${down.y}) is in a side gesture zone " +
+        "(left ${zones.left} px, right ${zones.right} px)"
+    )
+    if (forceSwallowEdgeZone) Diag.log("  debug: swallowed it")
+    return forceSwallowEdgeZone
+  }
+
+  /** What had been announced at this press's last touch-down in a side gesture zone. */
+  private var announcedAtEdgeDown: SelectionObserver.Snapshot? = null
 
   /** Whether this press has made the pad transparent to touch, so its end must make it solid again. */
   private var padCleared = false
@@ -501,6 +575,11 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       lineTo(detour.x, detour.y)
       if (end.x != detour.x || end.y != detour.y) lineTo(end.x, end.y)
     }
+    if (noteEdgeZone(start)) {
+      Diag.log("  the drag was not dispatched")
+      onFinished(true)
+      return
+    }
     clearThePadFor(start) { dispatch(GestureDescription.StrokeDescription(path, 0, durationMs), onFinished) }
   }
 
@@ -562,6 +641,11 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     if (heldPointer.isHeld) heldPointer.releaseNow()
     // Not past [to]: the same bound [drag] uses, as far as [to] or one pixel past the slop.
     val shortDetour = if (pastTarget) null else ViewConfiguration.get(this).scaledTouchSlop + 1f
+    if (noteEdgeZone(onScreen(from))) {
+      Diag.log("  the grab was not dispatched")
+      onGrabbed(false)
+      return
+    }
     clearThePadFor(onScreen(from)) { heldPointer.grab(from, to, detourBack, shortDetour, onGrabbed) }
   }
 
@@ -638,6 +722,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
     /** The debug marker file that makes every per-character ask refuse: see [onServiceConnected]. */
     const val FORCE_REFUSE_CHARACTER_RECTS = "force-refuse-character-rects"
+
+    /** The debug marker file that drops a handle touch-down in a side gesture zone: see [noteEdgeZone]. */
+    const val FORCE_SWALLOW_EDGE_ZONE = "force-swallow-edge-zone"
 
     /** How far [contentBand] walks up from a source node looking for the page's scroller. */
     const val MAX_ANCESTORS = 64
