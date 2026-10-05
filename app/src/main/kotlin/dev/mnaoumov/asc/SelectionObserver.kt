@@ -102,6 +102,27 @@ class SelectionObserver {
   private var announced: Snapshot? = null
 
   /**
+   * Whether the last announcement was Chrome's frame-root one on a platform that cannot carry its
+   * range, so a selection exists that nothing here can read.
+   *
+   * Chrome's extended selection is server-switched on per install, and it does not look at the
+   * platform: on a 36.0 device it still announces from the root with `-1..-1`. The range lives in
+   * `getSelection()`, which is 36.1, and the root's extras carry only the two offset types. Measured
+   * on the OnePlus 15 (36.0, Chrome 154.0.8037.92) on 2026-10-05. The only way out on such a device
+   * is the user's: `chrome://flags#enable-accessibility-extended-selection` set to Disabled, which
+   * puts the old announcement back. Any readable announcement clears this.
+   */
+  @Volatile
+  var chromeHidesSelection = false
+    private set
+
+  /**
+   * Debug-only: treat the platform as below 36.1, so the rig (API 37) reproduces a 36.0 device.
+   * The service sets it from a marker file that only `run-as` on a debuggable build can write.
+   */
+  var forceNoExtendedSelection = false
+
+  /**
    * Rewrites an announcement into the frame its reader needs, or null to leave it as it arrived.
    * The driver sets it, because only the driver knows which edge is moving and where the anchor is.
    */
@@ -138,7 +159,12 @@ class SelectionObserver {
     if (event.eventType != AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED) return false
 
     val announcer = event.source ?: return false
-    val extended = if (event.fromIndex < 0 && event.toIndex < 0) extendedRange(announcer) else null
+    val fromRoot = event.fromIndex < 0 && event.toIndex < 0
+    val extended = if (fromRoot) extendedRange(announcer) else null
+    chromeHidesSelection = fromRoot && extended == null && !hasExtendedSelection() && isBlinkRoot(announcer)
+    if (chromeHidesSelection) {
+      Diag.log("selection announced from Chrome's frame root, and below 36.1 nothing carries its range")
+    }
     val source = extended?.node ?: announcer
     val bounds = Rect().also { source.getBoundsInScreen(it) }
     announced = Snapshot(
@@ -164,6 +190,7 @@ class SelectionObserver {
    */
   fun refreshFromNodes(root: AccessibilityNodeInfo?, packageName: String?) {
     val node = root?.let { firstNodeWithRange(it, 0) } ?: return
+    chromeHidesSelection = false
     val bounds = Rect().also { node.getBoundsInScreen(it) }
     announced = Snapshot(
       from = node.textSelectionStart,
@@ -184,7 +211,22 @@ class SelectionObserver {
 
   fun forget() {
     announced = null
+    chromeHidesSelection = false
   }
+
+  /** `getSelection` is a 36.1 API, a minor level `SDK_INT` cannot express. */
+  private fun hasExtendedSelection(): Boolean =
+    !forceNoExtendedSelection &&
+      android.os.Build.VERSION.SDK_INT >= 36 &&
+      android.os.Build.VERSION.SDK_INT_FULL >= android.os.Build.VERSION_CODES_FULL.BAKLAVA_1
+
+  /**
+   * Whether [node] is Chrome's (or a WebView's) frame root: the whole `WebView`, which is what
+   * announces an extended selection. Its class says so, and so does a `chromeRole` extra if present.
+   */
+  private fun isBlinkRoot(node: AccessibilityNodeInfo): Boolean =
+    node.className?.toString() == WEB_VIEW_CLASS ||
+      runCatching { node.extras?.containsKey(CHROME_ROLE_KEY) }.getOrNull() == true
 
   /** A range in the frame of [node], the node holding the focus: see [extendedRange]. */
   private class NodeRange(val node: AccessibilityNodeInfo, val from: Int, val to: Int)
@@ -278,10 +320,7 @@ class SelectionObserver {
     private const val OFFSET_TYPE_TEXT = 0
     private const val OFFSET_TYPE_CHILD = 1
 
-    /** `AccessibilityNodeInfo.getSelection` is API 36.1, a minor level `SDK_INT` cannot express. */
-    private fun hasExtendedSelection(): Boolean =
-      android.os.Build.VERSION.SDK_INT >= 36 &&
-        android.os.Build.VERSION.SDK_INT_FULL >= android.os.Build.VERSION_CODES_FULL.BAKLAVA_1
+    private const val WEB_VIEW_CLASS = "android.webkit.WebView"
 
     /**
      * Below this ratio of character width to box height, the box spans wrapped lines and

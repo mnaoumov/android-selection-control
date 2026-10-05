@@ -14,8 +14,8 @@ does, and the held-pointer fix for everything a continued stroke will and will n
 
 Open work is split by shape, one item each in that same store, and named there rather than here:
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
-(a blind pad on Android 36.0, the toolbar under a paged handle, and two block-step cases, all under
-*Gotchas* and *Page, start and end*); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
+(the toolbar under a paged handle and two block-step cases, all under *Gotchas* and *Page, start
+and end*; the blind pad on Android 36.0 now names the Chrome flag that fixes it); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
 A handle inside a **wrapped** node was on that list and is no longer: the row it needs comes from the
 platform's own per-character rectangle, which Chrome does supply for page content once the node has
@@ -256,6 +256,25 @@ selection" while Chrome showed one. **`chrome://flags#enable-accessibility-exten
 Disabled**, followed by a relaunch, turns the old announcement back on, and every handset measurement
 below was taken that way. The flag was put back to Default afterwards. Until the phone gets 36.1, that
 flag is the only way the pad works there.
+
+**So the pad names the flag instead of saying "re-select".** `SelectionObserver.chromeHidesSelection` is
+set by a `-1..-1` announcement from a Blink frame root (class `android.webkit.WebView`) that yields no
+range below 36.1. A press then walks the tree once more (the node rung), and when the toolbar shows a
+selection the status line reads `Chrome hides it: disable flag "extended selection"`. That search finds
+the flag's title, "Accessibility Extended Selection", in `chrome://flags`. The Play listing spells it out.
+No other rung exists on 36.0: `getSelection` and `ACTION_SET_EXTENDED_SELECTION` are both 36.1, and no
+page node reports `textSelectionStart/End`. A tap that clears the selection is announced from the root the
+same way, so the message is gated on the toolbar, which a cleared selection takes down.
+
+**The rig reproduces it with a debug marker file.** On a debuggable build,
+`adb shell run-as dev.mnaoumov.asc touch files/force-no-extended-selection`, then `rig.ps1 rebind`, makes
+the service treat the platform as below 36.1 (it logs `debug: treating the platform as below 36.1`); `rm`
+it and rebind to undo. Measured 2026-10-05 on the rig with Chromium r1709360: with the marker, a long-press
+on `bravo` logged `selection announced from Chrome's frame root, and below 36.1 nothing carries its range`,
+and the press logged `node rung: no page node reports a range either`, on four presses over three
+long-presses; the screenshot showed the flag message. Without it, the same page stepped `19 -> 20 -> 21`
+exactly. A run straight after a reinstall announced nothing at all and got the old "re-select" message,
+which is the pre-existing no-event case, not this one.
 
 **`from`/`to` are ANCHOR and FOCUS, not min and max.** Drag the *start* handle below the anchor and they
 arrive reversed — `from=27 to=19`. Taking `from` as the left edge therefore derives the RIGHT handle's

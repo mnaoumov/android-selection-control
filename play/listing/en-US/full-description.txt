@@ -27,6 +27,8 @@ WHERE IT WORKS
 
 Selection Pad drives the selection handles that an app already draws, so it works where you can already select text by touch. It is built and measured against web pages in Chrome and against ordinary Android text. Apps that draw their own selection in an unusual way may not respond to it.
 
+On some Android 16 phones, recent versions of Chrome stop telling accessibility services where a web page's selection is, and the pad then says "Chrome hides it". Open chrome://flags in Chrome, find "Accessibility Extended Selection", set it to Disabled and relaunch Chrome. Phones on a later Android 16 update are not affected.
+
 OPEN SOURCE
 
 Selection Pad is open source under the MIT licence.

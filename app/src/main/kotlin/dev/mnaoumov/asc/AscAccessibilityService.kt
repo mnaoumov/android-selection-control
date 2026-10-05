@@ -74,6 +74,12 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   override fun onServiceConnected() {
     super.onServiceConnected()
 
+    // The rig is API 37, so only this reproduces a 36.0 device's blind Chrome there. A debuggable
+    // build alone can be given the file: `adb shell run-as dev.mnaoumov.asc touch files/<name>`.
+    val debuggable = applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
+    observer.forceNoExtendedSelection = debuggable && java.io.File(filesDir, FORCE_NO_EXTENDED_SELECTION).exists()
+    if (observer.forceNoExtendedSelection) Diag.log("debug: treating the platform as below 36.1")
+
     driver = SelectionDriver(
       gestures = this,
       observer = observer,
@@ -252,8 +258,10 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
     // The node rung, for the surfaces that announce nothing at all — Google Docs reports a range on
     // its node while firing no selection event whatsoever.
-    if (observer.isStale(STALE_MS)) {
+    // Also where Chrome hides its range below 36.1: the tree is the one place left that could hold it.
+    if (observer.isStale(STALE_MS) || observer.chromeHidesSelection) {
       observer.refreshFromNodes(rootInActiveWindow, rootInActiveWindow?.packageName?.toString())
+      if (observer.chromeHidesSelection) Diag.log("node rung: no page node reports a range either")
     }
 
     /*
@@ -401,8 +409,16 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     // opposite things from the user and the second is common: a selection event fires only on a
     // CHANGE, so one made before the service connected — or a long-press INSIDE an existing
     // selection, which re-selects nothing — leaves the pad blind while text is visibly highlighted.
-    Outcome.NoSelection ->
-      if (aSelectionSeemsToExist()) "tap elsewhere, then long-press to re-select" else "select some text first"
+    // Re-selecting cannot help where Chrome hides the range from this Android (SelectionObserver
+    // .chromeHidesSelection): only its flag does, so the status line names it.
+    Outcome.NoSelection -> when {
+      !aSelectionSeemsToExist() -> "select some text first"
+      observer.chromeHidesSelection ->
+        // The docked status shows two lines at 360 dp, so the flag's id and URL do not fit. Searching
+        // chrome://flags for these two words finds it; the Play listing spells it out in full.
+        "Chrome hides it: disable flag \"extended selection\""
+      else -> "tap elsewhere, then long-press to re-select"
+    }
     Outcome.HandleLost -> "lost the handle — reselect"
     // Deliberately NOT "reselect": nothing was lost and nothing was touched, and the same long-press
     // on the same wrapped paragraph refuses again. Selecting inside ONE line is the thing that works.
@@ -601,6 +617,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
     /** How long an announcement stays trustworthy before the node rung is worth a walk. */
     const val STALE_MS = 4000L
+
+    /** The debug marker file under `filesDir` that forces the 36.1 gate off: see [onServiceConnected]. */
+    const val FORCE_NO_EXTENDED_SELECTION = "force-no-extended-selection"
 
     /** How far [contentBand] walks up from a source node looking for the page's scroller. */
     const val MAX_ANCESTORS = 64
