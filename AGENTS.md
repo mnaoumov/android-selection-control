@@ -13,8 +13,9 @@ document's ends on the rig). Read the gesture spike for the mechanism, the pad b
 does, and the held-pointer fix for everything a continued stroke will and will not tolerate.
 
 Open work is split by shape, one item each in that same store, and named there rather than here:
-locating a handle that the aimed-at drop misses; confirming the paging on the handset; and Play
-distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
+locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
+(a blind pad on Android 36.0, the toolbar under a paged handle, and two block-step cases, all under
+*Gotchas* and *Page, start and end*); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
 A handle inside a **wrapped** node was on that list and is no longer: the row it needs comes from the
 platform's own per-character rectangle, which Chrome does supply for page content once the node has
@@ -246,6 +247,15 @@ attach no range at all. Measured 2026-10-01 on the rig (API 37) with Chromium sn
 (`AndroidDesktop_x64`'s `ChromePublic.apk`): `main`'s build said "cannot see a selection" on every press.
 The fix seeded `bravo` at `14..19` and stepped char, word, wrapped-line and START-edge presses. The press
 results were the rig's Chrome 143's to the gesture, on the same page and the same sequence.
+
+**The handset IS that 36.0 device, so the pad is blind there while the trial is on.** Measured 2026-10-05
+on the OnePlus 15 (`ro.build.version.sdk_full` 36.0, Chrome 154.0.8037.92), with a temporary probe on the
+root announcement. The `WebView` root's extras carry the two `...OFFSET_TYPE` keys (0 or 1) and nothing
+else about the selection: no anchor, no focus, no offset. Every press said "the pad cannot see a
+selection" while Chrome showed one. **`chrome://flags#enable-accessibility-extended-selection` set to
+Disabled**, followed by a relaunch, turns the old announcement back on, and every handset measurement
+below was taken that way. The flag was put back to Default afterwards. Until the phone gets 36.1, that
+flag is the only way the pad works there.
 
 **`from`/`to` are ANCHOR and FOCUS, not min and max.** Drag the *start* handle below the anchor and they
 arrive reversed — `from=27 to=19`. Taking `from` as the left edge therefore derives the RIGHT handle's
@@ -732,6 +742,20 @@ controls are unchanged. `chrome://terms`'s inline seam, which is on ONE row, wen
 in one gesture each, with no block step. And a `TextView` never takes one, because its selection
 cannot leave its view (`blockStep` is Blink-only).
 
+**On a real article the next block's first row is several nodes, and the step lands in the wrong one.**
+Measured 2026-10-05 on the handset (Chrome 154, the extended-selection flag Disabled), on Wikipedia's
+`Text_editor`. From `cost.`, the END on 143 of 143, `char →` was announced `Moved(143, 1, crossedNode=true)`
+in 2 gestures and 0.96 s. But the next paragraph opens `As ` (3 characters), then the link
+`source code` (11), then ` is text, …` (58). The straight-down move landed in the 58-character node,
+under the handle's column, and the slide aimed at that node's offset 1. The selection grew by
+`As source code ` rather than by `A`. `char ←` from there (`1 -> 11`, the end of `source code`) and
+`word →` (`11 -> 3`, onto ` is`) were each exact in 1 gesture. The rig's rows were one node each, so
+the rig could not show this.
+
+**`word →` from the word before a trailing `.` does not reach the block step.** From `cost` (`138..142`),
+the first grow landed on 143, the block's last caret. It was read as Chrome's next-word-start hold, and
+eleven more reaches along the row announced nothing: `Moved(142, 143)` in 4.8 s and 12 gestures.
+
 **A block-level node's `getBoundsInScreen` is the block box, not the text box.** Long-pressing the centre
 of an `h1` whose bounds run 56..1218 but whose glyphs end at 547 hits empty space and selects nothing.
 Inline nodes hug their text; block nodes do not.
@@ -1057,8 +1081,11 @@ with a radius of about 39 px, so the aim sat 12-15 px from its centre. Three lon
 (`bravo`, `charlie`, `made`), each followed by `char →`, `char ←` and `word →`: nine presses of nine
 grabbed, none `HandleLost`. Every char press moved exactly one character in one gesture (0.58-0.75 s),
 and the word presses went `19 -> 25` (to the end of `delta`) and `14 -> 17` (to the end of `by`).
-The real phone has not confirmed it yet. It went from 57 px to 49 px there and from 30 to 31.5,
-inside the ~48 px-radius handle the gesture spike measured.
+**The real phone confirms it (2026-10-05, OnePlus 15, Chrome 154 with the extended-selection flag
+Disabled, `en.m.wikipedia.org/wiki/Text_editor`).** Every `char` and `word` grab was accepted: from
+`interactive`, `char →` went `15 -> 16` in 1 gesture and 0.71 s, aimed 49 px below a node bottom of
+1341. From `cost`, `char →` went `142 -> 143` (0.72 s) and `char ←` went `143 -> 142` (0.57 s). Across
+the paragraph seam, `char ←` and `word →` each moved in 1 gesture. None of these ended `HandleLost`.
 
 ### Page, start and end
 
@@ -1093,6 +1120,25 @@ bounds after it, never predicted. The swipe starts at the band's far edge, beyon
 in the half of the band the handle is not in, a quarter of the way in. It never starts within 42 dp
 of the screen's top or bottom. Where nothing scrolls (the debug target's `TextView`), there is no
 swipe: `page ↓` there went 11 → 30 in 1 gesture, and `page ↑` on the START edge 6 → 0.
+
+**On the handset, the toolbar ends a page run after one or two pages.** Measured 2026-10-05 on the
+OnePlus 15 (portrait, Chrome 154 with the extended-selection flag Disabled) against
+`en.m.wikipedia.org/wiki/Text_editor`. The band is `[0,337][1272,2180]`.
+
+| press | result | time, gestures |
+|---|---|---|
+| `page ↓` ×2 from `interactive` | one band each (scrolls of 899 and 1771 px), the column kept | 1.6 s, 2 each |
+| the third `page ↓` | `HandleCovered`: `nowhere to start a scroll clear of the toolbar` | 22 ms, 0 |
+| `end` from `interactive` | one page, then the same refusal | 1.6 s, 2 |
+| `⤓ end`, then a tap on `← char` 300 ms in | `stopped by a touch during the scroll`, selection intact | 0.75 s, 1 |
+| `⇄ swap`, `⤒ start` from `software` | the page's first selectable text, the Wikipedia wordmark | 3.1 s, 4 |
+| `⇄ swap` on a selection spanning paragraphs, then `← char` and `⇞ page` | both refused, "can't see the end — nudge its handle once", nothing touched | — |
+
+The refusal has one cause. After the drag, the handle sits at y ≈ 2033..2055, just above the pad.
+Chrome puts its toolbar below the selection, in that strip. On the phone the toolbar is wider than
+half the screen, so it covers both swipe columns (25 % and 75 %), and `swipeStart` tries only one y.
+The rig's toolbar never covered both. `start`'s last drag, to the screen's corner, reported `HandleLost`
+on the wordmark, and the pad then could not see the selection, although Chrome still showed it.
 
 **The anchor scrolling off screen costs nothing.** The announcing node follows the moving edge, so
 the moving handle is always the one on screen. The pad never needs to locate the other one.
