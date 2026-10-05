@@ -340,14 +340,25 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
    * The pad's bounds come from the accessibility window list rather than from its `LayoutParams`,
    * because those are inset by the status bar while gesture coordinates are raw screen pixels —
    * comparing the two directly is off by the status bar's height.
+   *
+   * [then] is the touch-down itself, and it runs only once the pad really lets touches through.
+   * Dispatched in the same breath, a grab inside the `✕` reached the pad before its relayout and
+   * closed it (measured 2026-10-05 on the handset; see [Pad.setTransparentToTouch]).
    */
-  private fun clearThePadFor(down: PointF) {
-    if (padCleared) return
-    val padBounds = padBounds() ?: return
-    if (!padBounds.contains(down.x.toInt(), down.y.toInt())) return
+  private fun clearThePadFor(down: PointF, then: () -> Unit) {
+    val padBounds = if (padCleared) null else padBounds()
+    val pad = pad
+    if (padBounds == null || pad == null || !padBounds.contains(down.x.toInt(), down.y.toInt())) {
+      then()
+      return
+    }
     Diag.log("  the pad at $padBounds covers the touch-down at (${down.x}, ${down.y}) — letting it through")
-    pad?.setTransparentToTouch(true)
     padCleared = true
+    val askedAt = android.os.SystemClock.uptimeMillis()
+    pad.setTransparentToTouch(true) {
+      Diag.log("  the pad lets touches through after ${android.os.SystemClock.uptimeMillis() - askedAt} ms")
+      then()
+    }
   }
 
   /** The pad's real screen rectangle, from the accessibility window list. */
@@ -480,13 +491,12 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     val start = onScreen(from)
     val detour = onScreen(PointF(from.x + away, from.y))
     val end = onScreen(to)
-    clearThePadFor(start)
     val path = Path().apply {
       moveTo(start.x, start.y)
       lineTo(detour.x, detour.y)
       if (end.x != detour.x || end.y != detour.y) lineTo(end.x, end.y)
     }
-    dispatch(GestureDescription.StrokeDescription(path, 0, durationMs), onFinished)
+    clearThePadFor(start) { dispatch(GestureDescription.StrokeDescription(path, 0, durationMs), onFinished) }
   }
 
   /**
@@ -508,7 +518,6 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   ) {
     val start = onScreen(from)
     val end = onScreen(to)
-    clearThePadFor(start)
     val move = GestureDescription.StrokeDescription(
       Path().apply {
         moveTo(start.x, start.y)
@@ -518,13 +527,15 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       dragMs,
       true,
     )
-    dispatch(move) { moved ->
-      if (!moved) {
-        onFinished(false)
-        return@dispatch
+    clearThePadFor(start) {
+      dispatch(move) { moved ->
+        if (!moved) {
+          onFinished(false)
+          return@dispatch
+        }
+        val hold = move.continueStroke(Path().apply { moveTo(end.x, end.y) }, 0, holdMs, false)
+        dispatch(hold, onFinished)
       }
-      val hold = move.continueStroke(Path().apply { moveTo(end.x, end.y) }, 0, holdMs, false)
-      dispatch(hold, onFinished)
     }
   }
 
@@ -544,10 +555,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     // (measured, the held-pointer fix). So start clean rather than inheriting a pointer the app has stopped
     // following.
     if (heldPointer.isHeld) heldPointer.releaseNow()
-    clearThePadFor(onScreen(from))
     // Not past [to]: the same bound [drag] uses, as far as [to] or one pixel past the slop.
     val shortDetour = if (pastTarget) null else ViewConfiguration.get(this).scaledTouchSlop + 1f
-    heldPointer.grab(from, to, detourBack, shortDetour, onGrabbed)
+    clearThePadFor(onScreen(from)) { heldPointer.grab(from, to, detourBack, shortDetour, onGrabbed) }
   }
 
   override fun moveHeld(to: PointF): Boolean = heldPointer.moveTo(to)
