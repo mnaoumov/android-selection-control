@@ -97,9 +97,13 @@ class SelectionObserver {
     }
   }
 
-  /** The last announcement as it arrived, before [frame] reads it. */
+  /**
+   * The last announcement as it arrived, before [frame] reads it. Each announcement is a new object,
+   * so an unchanged reference means nothing has been announced since.
+   */
   @Volatile
-  private var announced: Snapshot? = null
+  var announced: Snapshot? = null
+    private set
 
   /**
    * Whether the last announcement was Chrome's frame-root one on a platform that cannot carry its
