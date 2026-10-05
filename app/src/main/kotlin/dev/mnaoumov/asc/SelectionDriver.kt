@@ -2370,6 +2370,71 @@ class SelectionDriver(
   }
 
   /** What one page step did, for [sweepPage] to report and [sweepToDocumentEdge] to continue from. */
+  /**
+   * The last drag of `start` / `end`: to the screen's corner, held, and on into the nearest TEXT when
+   * the corner leaves the edge in a node that has none.
+   *
+   * The corner puts the edge before the document's first selectable thing, and that need not be text.
+   * Measured 2026-10-05 on the handset, Wikipedia's `Text_editor`: `⤒ start` ended on the wordmark, an
+   * `android.widget.Image` with no text, and every press after it said the pad could not see a
+   * selection. On the rig, a served page whose first element is `<a><img alt=…></a>`: the corner drag
+   * was announced `0..1` from the link's `android.view.View` with no text (`srcLen=-1`), which no
+   * locator can place a handle in, and the next `char →` ended `HandleLost`. So the pointer stays
+   * down, and where the landing has no text it moves on to the outer caret of the text node beyond
+   * it, the first character of the document's text for `start` and the last for `end`. From the
+   * corner that move is a shrink, so it is character-granular and lands on the caret.
+   */
+  private fun toDocumentEdge(
+    scrolled: SelectionObserver.Snapshot,
+    grab: PointF,
+    corner: PointF,
+    forward: Boolean,
+    ended: (Outcome) -> Unit,
+    report: (SelectionObserver.Snapshot?) -> Unit,
+  ) {
+    gestures.grabAndHold(grab, corner, pastTarget = false) { grabbed ->
+      if (!grabbed) {
+        gestures.releaseHeld { ended(Outcome.HandleLost) }
+        return@grabAndHold
+      }
+      awaitChange(scrolled, maxMs = MAX_PAGE_SETTLE_MS) { landed ->
+        val textless = landed?.takeIf { it.holdsNoText() } ?: run {
+          gestures.releaseHeld { awaitQuiet(observer.latest ?: return@releaseHeld report(landed), 0, report) }
+          return@awaitChange
+        }
+        val caret = locator.adjacentNodeCaret(textless, forward = !forward, oneIn = false)
+        if (caret == null) {
+          Diag.log("  page: the corner left the edge in a node with no text, and no text node is beyond it")
+          gestures.releaseHeld { report(observer.latest) }
+          return@awaitChange
+        }
+        val aim = PointF(handleX(caret.geometry.caretX), caret.geometry.lineBottom + locator.handleDrop)
+        Diag.log(
+          "  page: the corner left the edge in a node with no text (${textless.low()}..${textless.high()}, " +
+            "srcLen=${textless.sourceLength}) — moving on to the text's ${if (forward) "last" else "first"} caret at (${aim.x}, ${aim.y})"
+        )
+        gestureCount++
+        if (!gestures.moveHeld(aim)) {
+          Diag.log("  held: the move onto the text was refused")
+          gestures.releaseHeld { ended(Outcome.HandleLost) }
+          return@awaitChange
+        }
+        awaitChange(textless) { _ ->
+          gestures.releaseHeld { awaitQuiet(observer.latest ?: return@releaseHeld report(null), 0, report) }
+        }
+      }
+    }
+  }
+
+  /**
+   * Whether the edge is in a node that is not text: a link or a figure around an image (no text at
+   * all), or the image itself. Chrome gives an `android.widget.Image` its file name as text when it has
+   * no other, so its length says nothing: on the rig, a bare `<img src="/wordmark.svg">` was announced
+   * `0..0` with `srcLen=8`, while the handset's Wikipedia wordmark had none.
+   */
+  private fun SelectionObserver.Snapshot.holdsNoText(): Boolean =
+    sourceLength <= 0 || runCatching { source?.className?.toString() }.getOrNull() == HandleLocator.IMAGE_CLASS
+
   private class PageStep(
     val outcome: Outcome,
     /** The scroll ran out before its full distance: the page is at the document's end. */
@@ -2520,27 +2585,32 @@ class SelectionDriver(
       } else {
         PointF(grab.x, to)
       }
+      fun report(after: SelectionObserver.Snapshot?) {
+        val outcome = when {
+          after == null -> Outcome.Moved(before.movingOffset(), before.movingOffset())
+          after.isEmpty() -> Outcome.HandleLost
+          else -> {
+            // A page lands wherever the finger stopped, character-granular, so it is no word
+            // boundary. Forget the set's node and record nothing.
+            val crossed = !sameNode(before, after)
+            if (crossed) forgetBoundaries(after)
+            Outcome.Moved(before.movingOffset(), after.movingOffset(), crossed)
+          }
+        }
+        Diag.log("  page: drag to (${target.x}, ${target.y}) -> $outcome announced=${after != null}")
+        onResult(PageStep(outcome, atDocumentEdge))
+      }
       gestureCount++
+      if (atDocumentEdge) {
+        toDocumentEdge(scrolled, grab, target, forward, ended, ::report)
+        return
+      }
       gestures.drag(grab, target, PAGE_DRAG_MS, pastTarget = false) { completed ->
         if (!completed) {
           ended(Outcome.HandleLost)
           return@drag
         }
-        awaitChange(scrolled, maxMs = MAX_PAGE_SETTLE_MS) { after ->
-          val outcome = when {
-            after == null -> Outcome.Moved(before.movingOffset(), before.movingOffset())
-            after.isEmpty() -> Outcome.HandleLost
-            else -> {
-              // A page lands wherever the finger stopped, character-granular, so it is no word
-              // boundary. Forget the set's node and record nothing.
-              val crossed = !sameNode(before, after)
-              if (crossed) forgetBoundaries(after)
-              Outcome.Moved(before.movingOffset(), after.movingOffset(), crossed)
-            }
-          }
-          Diag.log("  page: drag to (${target.x}, ${target.y}) -> $outcome announced=${after != null}")
-          onResult(PageStep(outcome, atDocumentEdge))
-        }
+        awaitChange(scrolled, maxMs = MAX_PAGE_SETTLE_MS, onResult = ::report)
       }
     }
 

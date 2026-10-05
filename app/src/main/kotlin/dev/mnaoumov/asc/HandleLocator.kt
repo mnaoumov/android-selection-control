@@ -340,7 +340,8 @@ class HandleLocator(private val density: () -> Float) {
   /**
    * The first text leaf after [source] in tree order ([forward]), or the last one before it: the
    * next sibling's first leaf, else the parent's next sibling's, and so on up. Visible nodes with
-   * text only, since a node off screen has no handle to drag onto it.
+   * text only, since a node off screen has no handle to drag onto it, and never an image, whatever
+   * text Chrome gives it ([IMAGE_CLASS]).
    */
   private fun adjacentTextLeaf(source: AccessibilityNodeInfo, forward: Boolean): AccessibilityNodeInfo? {
     var node = source
@@ -377,7 +378,8 @@ class HandleLocator(private val density: () -> Float) {
         textLeaf(child, forward, depth - 1)?.let { return it }
       }
     }
-    val hasText = (runCatching { node.text?.length }.getOrNull() ?: 0) > 0
+    val hasText = (runCatching { node.text?.length }.getOrNull() ?: 0) > 0 &&
+      runCatching { node.className?.toString() }.getOrNull() != IMAGE_CLASS
     val bounds = Rect().also { node.getBoundsInScreen(it) }
     return node.takeIf { hasText && !bounds.isEmpty }
   }
@@ -884,6 +886,12 @@ class HandleLocator(private val density: () -> Float) {
   }
 
   companion object {
+    /**
+     * The class Chrome reports for an image. Its text is no text to step through: Chrome names an
+     * `<img>` that has no other name by its file name, `wordmark` for `/wordmark.svg` on the rig.
+     */
+    const val IMAGE_CLASS = "android.widget.Image"
+
     /**
      * Where Chrome's moving handle sits relative to the caret, in dp — the one unit both measured
      * devices agree in.
