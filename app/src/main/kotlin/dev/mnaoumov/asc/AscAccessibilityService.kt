@@ -79,6 +79,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     val debuggable = applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
     observer.forceNoExtendedSelection = debuggable && java.io.File(filesDir, FORCE_NO_EXTENDED_SELECTION).exists()
     if (observer.forceNoExtendedSelection) Diag.log("debug: treating the platform as below 36.1")
+    // Likewise for a node that never answers a per-character ask, which the rig's Chromium answers.
+    locator.forceRefuseCharacterRects = debuggable && java.io.File(filesDir, FORCE_REFUSE_CHARACTER_RECTS).exists()
+    if (locator.forceRefuseCharacterRects) Diag.log("debug: refusing every per-character ask")
 
     driver = SelectionDriver(
       gestures = this,
@@ -319,8 +322,8 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   private fun madeProgress(outcome: Outcome): Boolean = when (outcome) {
     is Outcome.Moved -> outcome.madeProgress()
     is Outcome.Degraded -> true
-    Outcome.NoSelection, Outcome.HandleLost, Outcome.RowUnknown, Outcome.HandleCovered, Outcome.AtFloor,
-    Outcome.EdgeUnknown -> false
+    Outcome.NoSelection, Outcome.HandleLost, Outcome.RowUnknown, Outcome.ColumnUnknown, Outcome.HandleCovered,
+    Outcome.AtFloor, Outcome.EdgeUnknown -> false
   }
 
   /** Whether this press has made the pad transparent to touch, so its end must make it solid again. */
@@ -434,6 +437,8 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     // Deliberately NOT "reselect": nothing was lost and nothing was touched, and the same long-press
     // on the same wrapped paragraph refuses again. Selecting inside ONE line is the thing that works.
     Outcome.RowUnknown -> "this block wraps — select within one line"
+    // Not "reselect" either: nothing was touched, and the same block refuses the same way.
+    Outcome.ColumnUnknown -> "this block won't say where its text ends"
     // Also not "reselect": the selection is untouched. Lower on screen, the toolbar goes above it.
     Outcome.HandleCovered -> "the menu covers the handle — scroll the text lower"
     Outcome.AtFloor -> "one character left — the app keeps it"
@@ -630,6 +635,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
     /** The debug marker file under `filesDir` that forces the 36.1 gate off: see [onServiceConnected]. */
     const val FORCE_NO_EXTENDED_SELECTION = "force-no-extended-selection"
+
+    /** The debug marker file that makes every per-character ask refuse: see [onServiceConnected]. */
+    const val FORCE_REFUSE_CHARACTER_RECTS = "force-refuse-character-rects"
 
     /** How far [contentBand] walks up from a source node looking for the page's scroller. */
     const val MAX_ANCESTORS = 64

@@ -47,6 +47,17 @@ sealed interface Outcome {
   data object RowUnknown : Outcome
 
   /**
+   * The moving edge's COLUMN cannot be placed, so nothing was touched.
+   *
+   * The platform refused the character's rectangle, and the box the average would be taken across is
+   * wider than its text, which the toolbar's centre shows (`HandleLocator.averageOutrunsToolbar`).
+   * That is a block-level node, a heading on the handset, whose box is the block's. The aim there was
+   * x 2477 against glyphs ending near 680, and a scan from the toolbar's centre would touch the page
+   * on its first miss. The selection is intact.
+   */
+  data object ColumnUnknown : Outcome
+
+  /**
    * The target app's floating toolbar sits over the handle, so nothing was touched.
    *
    * Chrome puts the toolbar BELOW a selection near the top of the page, and a down there presses a
@@ -255,6 +266,9 @@ class SelectionDriver(
 
   init {
     observer.frame = ::inMovingFrame
+    locator.anchorInSource = { snapshot -> anchorNodeKey != null && nodeKey(snapshot) == anchorNodeKey }
+    locator.toolbarNow = toolbarBounds
+    locator.screenWidthNow = gestures::screenWidth
   }
 
   /**
@@ -2463,7 +2477,7 @@ class SelectionDriver(
     val band = content?.visible ?: Rect(0, 0, gestures.screenWidth(), gestures.screenHeight())
     val located = locator.locate(before, activeEdge, toolbarCentre()) ?: run {
       Diag.log("  page: the moving handle cannot be located")
-      ended(Outcome.HandleLost)
+      ended(unlocatedOutcome(before))
       return
     }
     val handle = uncovered(located, ended) ?: return
@@ -2488,7 +2502,7 @@ class SelectionDriver(
     fun dragAcross(scrolled: SelectionObserver.Snapshot, atDocumentEdge: Boolean) {
       val relocated = locator.locate(scrolled, activeEdge, toolbarCentre()) ?: run {
         Diag.log("  page: the handle cannot be located after the scroll")
-        ended(Outcome.HandleLost)
+        ended(unlocatedOutcome(scrolled))
         return
       }
       val grab = uncovered(relocated, ended) ?: return
@@ -2681,6 +2695,13 @@ class SelectionDriver(
    * Deliberately narrow. A probe that misses lands on the page and **destroys the selection**, so
    * this gets few attempts and is only reached when no arithmetic applies.
    */
+  /**
+   * Why a page step could not locate its handle, for a path that does not acquire: a box wider than
+   * its text says so ([Outcome.ColumnUnknown]), and anything else is the old [Outcome.HandleLost].
+   */
+  private fun unlocatedOutcome(snapshot: SelectionObserver.Snapshot): Outcome =
+    if (locator.averageOutrunsToolbar(snapshot, activeEdge, toolbarCentre())) Outcome.ColumnUnknown else Outcome.HandleLost
+
   private fun acquireThenRetry(command: PadCommand, onDone: (Outcome) -> Unit, probe: Int = 1) {
     val centre = toolbarCentre()
     val snapshot = observer.latestWithFreshBounds()
@@ -2706,6 +2727,13 @@ class SelectionDriver(
           "refusing to probe rather than risk the selection"
       )
       onDone(Outcome.RowUnknown)
+      return
+    }
+    // The row is known, but the column the scan would hunt along was just ruled out by the same
+    // toolbar it would hunt from: the box is wider than its text. See [Outcome.ColumnUnknown].
+    if (locator.averageOutrunsToolbar(snapshot, activeEdge, centre)) {
+      Diag.log("  acquire: the source box is wider than its text and will not measure — refusing to probe")
+      onDone(Outcome.ColumnUnknown)
       return
     }
     val ring = (probe + 1) / 2

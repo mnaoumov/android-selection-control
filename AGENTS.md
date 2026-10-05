@@ -16,9 +16,9 @@ Open work is split by shape, one item each in that same store, and named there r
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
 (two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, though the block step that follows it is not yet; the toolbar under a paged handle is fixed and confirmed on the phone, which
 found four more under *Page, start and end*: a collapsing top bar read as the document's edge, `start` ending
-blind on an image, a START handle at the left margin, and a swipe that can open a heads-up notification; the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone); a
-heading's block-wide box taken for its text (under *Gotchas*, beside the grab that closed the pad through its own
-`✕`, which is fixed on the rig); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
+blind on an image, a START handle at the left margin, and a swipe that can open a heads-up notification; the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
+heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and not yet confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
+`✕` is fixed on the rig); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
 A handle inside a **wrapped** node was on that list and is no longer: the row it needs comes from the
 platform's own per-character rectangle, which Chrome does supply for page content once the node has
@@ -289,7 +289,8 @@ body paragraph went `61 -> 62` in 1 gesture and 0.71 s. The flag was put back to
 
 **That same sitting found two defects.** From the heading's last word, `editor`, both
 per-character asks were refused, so the END handle was placed by the node's average across the heading's
-block-wide box, at x 2477 against glyphs ending near x 680. That aim is still open. It was also inside
+block-wide box, at x 2477 against glyphs ending near x 680. That press now refuses (*A block-level
+node's `getBoundsInScreen`* below). The grab was also inside
 the pad's `✕`. The pad's pass-through relayout was logged 1 ms after the grab was dispatched, and the pad
 window was destroyed 40 ms after the press ended. The pad stayed gone until a rebind. That half is fixed
 (the entry after *A press can carry the handle UNDER the pad*).
@@ -866,6 +867,44 @@ block step that follows is not yet confirmed on the phone.
 **A block-level node's `getBoundsInScreen` is the block box, not the text box.** Long-pressing the centre
 of an `h1` whose bounds run 56..1218 but whose glyphs end at 547 hits empty space and selects nothing.
 Inline nodes hug their text; block nodes do not.
+
+**A selection inside such a node can be announced from the block, and its average then aims nowhere
+near the handle.** On the handset (Chrome 154, the extended-selection flag Disabled), `editor` in
+Wikipedia's `Text editor` heading was announced from an 11-character node with the heading's
+block-wide box. Both per-character asks were refused, and the END was aimed at x 2477 against glyphs
+ending near 680. The rig shows the box but not the refusal. On a served
+`<h1><span>Text editor</span></h1>` (`28px serif`, `padding-top: 300px`), Chrome 143's node hugs its
+text (`average=322.0`), and Chromium 157's has the block's box (`Rect(32, 913 - 688, 979)`, against
+glyphs ending at 322). Both answer the second ask, so the box is never used there.
+
+**So where the platform refuses, the toolbar decides whether the average may be used**
+(`HandleLocator.averageOutrunsToolbar`). The toolbar's centre tracks the selection's, and the other
+edge is inside the box, so `END <= 2·centre − box.left` and `START >= 2·centre − box.right`. Where the
+fresh selection was made in this node, both edges are tested, because a box that misplaces one
+misplaces both. An average outside those bounds, beyond 24 dp of slack, refuses with nothing touched.
+The press ends `ColumnUnknown` ("this block won't say where its text ends"), because the acquire scan
+would probe along the row from the toolbar, and a missed probe is a touch on the page. A toolbar
+within 24 dp of a screen edge has been pushed in and its centre moved, so the bound it tightens is
+dropped. On `editor` it sat at x 32, centred at 311 against the selection's ~241. The tighter rule,
+that each edge is on its own side of the centre, is not used for the same reason. Measured
+2026-10-05 on the rig with Chromium 157 and the marker file below, Chromium force-stopped before
+each run:
+
+| press | before | after |
+|---|---|---|
+| `char →` from `editor` (`5..11`) | grab at x 706 against a handle drawn at ~344; `HandleLost` in 505 ms, 1 gesture | `ColumnUnknown` in 28-45 ms, 0 gestures, 3 runs of 3 |
+| `word →`, `⤓ end` | not measured | `ColumnUnknown`, 0 gestures |
+| `⇄ swap`, `char ←` (the START) | grab at x 312, which is the END handle: shrank to `5..9`, then `HandleLost` | `ColumnUnknown` in 28 ms, 0 gestures |
+
+The controls are unchanged. Chrome 143 with the marker, whose box hugs: `char ←`, `char →`, and
+after a swap `char ←`, each one character in 1 gesture. `Text` at the left margin, `char →` exact.
+Chromium 157 without the marker: `char ←`, `char →`, `⇄ swap`, `char ←`, `char →`, each exact in 1
+gesture. The debug target's `TextView` with the marker: `char →`, `char ←`, `word →` (19 -> 25), each
+exact. With no toolbar on screen there is no bound and the average is used as before.
+
+**`adb shell run-as dev.mnaoumov.asc touch files/force-refuse-character-rects`, then `rig.ps1 rebind`,
+makes every per-character ask refuse** on a debuggable build (it logs `debug: refusing every
+per-character ask`), which is how the rig reproduces that phone case. `rm` it and rebind to undo.
 
 **Long-pressing a link opens Chrome's link context menu**, not a selection.
 
