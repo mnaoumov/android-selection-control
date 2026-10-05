@@ -15,7 +15,9 @@ does, and the held-pointer fix for everything a continued stroke will and will n
 Open work is split by shape, one item each in that same store, and named there rather than here:
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
 (two block-step cases, under *Gotchas*, both fixed on the rig and waiting for the phone; the toolbar under a paged handle is fixed on the
-emulator and waits only for the phone to confirm it, under *Page, start and end*; the blind pad on Android 36.0 now names the Chrome flag that fixes it); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
+emulator and waits only for the phone to confirm it, under *Page, start and end*; the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone); a
+grab that lands on the pad's own `✕` and closes it, and a heading's block-wide box taken for its text (both under
+*Gotchas*); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
 A handle inside a **wrapped** node was on that list and is no longer: the row it needs comes from the
 platform's own per-character rectangle, which Chrome does supply for page content once the node has
@@ -275,6 +277,20 @@ and the press logged `node rung: no page node reports a range either`, on four p
 long-presses; the screenshot showed the flag message. Without it, the same page stepped `19 -> 20 -> 21`
 exactly. A run straight after a reinstall announced nothing at all and got the old "re-select" message,
 which is the pre-existing no-event case, not this one.
+
+**The handset confirms it (2026-10-05, OnePlus 15, 36.0, Chrome 154.0.8037.92, flag at Default).** A
+long-press on `editor` in `en.wikipedia.org/wiki/Text_editor`'s heading logged `selection announced from
+Chrome's frame root, and below 36.1 nothing carries its range`. `→ char` then logged `node rung: no page
+node reports a range either`, and the status line read `Chrome hides it: disable flag "extended selection"`.
+So the root's class on the phone is the one `isBlinkRoot` expects. With the flag Disabled and Chrome
+relaunched, the pad saw the selection again (`seeded from a fresh selection`), and `→ char` from `for` in a
+body paragraph went `61 -> 62` in 1 gesture and 0.71 s. The flag was put back to Default afterwards.
+
+**That same sitting found two defects, both open.** From the heading's last word, `editor`, both
+per-character asks were refused, so the END handle was placed by the node's average across the heading's
+block-wide box, at x 2477 against glyphs ending near x 680. That aim was also inside the pad's `✕`. The
+pad's pass-through relayout was logged 1 ms after the grab was dispatched, and the pad window was destroyed
+40 ms after the press ended. The pad stayed gone until a rebind.
 
 **`from`/`to` are ANCHOR and FOCUS, not min and max.** Drag the *start* handle below the anchor and they
 arrive reversed — `from=27 to=19`. Taking `from` as the left edge therefore derives the RIGHT handle's
