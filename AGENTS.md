@@ -14,8 +14,8 @@ does, and the held-pointer fix for everything a continued stroke will and will n
 
 Open work is split by shape, one item each in that same store, and named there rather than here:
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
-(the toolbar under a paged handle and two block-step cases, all under *Gotchas* and *Page, start
-and end*; the blind pad on Android 36.0 now names the Chrome flag that fixes it); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
+(two block-step cases, under *Gotchas*; the toolbar under a paged handle is fixed on the
+emulator and waits only for the phone to confirm it, under *Page, start and end*; the blind pad on Android 36.0 now names the Chrome flag that fixes it); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
 A handle inside a **wrapped** node was on that list and is no longer: the row it needs comes from the
 platform's own per-character rectangle, which Chrome does supply for page content once the node has
@@ -1140,7 +1140,7 @@ in the half of the band the handle is not in, a quarter of the way in. It never 
 of the screen's top or bottom. Where nothing scrolls (the debug target's `TextView`), there is no
 swipe: `page ↓` there went 11 → 30 in 1 gesture, and `page ↑` on the START edge 6 → 0.
 
-**On the handset, the toolbar ends a page run after one or two pages.** Measured 2026-10-05 on the
+**On the handset, the toolbar used to end a page run after one or two pages.** Measured 2026-10-05 on the
 OnePlus 15 (portrait, Chrome 154 with the extended-selection flag Disabled) against
 `en.m.wikipedia.org/wiki/Text_editor`. The band is `[0,337][1272,2180]`.
 
@@ -1153,11 +1153,40 @@ OnePlus 15 (portrait, Chrome 154 with the extended-selection flag Disabled) agai
 | `⇄ swap`, `⤒ start` from `software` | the page's first selectable text, the Wikipedia wordmark | 3.1 s, 4 |
 | `⇄ swap` on a selection spanning paragraphs, then `← char` and `⇞ page` | both refused, "can't see the end — nudge its handle once", nothing touched | — |
 
-The refusal has one cause. After the drag, the handle sits at y ≈ 2033..2055, just above the pad.
+The refusal had one cause. After the drag, the handle sits at y ≈ 2033..2055, just above the pad.
 Chrome puts its toolbar below the selection, in that strip. On the phone the toolbar is wider than
-half the screen, so it covers both swipe columns (25 % and 75 %), and `swipeStart` tries only one y.
-The rig's toolbar never covered both. `start`'s last drag, to the screen's corner, reported `HandleLost`
-on the wordmark, and the pad then could not see the selection, although Chrome still showed it.
+half the screen, so it covers both swipe columns (25 % and 75 %), and `swipeStart` tried only one y.
+The rig's toolbar never covered both. The `handset` profile reproduces it. On a served page of 400
+one-line rows, Chrome's `Copy / Share / Select all / ⋮` toolbar measured `(121, 2058)-(971, 2226)`,
+and the 75 % column is x 954.
+
+**So when the toolbar covers both columns, the swipe starts beside it, on the band's side.** That
+point is just inside the toolbar's nearer edge, in the column away from the handle only, because it
+is on the handle's own row. It is used only when the swipe's end is still on the screen. Measured
+2026-10-05 on the `handset` profile, Chrome force-stopped each run: `page ↓` ×4 from `bravo` moved
+one band each, 1.8-1.9 s and 2 gestures. Presses 3 and 4 took the fallback (`scrolled 1655 of 1662`).
+`end` went 22 pages to row 400 in 42.6 s and 44 gestures, the fallback included. Before, it stopped
+on page 3.
+
+**The swipe also waits for the toolbar, because a swipe placed while it is down lands on it.**
+Chrome takes the toolbar down for the drag and puts it back after, below the handle, where the swipe
+starts. Inside an `end` sweep the next page's swipe was placed in that gap. On the `handset` profile
+it logged `toolbar=null` and `scrolled 0 of 1638`. That reads as the document's edge, so the corner
+drag ended the sweep on page 3 with the selection at the screen's corner. Two `page ↓` runs in the
+same sitting failed the same way. `pageStep` now places the swipe after
+`awaitSelectionOnScreen`. Every measured wait was 25-225 ms.
+
+**`start`'s last drag lands on the first node's offset 0, and Chrome announces that as `0..0`.**
+The node does not hold the anchor, so Chrome announces it as `0..focus`, and the focus is 0. The pad
+read that as an empty selection. The step ended `HandleLost`, and every press after it said "the pad
+cannot see a selection" while Chrome still showed one. That was the wordmark on the phone.
+`inMovingFrame` now reads a START-edge `0..0` in a node without the anchor as `0..length`. A caret
+that a tap leaves on a node's first character looks the same. So `perform` believes that reading
+only while the toolbar is up. Measured 2026-10-05, both profiles: `start` from a fresh selection after
+`⇄ swap` ended `Moved(…, 0)` on row 001, and `char →` then went `0 -> 1`, `1 -> 2` and back, 1
+gesture each. A tap onto row 005's first character, then `char →`, logged `a caret on a node's first
+character and no toolbar` and touched nothing. The rig's `page ↓` ×3 and `end` (26 pages to row 400)
+were unchanged.
 
 **The anchor scrolling off screen costs nothing.** The announcing node follows the moving edge, so
 the moving handle is always the one on screen. The pad never needs to locate the other one.
