@@ -14,7 +14,8 @@ does, and the held-pointer fix for everything a continued stroke will and will n
 
 Open work is split by shape, one item each in that same store, and named there rather than here:
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
-(two block-step cases, under *Gotchas*; the toolbar under a paged handle is fixed on the
+(two block-step cases, under *Gotchas*, of which the step into a row of several inline nodes is fixed
+on the rig and waits for the phone; the toolbar under a paged handle is fixed on the
 emulator and waits only for the phone to confirm it, under *Page, start and end*; the blind pad on Android 36.0 now names the Chrome flag that fixes it); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
 A handle inside a **wrapped** node was on that list and is no longer: the row it needs comes from the
@@ -770,6 +771,30 @@ under the handle's column, and the slide aimed at that node's offset 1. The sele
 `As source code ` rather than by `A`. `char ←` from there (`1 -> 11`, the end of `source code`) and
 `word →` (`11 -> 3`, onto ` is`) were each exact in 1 gesture. The rig's rows were one node each, so
 the rig could not show this.
+
+**So the slide aims at the NEIGHBOUR's caret unless the move landed in the neighbour, and a landing in
+any other node of the row is moved onto it.** The tree walk's answer carries the neighbour's length and
+box (`NeighbourCaret`). A landing is that node when the length matches and the columns overlap. The row is
+not compared, because the walk read row 002's `<p>` at y 479..517 and the announcement from inside it
+gave y 525..563 for the same 33 characters. `crossedTarget` counts one character into whatever node the
+edge is in, so a landing in the wrong node used to pass as the step. Now `intoTheNeighbour` moves the held
+pointer by the distance between the landed handle and the neighbour's, up to twice, and lets go if the
+edge is still elsewhere. Measured 2026-10-05 on the rig, Chrome force-stopped before each run, a served
+page with `<p>As <a>source code</a> is text, …</p>` and `<p>Al <a>link</a> then more text after it.</p>`
+under one-line rows:
+
+| press | old build | new build |
+|---|---|---|
+| `char →` from `delta` into `As …`, 3 runs | slid to x 278 (` is text`'s offset 1) twice → `0..4` of ` is text`; once `0..3` of `As ` | `0..3` of `As `, walked back to `0..1`, 8 runs of 8, 3 gestures, ~1.05 s |
+| `char →` from `delta` into `Al …`, 3 runs | slid to x 146 twice → `0..1` of ` then …`, i.e. grew by `Al link ` | `0..1` of `Al `, 6 runs of 6, 2 gestures, ~1.0 s |
+| `char ←` back out of `As ` / `Al ` | not measured | `1 -> 33` of the row above, 9 of 9 |
+| one-line rows, `char →`, `char ←` ×2, `word →` | as before | `33 -> 1 -> 33 -> 32 -> 33`, 3 runs of 3 |
+| `word →` ×2 from `delta` into `As …` | not measured | `33 -> 3` (all of `As `), then `3 -> 6` |
+
+The correction move itself fired only in one run of a build whose node test also compared rows and so
+misread row 002 as another node: from `0..2` it moved the pointer 18 px and landed on `0..1`, the
+target, in one move. No landing in a wrong node has occurred with the final test, so that branch is
+unproven against a real wrong node.
 
 **`word →` from the word before a trailing `.` does not reach the block step.** From `cost` (`138..142`),
 the first grow landed on 143, the block's last caret. It was read as Chrome's next-word-start hold, and

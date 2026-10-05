@@ -1992,7 +1992,7 @@ class SelectionDriver(
    * A character step that leaves its block, and where its handle goes. [growing] says which way
    * round the two moves are made: see [heldCharacterStep].
    */
-  private class BlockStep(val aim: PointF, val growing: Boolean)
+  private class BlockStep(val aim: PointF, val growing: Boolean, val neighbour: NeighbourCaret)
 
   /**
    * The step out of the edge's block into the neighbouring one, or null when the edge is not on the
@@ -2027,7 +2027,8 @@ class SelectionDriver(
       else -> moving == if (forward) length - 1 else 1
     }
     if (!leaves) return null
-    val caret = locator.adjacentNodeCaret(snapshot, forward, oneIn = growing) ?: return null
+    val neighbour = locator.adjacentNodeCaret(snapshot, forward, oneIn = growing) ?: return null
+    val caret = neighbour.geometry
     val row = handle.y - locator.handleDrop
     if (kotlin.math.abs(caret.lineBottom - row) <= HandleLocator.LIE_TOLERANCE) return null
     val aim = PointF(handleX(caret.caretX), caret.lineBottom + locator.handleDrop)
@@ -2035,7 +2036,7 @@ class SelectionDriver(
       "  next block: the edge is on its block's ${if (forward) "last" else "first"} caret — " +
         "${if (growing) "growing" else "shrinking"} into the ${if (forward) "next" else "previous"} one at (${aim.x}, ${aim.y})"
     )
-    return BlockStep(aim, growing)
+    return BlockStep(aim, growing, neighbour)
   }
 
   /** The active handle's x for a caret at [caretX]: Chrome draws the END handle right of it, START left. */
@@ -2044,11 +2045,20 @@ class SelectionDriver(
 
   /**
    * The second move of a [BlockStep]. A grow is on the new block's row already and slides along it
-   * onto the caret one character in, aimed by the landing's own geometry where it measures, since
-   * the block's box is the `<p>`'s and wider than its text. A shrink has travelled along its own row
-   * already and goes straight onto the other row. Then the held correction finishes, counted in the
-   * new block's frame ([crossedTarget]). A landing still in the old block, or empty, is not a step
-   * into the next one, so the press lets go and reports what is left.
+   * onto the caret one character in, aimed by the landing's own geometry where the landing is the
+   * neighbour's node and measures, since the block's box is the `<p>`'s and wider than its text. A
+   * shrink has travelled along its own row already and goes straight onto the other row. A landing
+   * in some other node is corrected onto the neighbour ([intoTheNeighbour]), and then the held
+   * correction finishes, counted in the new block's frame ([crossedTarget]). A landing still in the
+   * old block, or empty, is not a step into the next one, so the press lets go and reports what is left.
+   *
+   * **On a real article the next block's first row is several nodes**, and the straight-down move
+   * lands in whichever one is under the handle's column. Measured 2026-10-05 on the handset,
+   * Wikipedia's `Text_editor`: the next paragraph opens `As ` (3), the link `source code` (11), then
+   * ` is text, …` (58). The move landed in the 58-character node, the slide was re-aimed at ITS
+   * offset 1, and the selection grew by `As source code ` rather than by `A`. The neighbour's caret
+   * had been right all along, at x 82.7. So the landing's geometry is used only when it is the
+   * neighbour's node, and otherwise the slide goes to the neighbour's caret.
    */
   private fun intoTheNextBlock(
     step: BlockStep,
@@ -2065,12 +2075,19 @@ class SelectionDriver(
       releaseThenReport(start, first.movingOffset(), onDone)
       return
     }
-    val aim = if (step.growing) {
-      val target = crossedTarget(before, first, command, start)
-      val caret = target?.let { locator.characterGeometry(first, activeEdge, crossingOf(command), it) }
-      caret?.let { PointF(handleX(it.caretX), step.aim.y) } ?: step.aim
-    } else {
-      step.aim
+    val aim = when {
+      !step.growing -> step.aim
+      !step.neighbour.holds(first) -> step.aim.also {
+        Diag.log(
+          "  next block: the move onto its row landed in another node (${first.sourceLength} chars at " +
+            "${first.bounds}) — sliding to the neighbour's caret"
+        )
+      }
+      else -> {
+        val target = crossedTarget(before, first, command, start)
+        val caret = target?.let { locator.characterGeometry(first, activeEdge, crossingOf(command), it) }
+        caret?.let { PointF(handleX(it.caretX), step.aim.y) } ?: step.aim
+      }
     }
     gestureCount++
     if (!gestures.moveHeld(aim)) {
@@ -2084,17 +2101,71 @@ class SelectionDriver(
         "  next block: first move -> ${first.low()}..${first.high()}, then to (${aim.x}, ${aim.y}) -> " +
           "${landed.low()}..${landed.high()}"
       )
-      if (!crossedNodes(before, landed) || landed.isEmpty()) {
-        Diag.log("  next block: not in the next block with a character selected — letting go")
-        releaseThenReport(start, landed.movingOffset(), onDone)
-        return@awaitChange
-      }
-      syncBoundaryContext(landed)
-      heldCorrect(targetOffset(before, landed, command, start), start, command, { outcome ->
-        onDone(if (outcome is Outcome.Moved) outcome.copy(crossedNode = true) else outcome)
-      }, frame = landed)
+      intoTheNeighbour(step, before, landed, aim, start, command, onDone)
     }
   }
+
+  /**
+   * The end of a [BlockStep]: with the edge in the neighbour's node, the held correction; with it in
+   * another node of the same row, a held move by the distance between the two, which on that row is a
+   * shrink and character-granular. That distance is the landed handle against the neighbour's, both
+   * located from their own nodes, so the lead a shrink keeps over the finger moves with it.
+   *
+   * Measured 2026-10-05 on the rig, a served `<p>As <a>source code</a> is text, …</p>` under a
+   * one-line row: the move onto the row landed in ` is text` at `0..23`, and the slide to the
+   * neighbour's caret landed on `0..1` of `source code` once and `0..3` of `As ` twice, cold each
+   * time. The first was taken as the step, because [crossedTarget] counts one character into
+   * WHATEVER node the edge is in.
+   */
+  private fun intoTheNeighbour(
+    step: BlockStep,
+    before: SelectionObserver.Snapshot,
+    landed: SelectionObserver.Snapshot,
+    pointer: PointF,
+    start: Int,
+    command: PadCommand,
+    onDone: (Outcome) -> Unit,
+    attempt: Int = 0,
+  ) {
+    if (!crossedNodes(before, landed) || landed.isEmpty()) {
+      Diag.log("  next block: not in the next block with a character selected — letting go")
+      releaseThenReport(start, landed.movingOffset(), onDone)
+      return
+    }
+    if (!step.neighbour.holds(landed)) {
+      val located = locator.locate(landed, activeEdge, null)
+      if (located == null || attempt >= MAX_NEIGHBOUR_CORRECTIONS) {
+        Diag.log(
+          "  next block: in another node (${landed.sourceLength} chars at ${landed.bounds}), " +
+            "not the neighbour (${step.neighbour.length} chars at ${step.neighbour.bounds}) — letting go"
+        )
+        releaseThenReport(start, landed.movingOffset(), onDone)
+        return
+      }
+      val next = PointF(pointer.x + step.aim.x - located.x, pointer.y)
+      Diag.log(
+        "  next block: in another node (${landed.sourceLength} chars), handle at ${located.x} against the " +
+          "neighbour's ${step.aim.x} — moving the pointer to ${next.x}"
+      )
+      gestureCount++
+      if (!gestures.moveHeld(next)) {
+        Diag.log("  held: the move onto the neighbour was refused")
+        gestures.releaseHeld { onDone(Outcome.HandleLost) }
+        return
+      }
+      awaitChange(landed) { after ->
+        val now = after ?: landed
+        Diag.log("  next block: correction ${attempt + 1} -> ${now.sourceLength} chars, ${now.low()}..${now.high()}")
+        intoTheNeighbour(step, before, now, next, start, command, onDone, attempt + 1)
+      }
+      return
+    }
+    syncBoundaryContext(landed)
+    heldCorrect(targetOffset(before, landed, command, start), start, command, { outcome ->
+      onDone(if (outcome is Outcome.Moved) outcome.copy(crossedNode = true) else outcome)
+    }, frame = landed)
+  }
+
 
   /**
    * A `word` grow from the very end of a block: step one character into the next block, then grow
@@ -2908,6 +2979,12 @@ class SelectionDriver(
      * something is wrong that a fourth will not fix, and each one costs a settle.
      */
     const val MAX_HELD_CORRECTIONS = 3
+
+    /**
+     * How many held moves [intoTheNeighbour] makes to carry a block step's edge out of the wrong
+     * node of the next block's row before it lets go and reports where the edge is.
+     */
+    const val MAX_NEIGHBOUR_CORRECTIONS = 2
 
     /**
      * How far [pullBackThenRelease] moves the held pointer back towards the anchor before a grow
