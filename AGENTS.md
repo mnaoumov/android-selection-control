@@ -14,8 +14,7 @@ does, and the held-pointer fix for everything a continued stroke will and will n
 
 Open work is split by shape, one item each in that same store, and named there rather than here:
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
-(two block-step cases, under *Gotchas*, of which the step into a row of several inline nodes is fixed
-on the rig and waits for the phone; the toolbar under a paged handle is fixed on the
+(two block-step cases, under *Gotchas*, both fixed on the rig and waiting for the phone; the toolbar under a paged handle is fixed on the
 emulator and waits only for the phone to confirm it, under *Page, start and end*; the blind pad on Android 36.0 now names the Chrome flag that fixes it); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
 A handle inside a **wrapped** node was on that list and is no longer: the row it needs comes from the
@@ -796,9 +795,21 @@ misread row 002 as another node: from `0..2` it moved the pointer 18 px and land
 target, in one move. No landing in a wrong node has occurred with the final test, so that branch is
 unproven against a real wrong node.
 
-**`word →` from the word before a trailing `.` does not reach the block step.** From `cost` (`138..142`),
-the first grow landed on 143, the block's last caret. It was read as Chrome's next-word-start hold, and
-eleven more reaches along the row announced nothing: `Moved(142, 143)` in 4.8 s and 12 gestures.
+**`word →` from the word before a block's trailing `.` lands on the block's last caret, and that is
+not Chrome's next-word-start hold.** Measured 2026-10-05 on the handset, Wikipedia's `Text_editor`: from
+`cost` (`138..142`) the first grow landed on 143, past the period. `landedOnNextWordStart` read it as the
+hold, and eleven more reaches along the row announced nothing: `Moved(142, 143)` in 4.8 s and 12 gestures.
+Along that row there is no next word. So when a one-character landing from a known boundary is a caret
+`blockStep` would leave from (`SelectionDriver.endsItsBlock`), the press ends there, and the next `word →`
+takes the block step. An inline node's end is not caught, because its neighbour is on the same row and
+`blockStep` declines. Measured on the rig, Chrome force-stopped before each run, a served page whose
+row 003 ends `charlie cost.`:
+
+| press | old build | new build |
+|---|---|---|
+| `word →` from `cost` (`28..32` of 33) | `32 -> 33` in 5.5 s, 12 gestures | `32 -> 33` in 0.35–0.41 s, 1 gesture, 3 runs of 3 |
+| `word →` again | not measured | `33 -> 4` of row 004 (`row `), 1.9 s, 4 gestures, 3 of 3 |
+| control: `word →` ×2 from `alpha` on the same row | not measured | `13 -> 19`, then `19 -> 20` read as the hold and escalated on to 27, as before |
 
 **A block-level node's `getBoundsInScreen` is the block box, not the text box.** Long-pressing the centre
 of an `h1` whose bounds run 56..1218 but whose glyphs end at 547 hits empty space and selects nothing.
