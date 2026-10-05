@@ -14,8 +14,9 @@ does, and the held-pointer fix for everything a continued stroke will and will n
 
 Open work is split by shape, one item each in that same store, and named there rather than here:
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
-(two block-step cases, under *Gotchas*, both fixed on the rig and waiting for the phone; the toolbar under a paged handle is fixed on the
-emulator and waits only for the phone to confirm it, under *Page, start and end*; the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone); a
+(two block-step cases, under *Gotchas*, both fixed on the rig and waiting for the phone; the toolbar under a paged handle is fixed and confirmed on the phone, which
+found four more under *Page, start and end*: a collapsing top bar read as the document's edge, `start` ending
+blind on an image, a START handle at the left margin, and a swipe that can open a heads-up notification; the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone); a
 grab that lands on the pad's own `✕` and closes it, and a heading's block-wide box taken for its text (both under
 *Gotchas*); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
@@ -1239,6 +1240,35 @@ only while the toolbar is up. Measured 2026-10-05, both profiles: `start` from a
 gesture each. A tap onto row 005's first character, then `char →`, logged `a caret on a node's first
 character and no toolbar` and touched nothing. The rig's `page ↓` ×3 and `end` (26 pages to row 400)
 were unchanged.
+
+**The phone confirms the toolbar fallback, and finds four defects the rig did not show** (2026-10-05,
+OnePlus 15, Chrome 154.0.8037.92 with the extended-selection flag Disabled,
+`en.m.wikipedia.org/wiki/Text_editor`). The mobile skin collapses every section after the lead, so
+expand a few before measuring. Otherwise the page ends after two bands and every later press is
+the document's real edge.
+
+| press | result |
+|---|---|
+| `page ↓` ×3 from `interactive` | one band each, 1.58–1.59 s and 2 gestures; presses 2 and 3 logged `the toolbar Rect(56, 2136 - 1114, 2290) covers both columns; starting the scroll at (318.0, 2111.5)` |
+| the fourth `page ↓`, and `end`'s fourth page | `scrolled 1382 of 1537 — the document's edge` (1540 for `end`), mid-article, then the corner drag |
+| `⇄ swap`, `⤒ start` from `interactive` | the wordmark, `Moved(4, 0)` in 1.58 s and 2 gestures |
+| `→ char` after that | `nothing announced — the pad cannot see a selection` |
+| `⤒ start` from `Rich`, the first word of its line | the grab at x 24.5 announced nothing, `Moved(0, 0)` |
+
+- **A collapsing top bar reads as the document's edge.** The fourth swipe hid Chrome's omnibox (the
+ band's top went from 337 to 141), and the scroll came up about 158 px short, against the usual
+ 31–35 px. The same collapse, landing after the bounds were re-read, made an earlier first press's
+ grab miss by the omnibox's 196 px.
+- **The wordmark is an `android.widget.Image` with no text**, so its `0..0` comes from a node of length 0, and
+ `inMovingFrame`'s rewrite (above) skips any snapshot with `sourceLength <= 0`. Row 001 on the served
+ page was text, which is why the profile passed.
+- **A START handle at the left margin is not grabbed**, most likely because the touch-down falls in
+ the system's back-gesture zone.
+- **An upward page swipe starts at y 361**, where heads-up notifications appear. Straight after one
+ `start` press, a WhatsApp chat was in the foreground, with no real finger on the screen.
+
+The system also rebound the service once in the sitting, with no crash (the pad window was destroyed
+and re-added 1.3 s later), and that dropped the pad's view of the selection.
 
 **The anchor scrolling off screen costs nothing.** The announcing node follows the moving edge, so
 the moving handle is always the one on screen. The pad never needs to locate the other one.
