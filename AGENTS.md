@@ -15,7 +15,7 @@ does, and the held-pointer fix for everything a continued stroke will and will n
 Open work is split by shape, one item each in that same store, and named there rather than here:
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
 (two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, though the block step that follows it is not yet; the toolbar under a paged handle is fixed and confirmed on the phone, which
-found four more under *Page, start and end*: a collapsing top bar read as the document's edge, `start` ending
+found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse, and not yet confirmed on the phone), `start` ending
 blind on an image, a START handle at the left margin, and a swipe that can open a heads-up notification; the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
 heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and not yet confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
 `✕` is fixed on the rig); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
@@ -1340,6 +1340,18 @@ the document's real edge.
  the system's back-gesture zone.
 - **An upward page swipe starts at y 361**, where heads-up notifications appear. Straight after one
  `start` press, a WhatsApp chat was in the foreground, with no real finger on the screen.
+
+**So a page step forgives a shortfall that the band's own move explains, and settles the band as well
+as the node.** `pageStep` re-reads the content band after the scroll, and the document's edge now needs
+a shortfall of more than a line PLUS however far the band's top and bottom moved. For the case above
+that is 155 px against 98 + 196, so not the edge. A real edge hidden behind a collapse shows up on the
+next page, which then scrolls nothing. `awaitBoundsSettled` compares the band along with the node's
+bounds, so a settle cannot end while the controls are still sliding. And the grab re-reads the bounds
+after the toolbar and the handle fade; when they moved since the settle, it settles again before it
+judges or grabs (`the page moved after the scroll settled`). The rig's Chrome never hides its top
+controls on these swipes (the band's top stayed at 313 on every page), so what was measured there
+(2026-10-05) is only that nothing else changed: `page ↓` ×4 from `bravo` moved one band each in
+1.7 s and 2 gestures, and `end` ran 18 pages to row 400 and found the edge (`scrolled 344 of 710`).
 
 The system also rebound the service once in the sitting, with no crash (the pad window was destroyed
 and re-added 1.3 s later), and that dropped the pad's view of the selection.
