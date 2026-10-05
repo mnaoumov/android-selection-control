@@ -17,8 +17,8 @@ locating a handle that the aimed-at drop misses; the defects the handset pass of
 (two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, though the block step that follows it is not yet; the toolbar under a paged handle is fixed and confirmed on the phone, which
 found four more under *Page, start and end*: a collapsing top bar read as the document's edge, `start` ending
 blind on an image, a START handle at the left margin, and a swipe that can open a heads-up notification; the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone); a
-grab that lands on the pad's own `✕` and closes it, and a heading's block-wide box taken for its text (both under
-*Gotchas*); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
+heading's block-wide box taken for its text (under *Gotchas*, beside the grab that closed the pad through its own
+`✕`, which is fixed on the rig); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
 A handle inside a **wrapped** node was on that list and is no longer: the row it needs comes from the
 platform's own per-character rectangle, which Chrome does supply for page content once the node has
@@ -287,11 +287,12 @@ So the root's class on the phone is the one `isBlinkRoot` expects. With the flag
 relaunched, the pad saw the selection again (`seeded from a fresh selection`), and `→ char` from `for` in a
 body paragraph went `61 -> 62` in 1 gesture and 0.71 s. The flag was put back to Default afterwards.
 
-**That same sitting found two defects, both open.** From the heading's last word, `editor`, both
+**That same sitting found two defects.** From the heading's last word, `editor`, both
 per-character asks were refused, so the END handle was placed by the node's average across the heading's
-block-wide box, at x 2477 against glyphs ending near x 680. That aim was also inside the pad's `✕`. The
-pad's pass-through relayout was logged 1 ms after the grab was dispatched, and the pad window was destroyed
-40 ms after the press ended. The pad stayed gone until a rebind.
+block-wide box, at x 2477 against glyphs ending near x 680. That aim is still open. It was also inside
+the pad's `✕`. The pad's pass-through relayout was logged 1 ms after the grab was dispatched, and the pad
+window was destroyed 40 ms after the press ended. The pad stayed gone until a rebind. That half is fixed
+(the entry after *A press can carry the handle UNDER the pad*).
 
 **`from`/`to` are ANCHOR and FOCUS, not min and max.** Drag the *start* handle below the anchor and they
 arrive reversed — `from=27 to=19`. Taking `from` as the left edge therefore derives the RIGHT handle's
@@ -710,6 +711,23 @@ is the last line (y 1487), below the pad. `clearThePadFor` now makes the pad tra
 drag, a hold or a grab is about to touch down inside it, and the press's end makes it solid again.
 After that, three cold runs of three went `62 -> 65` (the end of `on`) in 4 gestures and 1.5 s, and
 the walk back reached 63 on its second try.
+
+**Making the pad transparent is asynchronous, and a touch-down dispatched in the same breath lands on
+the pad.** `updateViewLayout` takes effect on the pad's next traversal, and the input system picks the
+flag up after that. On the handset (2026-10-05) a grab aimed inside the `✕` reached it, and the lift
+clicked it and closed the pad. On the rig a served word was placed so that its END handle sat inside the `✕`
+(aim (610, 1189), `✕` at 528..704 x 1168..1264). There the grab's touch-down reached the pad 2 ms after
+dispatch. The held grab and all six snap-through pushes announced nothing, and a released drag from the
+same pixel afterwards moved the edge: `Moved(19, 20)` in 2.2 s and 8 gestures. Two fixes, and both are needed:
+
+- **The pad's root (`Pad.TouchGate`) swallows every touch while the pad is meant to let touches
+  through**, so a touch that still beats the flag presses nothing and closes nothing. It logs
+  `pad: a touch-down ... swallowed`.
+- **`clearThePadFor` runs the touch-down only once the flag can be relied on**: after two frames, and
+  no sooner than `PASS_THROUGH_SETTLE_MS` = 100 ms. With two frames alone (7-18 ms on the rig), three
+  grabs of four were still swallowed. The one 56 ms wait was clean. With the 100 ms floor, 6 runs of 6
+  went `19 -> 20` in 1 gesture and about 0.8 s, nothing was swallowed, and the pad stayed. Only a press
+  whose touch-down falls inside the pad pays the wait.
 
 **The announced offsets are LOCAL to the event's source node.** When a selection grows past a node's edge
 the source switches to the newly-covered node and the offsets restart from it — the run below stepped

@@ -6,14 +6,17 @@ import android.os.SystemClock
 import android.text.Spannable
 import android.text.SpannableString
 import android.text.style.RelativeSizeSpan
+import android.view.Choreographer
 import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
+import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 
@@ -95,7 +98,8 @@ class Pad(
     val layoutParams = layoutFor(mode)
     // A Service has no theme, and an unthemed Button inflates wrong.
     val themed = ContextThemeWrapper(context, android.R.style.Theme_DeviceDefault)
-    val view = buildView(themed, layoutParams)
+    passingThrough = false
+    val view = TouchGate(themed).apply { addView(buildView(themed, layoutParams)) }
     windowManager.addView(view, layoutParams)
     root = view
     params = layoutParams
@@ -119,7 +123,7 @@ class Pad(
         val label = v.text.toString().replace("\n", "/")
         Diag.log("pad button '$label' at ${at[0]},${at[1]} ${v.width}x${v.height}")
       }
-      if (v is LinearLayout) for (i in 0 until v.childCount) walk(v.getChildAt(i))
+      if (v is ViewGroup) for (i in 0 until v.childCount) walk(v.getChildAt(i))
     }
     walk(view)
   }
@@ -143,17 +147,59 @@ class Pad(
   }
 
   /**
-   * Makes the pad ignore touches, so a handle sitting under it can still be driven.
+   * Whether the pad has been asked to let touches through. Its [TouchGate] swallows anything that
+   * still reaches it meanwhile, so no button can fire.
+   */
+  private var passingThrough = false
+
+  /**
+   * Makes the pad ignore touches, so a handle sitting under it can still be driven, and calls
+   * [onApplied] once the change can be relied on.
    *
    * Used sparingly and never for a whole press: a non-touchable pad also lets the USER's next tap
    * through onto the page, which is how stray taps reached the content underneath.
+   *
+   * **`updateViewLayout` is asynchronous, so a gesture dispatched straight after it lands on the
+   * pad.** Measured 2026-10-05 on the handset: a grab aimed inside the `✕` was dispatched 4 ms after
+   * the call, the window's relayout was logged 1 ms after that, and the grab's lift clicked the `✕`
+   * and closed the pad. The relayout runs on the view's next traversal and the input system takes
+   * the new flag after it, so [onApplied] waits two frames. The [TouchGate] closes the buttons at
+   * once, so a touch that still beats the flag presses none of them.
    */
-  fun setTransparentToTouch(transparent: Boolean) {
-    val view = root ?: return
-    val layoutParams = params ?: return
+  fun setTransparentToTouch(transparent: Boolean, onApplied: () -> kotlin.Unit = {}) {
+    val view = root
+    val layoutParams = params
+    if (view == null || layoutParams == null) {
+      onApplied()
+      return
+    }
+    if (transparent) passingThrough = true
     val flag = WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
     layoutParams.flags = if (transparent) layoutParams.flags or flag else layoutParams.flags and flag.inv()
     runCatching { windowManager.updateViewLayout(view, layoutParams) }
+    if (!transparent) passingThrough = false
+    val askedAt = SystemClock.uptimeMillis()
+    val choreographer = Choreographer.getInstance()
+    choreographer.postFrameCallback {
+      choreographer.postFrameCallback {
+        val left = PASS_THROUGH_SETTLE_MS - (SystemClock.uptimeMillis() - askedAt)
+        if (left <= 0) onApplied() else view.postDelayed({ onApplied() }, left)
+      }
+    }
+  }
+
+  /**
+   * The pad's root. While the pad lets touches through, it swallows any touch that still reaches
+   * it, so that touch presses nothing and closes nothing.
+   */
+  private inner class TouchGate(context: Context) : FrameLayout(context) {
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+      if (!passingThrough) return super.dispatchTouchEvent(event)
+      if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+        Diag.log("pad: a touch-down at (${event.rawX}, ${event.rawY}) reached the pad while it lets touches through — swallowed")
+      }
+      return true
+    }
   }
 
   fun showStatus(text: String) {
@@ -209,7 +255,7 @@ class Pad(
 
     // Only the floating pad needs a grip: a docked one has nowhere to go.
     if (mode == PadMode.FLOATING) {
-      column.addView(buildDragStrip(themed, layoutParams) { column })
+      column.addView(buildDragStrip(themed, layoutParams) { root ?: column })
     }
 
     statusView = TextView(themed).apply {
@@ -430,6 +476,11 @@ class Pad(
   }
 
   private companion object {
+    /**
+     * The least time [setTransparentToTouch] waits before it reports the pad as letting touches
+     * through. Two frames alone were 7-18 ms on the rig, and three grabs of four still reached the pad.
+     */
+    const val PASS_THROUGH_SETTLE_MS = 100L
     const val FLOATING_X = 240
     const val FLOATING_Y = 1900
     const val PADDING = 16
