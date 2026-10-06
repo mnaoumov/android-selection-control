@@ -103,7 +103,15 @@ class Pad(
     windowManager.addView(view, layoutParams)
     root = view
     params = layoutParams
-    view.post { logButtonBounds(view) }
+    view.post {
+      if (mode == PadMode.FLOATING && clampToScreen(layoutParams, view)) {
+        runCatching { windowManager.updateViewLayout(view, layoutParams) }
+        // The buttons move with the window, so their rectangles are logged once it has settled.
+        view.post { logButtonBounds(view) }
+      } else {
+        logButtonBounds(view)
+      }
+    }
   }
 
   /**
@@ -238,6 +246,33 @@ class Pad(
     // touches outside it still reach that app.
     flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
       WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+    // A floating pad's x/y are clamped against the screen (clampToScreen), so they have to BE screen
+    // pixels; without this flag they are measured inside the content area, a status bar lower.
+    if (mode == PadMode.FLOATING) flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+  }
+
+  /**
+   * Keeps a floating pad's requested position somewhere the window can actually be, between the
+   * status bar and the navigation bar. True when it changed anything.
+   *
+   * **The window manager clamps the window, not the request.** `FLOATING_Y` is 1900, which fits the
+   * handset's 2772 px and not the rig's 1520: the window was drawn bottom-clamped at y 809 while
+   * `LayoutParams.y` still said 1900. The drag strip moves the window by adding the finger's travel
+   * to that request, so a drag of several hundred px upward still asked for a y past the clamp, and
+   * the pad moved sideways but never up. Clamping the request makes it the window's real position.
+   */
+  private fun clampToScreen(layoutParams: WindowManager.LayoutParams, view: View): Boolean {
+    val metrics = windowManager.currentWindowMetrics
+    val bars = metrics.windowInsets.getInsets(WindowInsets.Type.systemBars())
+    val screen = metrics.bounds
+    val maxX = (screen.width() - view.width).coerceAtLeast(0)
+    val maxY = (screen.height() - bars.bottom - view.height).coerceAtLeast(bars.top)
+    val x = layoutParams.x.coerceIn(0, maxX)
+    val y = layoutParams.y.coerceIn(bars.top, maxY)
+    if (x == layoutParams.x && y == layoutParams.y) return false
+    layoutParams.x = x
+    layoutParams.y = y
+    return true
   }
 
   private fun navigationBarHeight(): Int =
@@ -434,9 +469,9 @@ class Pad(
    * The strip consumes its touches (returns true), unlike a button's listener, because a drag must
    * not also read as a press.
    *
-   * Note that `LayoutParams.x/y` are inset by the status bar while dispatched gestures use raw
-   * screen pixels; anything comparing the two must read the pad's real bounds from the accessibility
-   * window list rather than from what was asked for.
+   * The floating pad's `LayoutParams.x/y` are raw screen pixels (`FLAG_LAYOUT_IN_SCREEN`) and kept
+   * on screen by [clampToScreen]; anything else about where the pad is should still be read from the
+   * accessibility window list, which lags a move.
    */
   private fun buildDragStrip(
     themed: Context,
@@ -459,6 +494,8 @@ class Pad(
           MotionEvent.ACTION_DOWN -> {
             fingerDownX = event.rawX
             fingerDownY = event.rawY
+            // Start from where the window IS, not from a request the window manager clamped.
+            clampToScreen(layoutParams, viewProvider())
             originX = layoutParams.x
             originY = layoutParams.y
             true
@@ -466,6 +503,8 @@ class Pad(
           MotionEvent.ACTION_MOVE -> {
             layoutParams.x = originX + (event.rawX - fingerDownX).toInt()
             layoutParams.y = originY + (event.rawY - fingerDownY).toInt()
+            // Clamped as it goes, or a drag past an edge banks travel the way back has to undo first.
+            clampToScreen(layoutParams, viewProvider())
             runCatching { windowManager.updateViewLayout(viewProvider(), layoutParams) }
             true
           }
