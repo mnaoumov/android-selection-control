@@ -471,8 +471,9 @@ Measured 2026-09-24, Chrome force-stopped each time, all three of the original r
 The third one's `HandleLost` is the end-of-line step failure, not the toolbar. The window list's
 bounds for the toolbar are its touchable region. `dumpsys window` shows the PopupWindow's frame as the
 much larger `(0,415)-(547,831)`, so do not read the toolbar's extent off the frame. The toolbar also
-moves after the first drag, lower or sideways, so every grab re-checks it. The refusal path has not
-fired on the rig against a real toolbar, because every measured toolbar left a band within reach.
+moves after the first drag, lower or sideways, so every grab re-checks it. The refusal path first fired
+on the rig on 2026-10-05: a START at y 299, just under the band's top, under a toolbar at
+`(32,261)-(515,357)`, ended `HandleCovered` in 19 ms with 0 gestures (*Page, start and end*).
 
 **A `TextView`'s selection handles are windows too, and they are smaller than the toolbar.** Each
 handle is a `PopupWindow` of its own in the target's package, 88x80 on the rig and centred on the
@@ -1382,9 +1383,35 @@ and the status line adds `now moving the start`. `end` on the START edge is the 
 | controls: `⤒ start` on the START, `⤓ end` on the END | unchanged, no flip |
 | the debug target's `TextView`, `⤒ start` on the END from `bravo` | the handle stops on 7, one short of the anchor, so no flip; `7 -> 8 -> 9 -> 8` |
 
-The `end` run shows a crossing the fix does not cover: its FIRST page step already carried the START
-past the anchor, mid-document, and the edge kept its name until the corner. Those pages still kept their
-column, because Chrome's `0..focus` read through `inMovingFrame` gives the same offset.
+**A page step mid-document can cross the anchor too, and there the landing's node says nothing by
+itself**, because it can be on either side of the anchor, and Chrome announces it as `0..focus` either
+way. That `end` run's FIRST page step already carried the START past the anchor, and the edge kept its
+name until the corner. A single `⇟ page` did worse. Measured 2026-10-05 on the rig (Chrome 143, a served
+page of 120 one-line rows), `⇄ swap` on `alpha` (`8..13` of row 004), then `⇟ page`: the START landed on
+row 015 and was still called the START. The next `→ char` grabbed on the START's side of the caret,
+touched nothing, and escalated into a word snap: `8 -> 13` in 3 gestures. The `⇥ word` after it said "no
+known word boundary yet", and `⇤ word` aimed its grab on the wrong side too.
+
+So every page step toward the anchor checks, and mid-document `crossedTheAnchor` re-reads the anchor's
+node (`refresh()`) and compares the two nodes' screen bounds. The landing is past the anchor when its node
+lies wholly beyond the anchor's in the direction of travel: by row, or by column on a shared row. Where
+the anchor's node cannot be re-read, the edge keeps its name. That happens when the anchor has scrolled
+off screen: Chrome's `refresh()` then fails. On these pages that is never a crossing, because a page drag
+only reaches an anchor that is within the band. Measured after the change, Chrome force-stopped before
+each run:
+
+| page, press | result |
+|---|---|
+| `⇄ swap`, `⇟ page` from `alpha` on row 004 | `landed in Rect(32, 1033 - 580, 1071), the anchor's node is at Rect(32, 333 - 580, 371) — past the anchor`, now the END: `→ char` `8 -> 9`, `← char` `9 -> 8` (1 gesture), `⇥ word` `8 -> 13` |
+| scrolled 600 px, `⇞ page` on the END from `alpha`, 3 runs | past, now the START: `← char` `13 -> 12`, `→ char` `12 -> 13` (1 gesture), `⇤ word` `13 -> 8` |
+| `⇟ page` ×2 on the END, then `⇞ page` with the anchor off screen, 2 runs | `the anchor's node cannot be re-read — the edge keeps its name`, then `← char` `13 -> 12`, `→ char` `12 -> 13` as the END |
+| the next `⇞ page` from there, 2 runs | past (row 001 against row 004's 463), now the START; `⇞ page` to the document's start, `→ char` `0 -> 1`, `← char` `1 -> 0` |
+| `⇄ swap`, `⤓ end`, 2 runs | flipped to the END on the FIRST page, then 6 more grabbed on the END's side (x 172, not 136); `← char` ×2, `→ char` `38 -> 37 -> 36 -> 37` |
+
+The `→ char` from a word's start costs 3 gestures, as it does anywhere on Chrome (the held snap-through
+above). In the scrolled run, a `⇥ word` with the START at y 299 ended `HandleCovered` with nothing touched,
+three runs of three: Chrome's toolbar sat over that handle near the band's top. That is the toolbar refusal
+(*A grab under the floating toolbar*) firing on the rig for the first time.
 
 **A handle at the screen's side margin sits inside the system's edge-gesture zone, and only stock
 Android lets the grab through.** A START on a line's first character is drawn beyond the caret: on

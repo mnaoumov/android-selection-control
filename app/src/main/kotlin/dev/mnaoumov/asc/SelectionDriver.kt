@@ -323,18 +323,54 @@ class SelectionDriver(
   }
 
   /**
-   * Whether a landing at the document's edge, on the anchor's side, is past the anchor.
+   * Whether a page landing on the anchor's side is past the anchor.
    *
    * In the anchor's own node that is the anchor/focus order turning over: an END dragged before the
-   * anchor arrives as `to < from`, a START dragged after it as `to > from`. In any other node it is
-   * the landing itself, because the document's edge is beyond every node but the anchor's. Where the
-   * anchor's node is not known, the landing is taken as past it, since only an anchor ON the
+   * anchor arrives as `to < from`, a START dragged after it as `to > from`. At the document's edge,
+   * any other node is past it, because the edge is beyond every node but the anchor's, and where the
+   * anchor's node is not known the landing is taken as past it too, since only an anchor ON the
    * document's edge could stop it.
+   *
+   * **Mid-document, another node says nothing by itself**, because it can lie on either side of the
+   * anchor. Chrome announces it as `0..focus` either way, so the offsets cannot tell. Its place on the
+   * screen can: the anchor's node is re-read live ([anchorScreenBounds]), and the landing is past it
+   * when its node lies wholly beyond the anchor's in the direction of travel, by row, or on a shared
+   * row by column. Measured 2026-10-05 on the rig (Chrome 143, a served page of 120 one-line rows):
+   * `⇄ swap` on `alpha` (`8..13` of row 004), then one `⇟ page`, put the START on row 015, eleven rows
+   * past the END. The pad went on calling it the START, so the next `→ char` grabbed on the START's
+   * side of the caret, touched nothing, and escalated into a word snap: `8 -> 13` in 3 gestures. The
+   * `word →` after it said "no known word boundary yet", and `⇤ word` aimed its grab on the wrong side
+   * too. Where the anchor's node cannot be re-read, the edge keeps its name, which is what it did
+   * before.
    */
-  private fun crossedTheAnchor(landed: SelectionObserver.Snapshot): Boolean {
+  private fun crossedTheAnchor(landed: SelectionObserver.Snapshot, atDocumentEdge: Boolean): Boolean {
     val anchorKey = anchorNodeKey
-    if (anchorKey == null || nodeKey(landed) != anchorKey) return true
-    return if (activeEdge == Edge.END) landed.to < landed.from else landed.to > landed.from
+    if (anchorKey != null && nodeKey(landed) == anchorKey) {
+      return if (activeEdge == Edge.END) landed.to < landed.from else landed.to > landed.from
+    }
+    if (atDocumentEdge) return true
+    val landedBounds = landed.bounds ?: return false
+    val anchorBounds = anchorScreenBounds() ?: run {
+      Diag.log("  page: the anchor's node cannot be re-read — the edge keeps its name")
+      return false
+    }
+    // The START moves down to cross, the END up.
+    val downward = activeEdge == Edge.START
+    val sharedRow = landedBounds.top < anchorBounds.bottom && anchorBounds.top < landedBounds.bottom
+    val past = when {
+      !sharedRow -> if (downward) landedBounds.top >= anchorBounds.bottom else landedBounds.bottom <= anchorBounds.top
+      downward -> landedBounds.left >= anchorBounds.right
+      else -> landedBounds.right <= anchorBounds.left
+    }
+    Diag.log("  page: landed in $landedBounds, the anchor's node is at $anchorBounds — ${if (past) "past" else "short of"} the anchor")
+    return past
+  }
+
+  /** The anchor's node's bounds on the screen now, re-read from the node, or null when it cannot be. */
+  private fun anchorScreenBounds(): Rect? {
+    val node = anchorNodeKey?.let { lastSeenInNode[it] }?.source ?: return null
+    if (!runCatching { node.refresh() }.getOrDefault(false)) return null
+    return Rect().also { node.getBoundsInScreen(it) }.takeUnless { it.isEmpty }
   }
 
   /**
@@ -2629,8 +2665,9 @@ class SelectionDriver(
     )
 
     fun dragAcross(scrolled: SelectionObserver.Snapshot, atDocumentEdge: Boolean) {
-      // A corner drag toward the anchor's side goes to the document's edge, which is past the anchor.
-      val crossesAnchor = atDocumentEdge && !growsSelection(command)
+      // A step toward the anchor's side can carry the edge past it: always at the document's edge, and
+      // mid-document whenever the selection is shorter than the page.
+      val crossesAnchor = !growsSelection(command)
       val relocated = locator.locate(scrolled, activeEdge, toolbarCentre()) ?: run {
         Diag.log("  page: the handle cannot be located after the scroll")
         ended(unlocatedOutcome(scrolled))
@@ -2653,7 +2690,7 @@ class SelectionDriver(
       }
       fun report(landed: SelectionObserver.Snapshot?) {
         val from = before.movingOffset()
-        val after = if (crossesAnchor && landed != null && landed.atMs != scrolled.atMs && crossedTheAnchor(landed)) {
+        val after = if (crossesAnchor && landed != null && landed.atMs != scrolled.atMs && crossedTheAnchor(landed, atDocumentEdge)) {
           crossTheAnchor()
           // The same announcement, read again in the frame of the edge it now belongs to.
           observer.latest?.takeIf { it.atMs == landed.atMs } ?: landed
