@@ -1355,13 +1355,36 @@ Measured 2026-10-05 after the change, on the rig, Chrome force-stopped before ea
 | page, press | result |
 |---|---|
 | `<a><img></a>` first, `⤒ start` on the START edge, then `→ char` ×2, `← char` | `0..0` of row 001, then `0 -> 1 -> 2 -> 1`, 1 gesture each, 3 runs of 3 |
-| the same page and a bare `<img>` first, `⤒ start` on the END edge | the move off the image fired 4 of 4, onto row 001's caret 0 (the END edge then goes blind, a separate defect) |
+| the same page and a bare `<img>` first, `⤒ start` on the END edge | the move off the image fired 4 of 4, onto row 001's caret 0 (the END edge then went blind; fixed, see the entry below) |
 | a bare `<img>` last, `⤓ end` | the corner flapped between the image and row 120, the move landed on `0..38`, then `38 -> 37 -> 36 -> 37`, 2 runs of 2 |
 | text only, `⤒ start` and `⤓ end` | unchanged: `0..0` of row 001 and `0..38` of row 120, the char presses after them exact |
 
 The START edge on the bare-`<img>` page never reached the image in four runs: the corner stopped on
 row 001's caret 0. The `Image` reading was therefore exercised only through the END-edge and `end` runs.
 A `start` now costs 3 gestures and ~2.0 s where the image is met, against 2 and ~1.6 s.
+
+**`start` on the END edge carries the END past the anchor, and from then on the pad moves the START.**
+That is the desktop's `Ctrl+Shift+Home` with the focus at the end: the anchor stays, and the selection
+becomes the document's start up to it. Chrome's handle drag does the same. Before the fix, Chrome
+announced the landing as `0..0` in row 001's frame. Read as an END, that is an empty selection, so the
+press ended `HandleLost` and every `→ char` / `← char` after it logged nothing (4 runs of 4). Now a
+corner drag on the anchor's side checks whether it crossed (`SelectionDriver.crossedTheAnchor`): in the
+anchor's own node by the anchor/focus order turning over, anywhere else by the landing being outside
+the anchor's node. When it did, `crossTheAnchor` flips the active edge without `⇄ swap`'s side effects,
+and the status line adds `now moving the start`. `end` on the START edge is the mirror. Measured
+2026-10-05 on the rig, Chrome 143, a fresh service process before each run:
+
+| page, press | result |
+|---|---|
+| text only, `⤒ start` on the END from `alpha` (`8..13` of row 004), then `→ char` ×2, `← char` | `Moved(13, 0)`, now the START: `0 -> 1 -> 2 -> 1`, 1 gesture each, 3 runs of 3; the screenshot showed row 001's `r` up to row 004's `alpha` |
+| `<a><img></a>` first, the same presses | the move off the image, then the same, 2 runs of 2 |
+| `⇄ swap`, `⤓ end` on the START, then `← char` ×2, `→ char` | `Moved(8, 38)` on row 120, now the END: `38 -> 37 -> 36 -> 37`, 2 runs of 2 |
+| controls: `⤒ start` on the START, `⤓ end` on the END | unchanged, no flip |
+| the debug target's `TextView`, `⤒ start` on the END from `bravo` | the handle stops on 7, one short of the anchor, so no flip; `7 -> 8 -> 9 -> 8` |
+
+The `end` run shows a crossing the fix does not cover: its FIRST page step already carried the START
+past the anchor, mid-document, and the edge kept its name until the corner. Those pages still kept their
+column, because Chrome's `0..focus` read through `inMovingFrame` gives the same offset.
 
 **A handle at the screen's side margin sits inside the system's edge-gesture zone, and only stock
 Android lets the grab through.** A START on a line's first character is drawn beyond the caret: on
