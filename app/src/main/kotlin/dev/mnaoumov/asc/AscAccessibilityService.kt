@@ -289,7 +289,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       padCleared = false
       pad?.showStatus(
         if (touchedForeignWindow && isStuck(outcome)) {
-          "a notification is in the way — try again"
+          "a notification is in the way"
         } else if (touchedEdgeZone && isStuck(outcome)) {
           Diag.log("  the press touched down in a side gesture zone and went nowhere")
           "the handle is in the screen edge's swipe zone"
@@ -563,7 +563,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     Outcome.HandleCovered -> "the menu covers the handle — scroll the text lower"
     Outcome.AtFloor -> "one character left — the app keeps it"
     // Nothing was touched; a heads-up goes by itself, and swiping it away works too.
-    Outcome.Obstructed -> "a notification is in the way — try again"
+    Outcome.Obstructed -> "a notification is in the way"
     // Nothing was touched. Nudging that handle by hand announces where it is.
     Outcome.EdgeUnknown -> "can't see the ${if (driver.activeEdge == Edge.END) "end" else "start"} — nudge its handle once"
     is Outcome.Degraded -> "one character (${outcome.reason})"

@@ -16,7 +16,7 @@ Open work is split by shape, one item each in that same store, and named there r
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
 (two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, though the block step that follows it is not yet; the toolbar under a paged handle is fixed and confirmed on the phone, which
 found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse, and not yet confirmed on the phone), `start` ending
-blind on an image (fixed on the rig and not yet confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, not yet confirmed on the phone), and a swipe that can open a heads-up notification; the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
+blind on an image (fixed on the rig and not yet confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, not yet confirmed on the phone), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig, not yet confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
 heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and not yet confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
 `✕` is fixed on the rig); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
@@ -1399,6 +1399,35 @@ the phone. `rm` it and rebind to undo. With it, on the same page, `char →` fro
 `debug: swallowed it`, then 13 dropped touch-downs, ended `HandleLost` in 3.1 s, and showed the
 edge message with the selection intact. A mid-line START (`code`, `7..11`) logged no zone and stepped
 `7 -> 8 -> 7`. An END at the right margin goes through the same check but was not measured.
+
+**A heads-up notification is another app's window above the target, and a touch-down on it goes to the
+notification.** An upward page swipe starts a quarter of a drop below the band's top: y 361 on the phone,
+327 on the rig. That is where heads-ups appear. On the rig an SMS (`adb emu sms send 5551234 <text>`)
+puts up a Messages heads-up that the window list reports as `(32,0)-(688,399)`. Measured 2026-10-05 on
+the rig with the old build, Chrome, `⇞ page` with a heads-up up: the swipe from (180, 327) pulled the
+heads-up open over the page. It scrolled 0, which read as the document's edge, and the corner drag then
+selected everything up to row 001. So `foreignWindowAt` walks the window list from the top and returns
+the first window under a point whose package is not the target's. The pad and the mask are skipped.
+Three things use it:
+
+- **The swipe starts beside it**, just beyond its band-side edge, the same way it starts beside a
+  toolbar that covers both columns (`swipeStart`). The swipe's end must still be on the screen.
+- **A grab under it refuses with nothing touched** (`uncovered`). The press ends `Obstructed`, and the
+  status line says `a notification is in the way`.
+- **Every dispatched touch-down checks it again** (`noteForeignWindow`), because a heads-up can arrive
+  mid-press. That touch-down is dropped.
+
+Measured with the fix, Chrome force-stopped before each run, an SMS sent 1.5 s before the press:
+
+| press | result |
+|---|---|
+| `⇞ page` from `charlie` on row ~050, 3 runs | `another app's window Rect(32, 0 - 688, 399) covers (180.0, 329.0); starting the scroll at (180.0, 413.0)`, scrolled 226-250 px, Chrome still in front |
+| `→ char` with the END handle at y 379-383, under the heads-up, 2 runs | `Obstructed` in 21-31 ms, 0 gestures |
+| the same `→ char` and `← char` once the heads-up had gone | `19 -> 20 -> 19`, 1 gesture each |
+| no heads-up: `⇞ page` ×2, `→ char` near the top, the debug target's `char →`, `char ←`, `word →` | unchanged: the swipe from y 327, every step exact |
+
+The phone's case is not yet confirmed. There the swipe opened WhatsApp's chat, which is a tap and not an
+expansion, and the heads-up was not in the screenshot.
 
 **So a page step forgives a shortfall that the band's own move explains, and settles the band as well
 as the node.** `pageStep` re-reads the content band after the scroll, and the document's edge now needs
