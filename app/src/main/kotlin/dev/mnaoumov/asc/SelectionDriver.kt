@@ -67,6 +67,17 @@ sealed interface Outcome {
   data object HandleCovered : Outcome
 
   /**
+   * Another app's window, a heads-up notification most often, owns the pixel a touch-down needed,
+   * so nothing was touched.
+   *
+   * A touch goes to the topmost window under it, and a heads-up is a system window above the
+   * target. A down on one taps it: on the handset (2026-10-05) an upward page swipe started at
+   * y 361, inside a WhatsApp heads-up, and a private chat was in the foreground straight after. The
+   * selection is intact; the press works again once the notification has gone.
+   */
+  data object Obstructed : Outcome
+
+  /**
    * A shrink was asked for with one character left, so nothing was touched.
    *
    * A dragged handle cannot take the selection below one character: a `TextView` keeps it, and
@@ -165,6 +176,11 @@ class SelectionDriver(
   private val toolbarBounds: () -> Rect?,
   /** Where the page's text can be seen and reached around [SelectionObserver.Snapshot.source]. */
   private val contentBand: (SelectionObserver.Snapshot) -> ContentBand?,
+  /**
+   * The window of ANOTHER app that would take a touch-down at a point, a heads-up notification
+   * most often, or null when the target (or the pad) owns it. See [Outcome.Obstructed].
+   */
+  private val foreignWindowAt: (PointF) -> Rect?,
 ) {
 
   /** The floating toolbar's horizontal centre, which tracks the selection's. */
@@ -181,6 +197,13 @@ class SelectionDriver(
   private fun uncovered(handle: PointF, onRefused: (Outcome) -> Unit): PointF? {
     val toolbar = toolbarBounds()
     val aim = locator.clearOfToolbar(handle, toolbar)
+    // A heads-up over the handle takes the down and opens the notification. See [Outcome.Obstructed].
+    val foreign = aim?.let(foreignWindowAt)
+    if (foreign != null) {
+      Diag.log("  grab: another app's window $foreign covers (${aim.x}, ${aim.y}) — refusing to touch")
+      onRefused(Outcome.Obstructed)
+      return null
+    }
     when {
       aim == null -> {
         Diag.log(
@@ -2720,19 +2743,19 @@ class SelectionDriver(
     awaitSelectionOnScreen { visible ->
       if (!visible) Diag.log("  page: no toolbar before the scroll — placing the swipe without it")
       val swipe = swipeStart(band, handle, forward, scrollBy)
-      if (swipe == null) {
-        Diag.log("  page: nowhere to start a scroll clear of the toolbar")
-        ended(Outcome.HandleCovered)
+      if (swipe.point == null) {
+        Diag.log("  page: nowhere clear to start a scroll")
+        ended(swipe.refusal ?: Outcome.HandleCovered)
       } else {
-        scrollFrom(swipe)
+        scrollFrom(swipe.point)
       }
     }
   }
 
   /**
-   * Where a scroll swipe can put its finger down without landing on a handle or the toolbar: the
-   * band's far edge in the direction of travel, in whichever half of the band the moving handle is
-   * not in. Null when the toolbar covers every candidate.
+   * Where a scroll swipe can put its finger down without landing on a handle, the toolbar or another
+   * app's window: the band's far edge in the direction of travel, in whichever half of the band the
+   * moving handle is not in. The refusal says which of the two was in the way when nothing is clear.
    *
    * **When the toolbar covers both columns, the swipe starts on the band's side of it.** After a page
    * drag the handle sits [PAGE_CLEARANCE_DROPS] short of the band's far edge, and Chrome puts its
@@ -2743,8 +2766,15 @@ class SelectionDriver(
    * that row is the handle's own, and the other column is where the handle is. It is taken only when
    * the swipe's end, [scrollBy] further on, is still on the screen, because a clamped swipe scrolls
    * short and a short scroll reads as the document's edge.
+   *
+   * **Another app's window moves the start the same way, to just beyond its band-side edge.** An
+   * upward page starts a quarter of a drop below the band's top, and on the handset that is y 361,
+   * inside the heads-up banner's area (about y 140-520). A heads-up is a system window above the
+   * target, so it takes the down and opens the notification: measured 2026-10-05, a WhatsApp chat
+   * was in the foreground straight after a `⤒ start`. On the rig a Messages heads-up is the window
+   * `(32,0)-(688,399)`, over the swipe's y 327.
    */
-  private fun swipeStart(band: Rect, handle: PointF, forward: Boolean, scrollBy: Float): PointF? {
+  private fun swipeStart(band: Rect, handle: PointF, forward: Boolean, scrollBy: Float): SwipeStart {
     val margin = locator.handleDrop / 2
     // Never within reach of the screen's own edges, where a swipe opens the notification shade from
     // the top and goes home from the bottom. A floating pad leaves the band running to either edge.
@@ -2758,18 +2788,43 @@ class SelectionDriver(
     val far = band.right - band.width() * SWIPE_COLUMN_FRACTION
     val columns = if (handle.x < band.exactCenterX()) listOf(far, near) else listOf(near, far)
     val toolbar = toolbarBounds()
-    fun clear(point: PointF) = toolbar == null || !toolbar.contains(point.x.toInt(), point.y.toInt())
-    columns.map { PointF(it, y) }.firstOrNull(::clear)?.let { return it }
-    toolbar ?: return null
-    val beside = if (forward) toolbar.top - margin else toolbar.bottom + margin
-    val end = beside - scrollBy
-    val fallback = PointF(columns.first(), beside)
-    val usable = beside > maxOf(band.top.toFloat(), guard) &&
-      beside < minOf(band.bottom.toFloat(), gestures.screenHeight() - guard) &&
-      end >= 0 && end <= gestures.screenHeight() && clear(fallback)
-    Diag.log("  page: the toolbar $toolbar covers both columns; ${if (usable) "starting the scroll at (${fallback.x}, $beside)" else "nothing clear beside it either"}")
-    return fallback.takeIf { usable }
+    var foreignSeen: Rect? = null
+    fun clear(point: PointF): Boolean {
+      if (toolbar != null && toolbar.contains(point.x.toInt(), point.y.toInt())) return false
+      val foreign = foreignWindowAt(point) ?: return true
+      foreignSeen = foreign
+      return false
+    }
+    // A row beside an obstacle is usable only inside the band, clear of the screen's edges, and with
+    // the swipe's end still on the screen.
+    fun usable(row: Float): Boolean {
+      val end = row - scrollBy
+      return row > maxOf(band.top.toFloat(), guard) &&
+        row < minOf(band.bottom.toFloat(), gestures.screenHeight() - guard) &&
+        end >= 0 && end <= gestures.screenHeight()
+    }
+    fun beside(obstacle: Rect) = if (forward) obstacle.top - margin else obstacle.bottom + margin
+    columns.map { PointF(it, y) }.firstOrNull(::clear)?.let { return SwipeStart(it, null) }
+    for (column in columns) {
+      val foreign = foreignWindowAt(PointF(column, y)) ?: continue
+      val row = beside(foreign)
+      val moved = PointF(column, row)
+      val ok = usable(row) && clear(moved)
+      Diag.log("  page: another app's window $foreign covers (${column}, $y); ${if (ok) "starting the scroll at (${moved.x}, $row)" else "nothing clear beside it"}")
+      if (ok) return SwipeStart(moved, null)
+    }
+    if (toolbar != null && columns.all { toolbar.contains(it.toInt(), y.toInt()) }) {
+      val row = beside(toolbar)
+      val fallback = PointF(columns.first(), row)
+      val ok = usable(row) && clear(fallback)
+      Diag.log("  page: the toolbar $toolbar covers both columns; ${if (ok) "starting the scroll at (${fallback.x}, $row)" else "nothing clear beside it either"}")
+      if (ok) return SwipeStart(fallback, null)
+    }
+    return SwipeStart(null, if (foreignSeen != null) Outcome.Obstructed else Outcome.HandleCovered)
   }
+
+  /** A scroll swipe's touch-down, or why there is none. */
+  private class SwipeStart(val point: PointF?, val refusal: Outcome?)
 
   /**
    * The snapshot with its bounds re-read once they have stopped moving, or null when the source node

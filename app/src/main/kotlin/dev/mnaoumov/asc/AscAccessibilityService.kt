@@ -100,6 +100,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
         )
       },
       contentBand = ::contentBand,
+      foreignWindowAt = ::foreignWindowAt,
     )
 
     pad = Pad(
@@ -282,11 +283,14 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
      */
     padCleared = false
     touchedEdgeZone = false
+    touchedForeignWindow = false
     driver.perform(command) { outcome ->
       if (padCleared) pad?.setTransparentToTouch(false)
       padCleared = false
       pad?.showStatus(
-        if (touchedEdgeZone && isStuck(outcome)) {
+        if (touchedForeignWindow && isStuck(outcome)) {
+          "a notification is in the way — try again"
+        } else if (touchedEdgeZone && isStuck(outcome)) {
           Diag.log("  the press touched down in a side gesture zone and went nowhere")
           "the handle is in the screen edge's swipe zone"
         } else {
@@ -335,7 +339,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     is Outcome.Moved -> outcome.madeProgress()
     is Outcome.Degraded -> true
     Outcome.NoSelection, Outcome.HandleLost, Outcome.RowUnknown, Outcome.ColumnUnknown, Outcome.HandleCovered,
-    Outcome.AtFloor, Outcome.EdgeUnknown -> false
+    Outcome.AtFloor, Outcome.EdgeUnknown, Outcome.Obstructed -> false
   }
 
   /**
@@ -399,6 +403,48 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
   /** What had been announced at this press's last touch-down in a side gesture zone. */
   private var announcedAtEdgeDown: SelectionObserver.Snapshot? = null
+
+  /** Whether this press dropped a touch-down because another app's window owned its pixel. */
+  private var touchedForeignWindow = false
+
+  /**
+   * The window of another app that would take a touch-down at [point], or null when the target, the
+   * pad, or nothing listed owns it.
+   *
+   * A touch goes to the topmost window whose touchable region holds it, so the list is walked from
+   * the top (it is ordered that way) and the first window holding the point decides. A heads-up
+   * notification is SystemUI's, above the target: on the rig a Messages heads-up is a `TYPE_SYSTEM`
+   * window with the region `(32,0)-(688,399)` (2026-10-05). The target's own windows, its toolbar
+   * included, are not foreign, and neither is the pad, which [clearThePadFor] lets touches through.
+   */
+  private fun foreignWindowAt(point: PointF): android.graphics.Rect? {
+    val target = observer.latest?.packageName ?: rootInActiveWindow?.packageName?.toString() ?: return null
+    val x = point.x.toInt()
+    val y = point.y.toInt()
+    for (window in windows.orEmpty()) {
+      val region = android.graphics.Region().also(window::getRegionInScreen)
+      if (!region.contains(x, y)) continue
+      val owner = window.root?.packageName?.toString()
+      if (owner == target) return null
+      if (window.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY &&
+        (owner == null || owner == packageName)
+      ) continue
+      return region.bounds
+    }
+    return null
+  }
+
+  /**
+   * Whether the caller must drop the touch-down at [down] because another app's window owns it: the
+   * floor under every dispatched touch, as [onScreen] is for the coordinates. The driver already
+   * avoids such a window where it can, so reaching this means a heads-up arrived mid-press.
+   */
+  private fun noteForeignWindow(down: PointF): Boolean {
+    val foreign = foreignWindowAt(down) ?: return false
+    touchedForeignWindow = true
+    Diag.log("  the touch-down at (${down.x}, ${down.y}) is inside another app's window $foreign — not touching")
+    return true
+  }
 
   /** Whether this press has made the pad transparent to touch, so its end must make it solid again. */
   private var padCleared = false
@@ -516,6 +562,8 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     // Also not "reselect": the selection is untouched. Lower on screen, the toolbar goes above it.
     Outcome.HandleCovered -> "the menu covers the handle — scroll the text lower"
     Outcome.AtFloor -> "one character left — the app keeps it"
+    // Nothing was touched; a heads-up goes by itself, and swiping it away works too.
+    Outcome.Obstructed -> "a notification is in the way — try again"
     // Nothing was touched. Nudging that handle by hand announces where it is.
     Outcome.EdgeUnknown -> "can't see the ${if (driver.activeEdge == Edge.END) "end" else "start"} — nudge its handle once"
     is Outcome.Degraded -> "one character (${outcome.reason})"
@@ -575,6 +623,12 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       lineTo(detour.x, detour.y)
       if (end.x != detour.x || end.y != detour.y) lineTo(end.x, end.y)
     }
+    // Not dispatched, and said so: a press that goes on escalating into a heads-up gets nowhere.
+    if (noteForeignWindow(start)) {
+      Diag.log("  the drag was not dispatched")
+      onFinished(false)
+      return
+    }
     if (noteEdgeZone(start)) {
       Diag.log("  the drag was not dispatched")
       onFinished(true)
@@ -611,6 +665,11 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       dragMs,
       true,
     )
+    if (noteForeignWindow(start)) {
+      Diag.log("  the swipe was not dispatched")
+      onFinished(false)
+      return
+    }
     clearThePadFor(start) {
       dispatch(move) { moved ->
         if (!moved) {
@@ -641,7 +700,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     if (heldPointer.isHeld) heldPointer.releaseNow()
     // Not past [to]: the same bound [drag] uses, as far as [to] or one pixel past the slop.
     val shortDetour = if (pastTarget) null else ViewConfiguration.get(this).scaledTouchSlop + 1f
-    if (noteEdgeZone(onScreen(from))) {
+    if (noteForeignWindow(onScreen(from)) || noteEdgeZone(onScreen(from))) {
       Diag.log("  the grab was not dispatched")
       onGrabbed(false)
       return
