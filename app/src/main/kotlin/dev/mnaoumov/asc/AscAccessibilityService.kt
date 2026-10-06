@@ -284,11 +284,15 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     padCleared = false
     touchedEdgeZone = false
     touchedForeignWindow = false
+    val edgeBefore = driver.activeEdge
     driver.perform(command) { outcome ->
       if (padCleared) pad?.setTransparentToTouch(false)
       padCleared = false
       pad?.showStatus(
-        if (touchedForeignWindow && isStuck(outcome)) {
+        if (driver.activeEdge != edgeBefore) {
+          // `start` on the END edge (or `end` on the START) carried it past the anchor.
+          "${describe(outcome)}; now moving the ${if (driver.activeEdge == Edge.END) "end" else "start"}"
+        } else if (touchedForeignWindow && isStuck(outcome)) {
           "a notification is in the way"
         } else if (touchedEdgeZone && isStuck(outcome)) {
           Diag.log("  the press touched down in a side gesture zone and went nowhere")

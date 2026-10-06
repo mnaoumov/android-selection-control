@@ -322,6 +322,44 @@ class SelectionDriver(
     return snapshot.copy(from = snapshot.to, to = snapshot.sourceLength)
   }
 
+  /**
+   * Whether a landing at the document's edge, on the anchor's side, is past the anchor.
+   *
+   * In the anchor's own node that is the anchor/focus order turning over: an END dragged before the
+   * anchor arrives as `to < from`, a START dragged after it as `to > from`. In any other node it is
+   * the landing itself, because the document's edge is beyond every node but the anchor's. Where the
+   * anchor's node is not known, the landing is taken as past it, since only an anchor ON the
+   * document's edge could stop it.
+   */
+  private fun crossedTheAnchor(landed: SelectionObserver.Snapshot): Boolean {
+    val anchorKey = anchorNodeKey
+    if (anchorKey == null || nodeKey(landed) != anchorKey) return true
+    return if (activeEdge == Edge.END) landed.to < landed.from else landed.to > landed.from
+  }
+
+  /**
+   * The moving edge has been carried past the anchor, so from here on it is the selection's OTHER
+   * edge, and the pad moves that one.
+   *
+   * This is the desktop's `Ctrl+Shift+Home` with the focus at the end: the anchor stays and the focus
+   * goes before it, so the selection becomes the document's start up to the anchor. Chrome's handle
+   * drag does the same. Measured 2026-10-05 on the rig (Chrome 143, a served page of one-line rows):
+   * `⤒ start` on the END edge put the END handle on row 001's first caret, Chrome announced it `0..0`
+   * in row 001's frame, and read as an END that was an empty selection, so `→ char` and `← char` said
+   * nothing at all, 4 runs of 4. Read as the START, it is [inMovingFrame]'s `0..0` on offset 0.
+   *
+   * Unlike `⇄ swap`, nothing about the anchor changes: it is the same edge in the same node, and the
+   * moving edge has just been announced, so neither [activeEdgeAnnounced] nor [anchorNodeKey] may
+   * go the way the setter takes them.
+   */
+  private fun crossTheAnchor() {
+    val anchorKey = anchorNodeKey
+    activeEdge = if (activeEdge == Edge.END) Edge.START else Edge.END
+    activeEdgeAnnounced = true
+    anchorNodeKey = anchorKey
+    Diag.log("  page: the edge crossed the anchor — now moving the $activeEdge")
+  }
+
   /** The announcement time of the last `0..0` that [inMovingFrame] read as a START on offset 0. */
   private var caretReadAsStart: Long? = null
 
@@ -2495,6 +2533,9 @@ class SelectionDriver(
       onDone(Outcome.NoSelection)
       return
     }
+    // Taken now, because the last page can carry the edge past the anchor and flip [activeEdge]
+    // ([crossTheAnchor]), after which `origin.movingOffset()` would read the anchor.
+    val originOffset = origin.movingOffset()
     fun finish(last: SelectionObserver.Snapshot?, pages: Int, fallback: Outcome) {
       val now = last ?: observer.latest
       Diag.log("  document: $pages page step(s)")
@@ -2502,12 +2543,12 @@ class SelectionDriver(
         onDone(fallback)
         return
       }
-      onDone(Outcome.Moved(origin.movingOffset(), now.movingOffset(), !sameNode(origin, now)))
+      onDone(Outcome.Moved(originOffset, now.movingOffset(), !sameNode(origin, now)))
     }
     fun next(pages: Int) {
       if (stopRequested) {
         Diag.log("  document: stopped by a touch")
-        finish(null, pages, Outcome.Moved(origin.movingOffset(), origin.movingOffset()))
+        finish(null, pages, Outcome.Moved(originOffset, originOffset))
         return
       }
       val before = observer.latestWithFreshBounds() ?: run {
@@ -2588,6 +2629,8 @@ class SelectionDriver(
     )
 
     fun dragAcross(scrolled: SelectionObserver.Snapshot, atDocumentEdge: Boolean) {
+      // A corner drag toward the anchor's side goes to the document's edge, which is past the anchor.
+      val crossesAnchor = atDocumentEdge && !growsSelection(command)
       val relocated = locator.locate(scrolled, activeEdge, toolbarCentre()) ?: run {
         Diag.log("  page: the handle cannot be located after the scroll")
         ended(unlocatedOutcome(scrolled))
@@ -2608,16 +2651,24 @@ class SelectionDriver(
       } else {
         PointF(grab.x, to)
       }
-      fun report(after: SelectionObserver.Snapshot?) {
+      fun report(landed: SelectionObserver.Snapshot?) {
+        val from = before.movingOffset()
+        val after = if (crossesAnchor && landed != null && landed.atMs != scrolled.atMs && crossedTheAnchor(landed)) {
+          crossTheAnchor()
+          // The same announcement, read again in the frame of the edge it now belongs to.
+          observer.latest?.takeIf { it.atMs == landed.atMs } ?: landed
+        } else {
+          landed
+        }
         val outcome = when {
-          after == null -> Outcome.Moved(before.movingOffset(), before.movingOffset())
+          after == null -> Outcome.Moved(from, from)
           after.isEmpty() -> Outcome.HandleLost
           else -> {
             // A page lands wherever the finger stopped, character-granular, so it is no word
             // boundary. Forget the set's node and record nothing.
             val crossed = !sameNode(before, after)
             if (crossed) forgetBoundaries(after)
-            Outcome.Moved(before.movingOffset(), after.movingOffset(), crossed)
+            Outcome.Moved(from, after.movingOffset(), crossed)
           }
         }
         Diag.log("  page: drag to (${target.x}, ${target.y}) -> $outcome announced=${after != null}")
