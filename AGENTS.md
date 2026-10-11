@@ -14,7 +14,7 @@ does, and the held-pointer fix for everything a continued stroke will and will n
 
 Open work is split by shape, one item each in that same store, and named there rather than here:
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
-(two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, though the block step that follows it is not yet; the toolbar under a paged handle is fixed and confirmed on the phone, which
+(two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, with the block step that follows it; the toolbar under a paged handle is fixed and confirmed on the phone, which
 found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse, and not yet confirmed on the phone), `start` ending
 blind on an image (fixed on the rig and not yet confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, not yet confirmed on the phone), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig, not yet confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
 heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and not yet confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
@@ -858,12 +858,14 @@ row 003 ends `charlie cost.`:
 | `word →` again | not measured | `33 -> 4` of row 004 (`row `), 1.9 s, 4 gestures, 3 of 3 |
 | control: `word →` ×2 from `alpha` on the same row | not measured | `13 -> 19`, then `19 -> 20` read as the hold and escalated on to 27, as before |
 
-**The phone confirms the first press (2026-10-05, OnePlus 15, Chrome 154.0.8037.92 with the
+**The phone confirms both presses (2026-10-05 and 2026-10-10, OnePlus 15, Chrome 154.0.8037.92 with the
 extended-selection flag Disabled, `en.m.wikipedia.org/wiki/Text_editor`).** Long-press `cost` seeded
 `138..142`, and `word →` logged `landed on 143, one past the boundary 142, and that is the block's outer
-caret — taking it as the step`. That is `Moved(142, 143)` in 1 gesture and 357 ms, against 12 gestures and
-4.8 s before the fix. It was one run, because the phone dropped off adb during the second `word →`, so the
-block step that follows is not yet confirmed on the phone.
+caret — taking it as the step`. That is `Moved(142, 143)` in 1 gesture and 353-357 ms, against 12 gestures and
+4.8 s before the fix. The second `word →` took the block step. The move onto the next row landed in the
+58-character ` is text, …` node (`0..19`), the slide moved it onto `0..1` of `As `, and the word walk held at 3:
+`Moved(143, 3, crossedNode=true)` in 5 gestures and 2.1 s. The screenshot showed `cost.` and `As ` selected.
+That is the same shape as the rig's `33 -> 4`. The first press has run twice, once per sitting, and the second once.
 
 **A block-level node's `getBoundsInScreen` is the block box, not the text box.** Long-pressing the centre
 of an `h1` whose bounds run 56..1218 but whose glyphs end at 547 hits empty space and selects nothing.
