@@ -18,7 +18,7 @@ locating a handle that the aimed-at drop misses; the defects the handset pass of
 found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse; on the phone, page and end now run to the article's real end, but the collapse did not recur, so the fix's own branch is unexercised), `start` ending
 blind on an image (fixed on the rig and not yet confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, not yet confirmed on the phone), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig, not yet confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
 heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and not yet confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
-`✕` is fixed on the rig); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
+`✕` is fixed on the rig and confirmed on the phone); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
 A handle inside a **wrapped** node was on that list and is no longer: the row it needs comes from the
 platform's own per-character rectangle, which Chrome does supply for page content once the node has
@@ -730,6 +730,14 @@ same pixel afterwards moved the edge: `Moved(19, 20)` in 2.2 s and 8 gestures. T
   grabs of four were still swallowed. The one 56 ms wait was clean. With the 100 ms floor, 6 runs of 6
   went `19 -> 20` in 1 gesture and about 0.8 s, nothing was swallowed, and the pad stayed. Only a press
   whose touch-down falls inside the pad pays the wait.
+
+**The phone confirms it (2026-10-10, OnePlus 15, portrait, Chrome 154.0.8037.127 with the
+extended-selection flag Disabled).** A served one-line `alpha bravo xy` at 20 px, placed so that
+`bravo`'s END handle sat inside the `✕` (aim (1077.5, 2220), `✕` at 948..1256 x 2196..2364). Long-press
+`bravo` (`6..11`), then `→ char`. Every run logged `the pad lets touches through after 100 ms` (101 once),
+and none logged `swallowed`. The grab was accepted and the press went `11 -> 12` in 1 gesture and 0.80-0.83 s.
+The pad stayed, and its status line read `moved 11 → 12`. That held in 3 runs of 3, so 100 ms is long enough
+on the phone too.
 
 **The announced offsets are LOCAL to the event's source node.** When a selection grows past a node's edge
 the source switches to the newly-covered node and the offsets restart from it — the run below stepped
