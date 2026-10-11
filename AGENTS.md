@@ -16,7 +16,7 @@ Open work is split by shape, one item each in that same store, and named there r
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
 (two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, with the block step that follows it; the toolbar under a paged handle is fixed and confirmed on the phone, which
 found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse; on the phone, page and end now run to the article's real end, but the collapse did not recur, so the fix's own branch is unexercised), `start` ending
-blind on an image (fixed on the rig, but on the phone the move off the image lands on a hidden header button and the pad is still blind; a `start` from the page's top also sets off Chrome's pull-to-refresh), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig, not yet confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
+blind on an image (fixed on the rig, but on the phone the move off the image lands on a hidden header button and the pad is still blind; a `start` from the page's top also sets off Chrome's pull-to-refresh), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig and confirmed on the phone, where the pass also found that a press after a hand scroll can grab at a node's pre-scroll position); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
 heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
 `✕` is fixed on the rig and confirmed on the phone); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
@@ -1538,8 +1538,23 @@ Measured with the fix, Chrome force-stopped before each run, an SMS sent 1.5 s b
 | the same `→ char` and `← char` once the heads-up had gone | `19 -> 20 -> 19`, 1 gesture each |
 | no heads-up: `⇞ page` ×2, `→ char` near the top, the debug target's `char →`, `char ←`, `word →` | unchanged: the swipe from y 327, every step exact |
 
-The phone's case is not yet confirmed. There the swipe opened WhatsApp's chat, which is a tap and not an
-expansion, and the heads-up was not in the screenshot.
+**The phone confirms both halves (2026-10-11, OnePlus 15, Chrome 154 with the extended-selection flag
+Disabled, `en.wikipedia.org/wiki/Text_editor`, four sections expanded and the page scrolled).** The heads-up
+was a Clock timer expiring (`am start -a android.intent.action.SET_TIMER --ei
+android.intent.extra.alarm.LENGTH <s> --ez android.intent.extra.alarm.SKIP_UI true`). Its `Time's up`
+banner stays up while it rings. The window list reported it as `Rect(56, 141 - 1215, 476)`; the item had
+guessed y 140-520.
+
+| press | result |
+|---|---|
+| `⇞ page` from `represented` (`79..90`), banner up | `another app's window Rect(56, 141 - 1215, 476) covers (318.0, 361.5); starting the scroll at (318.0, 500.5)`, scrolled -122 of -153, Chrome still in front, banner not opened; `Moved(90, 0)` in 1.6 s and 2 gestures |
+| `→ char` from `software` (`1..9`, the START), handle aimed at (857.5, 456), banner up | `grab: another app's window ... covers (857.5, 456.0) — refusing to touch`, `Obstructed` in 10 ms, 0 gestures, status `a notification is in the way`, selection intact |
+| the same `→ char` once the banner had gone | `1 -> 2` in 1 gesture and 0.58 s |
+
+Three things about driving it. `cmd notification post` does not give a heads-up, because the shell's channel has
+importance 3 and no banner option. The `SET_TIMER` intent starts an activity, which takes Chrome's focus
+and clears the selection, so start the timer first, bring Chrome back, and select after that. The banner also
+hides itself after about a minute, so check that it is on screen before a press that is meant to meet it.
 
 **So a page step forgives a shortfall that the band's own move explains, and settles the band as well
 as the node.** `pageStep` re-reads the content band after the scroll, and the document's edge now needs
