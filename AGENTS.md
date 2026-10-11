@@ -15,7 +15,7 @@ does, and the held-pointer fix for everything a continued stroke will and will n
 Open work is split by shape, one item each in that same store, and named there rather than here:
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
 (two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, with the block step that follows it; the toolbar under a paged handle is fixed and confirmed on the phone, which
-found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse, and not yet confirmed on the phone), `start` ending
+found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse; on the phone, page and end now run to the article's real end, but the collapse did not recur, so the fix's own branch is unexercised), `start` ending
 blind on an image (fixed on the rig and not yet confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, not yet confirmed on the phone), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig, not yet confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
 heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and not yet confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
 `✕` is fixed on the rig); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
@@ -1492,6 +1492,17 @@ judges or grabs (`the page moved after the scroll settled`). The rig's Chrome ne
 controls on these swipes (the band's top stayed at 313 on every page), so what was measured there
 (2026-10-05) is only that nothing else changed: `page ↓` ×4 from `bravo` moved one band each in
 1.7 s and 2 gestures, and `end` ran 18 pages to row 400 and found the edge (`scrolled 344 of 710`).
+
+**The phone no longer ends mid-article, but the collapse did not come back to test the fix**
+(2026-10-10, OnePlus 15, Chrome 154.0.8037.127 with the extended-selection flag Disabled,
+`en.wikipedia.org/wiki/Text_editor` on the mobile skin, four sections expanded). Long-press
+`interactive`, then `page ↓`: one band each, `scrolled 899 / 1561-1564 / 1474 / 1414-1418 of` the
+planned scroll, 1.56-1.61 s and 2 gestures, and the fifth page found the article's real end
+(`scrolled 504-508 of 1585`, the footer on screen), in two runs. `end` from the same word went the same
+four pages and the edge, `Moved(15, 12)` in 8.1 s and 10 gestures. The band's top stayed at 337 on
+every page of all three runs, so Chrome never hid its omnibox under the pad's swipes in this sitting.
+A hand `input swipe` did hide it. The `band moved` and `settling again` branches therefore never fired on
+the phone, and they are still proven only by the reasoning above.
 
 The system also rebound the service once in the sitting, with no crash (the pad window was destroyed
 and re-added 1.3 s later), and that dropped the pad's view of the selection.
