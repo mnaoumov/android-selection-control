@@ -17,7 +17,7 @@ locating a handle that the aimed-at drop misses; the defects the handset pass of
 (two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, with the block step that follows it; the toolbar under a paged handle is fixed and confirmed on the phone, which
 found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse; on the phone, page and end now run to the article's real end, but the collapse did not recur, so the fix's own branch is unexercised), `start` ending
 blind on an image (fixed on the rig and not yet confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, not yet confirmed on the phone), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig, not yet confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
-heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and not yet confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
+heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
 `✕` is fixed on the rig and confirmed on the phone); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
 A handle inside a **wrapped** node was on that list and is no longer: the row it needs comes from the
@@ -289,7 +289,7 @@ body paragraph went `61 -> 62` in 1 gesture and 0.71 s. The flag was put back to
 
 **That same sitting found two defects.** From the heading's last word, `editor`, both
 per-character asks were refused, so the END handle was placed by the node's average across the heading's
-block-wide box, at x 2477 against glyphs ending near x 680. That press now refuses (*A block-level
+block-wide box, at x 2477 against glyphs ending near x 680. That press now refuses, which is confirmed on the phone (*A block-level
 node's `getBoundsInScreen`* below). The grab was also inside
 the pad's `✕`. The pad's pass-through relayout was logged 1 ms after the grab was dispatched, and the pad
 window was destroyed 40 ms after the press ended. The pad stayed gone until a rebind. That half is fixed
@@ -912,6 +912,19 @@ after a swap `char ←`, each one character in 1 gesture. `Text` at the left mar
 Chromium 157 without the marker: `char ←`, `char →`, `⇄ swap`, `char ←`, `char →`, each exact in 1
 gesture. The debug target's `TextView` with the marker: `char →`, `char ←`, `word →` (19 -> 25), each
 exact. With no toolbar on screen there is no bound and the average is used as before.
+
+**The phone confirms the refusal, and shows that the double refusal happens only on a cold Chrome**
+(2026-10-10, OnePlus 15, landscape, Chrome 154 with the extended-selection flag Disabled,
+`en.wikipedia.org/wiki/Text_editor`). Chrome was force-stopped before each cold run. In each one,
+long-pressing `editor` seeded `5..11` from an 11-character node with the heading's block-wide box
+`Rect(326, 596 - 2587, 732)`. The first `→ char` logged `the box's average puts the carets at
+1353.7273..2587.0, which the toolbar centred at 1058.0 rules out` and ended `ColumnUnknown` in 22-25 ms
+with 0 gestures. The status line read `this block won't say where its text ends`, the selection was
+intact and the pad stayed. That happened in 3 cold runs of 3. The next `→ char` on the same selection,
+and every first press against a warm Chrome (3 of 3), was answered (`one-line caret measured=823.0
+average=2587.0`). That press took the block step onto `0..1` of the `Article` tab in 2 gestures and
+1.06-1.08 s. On the way, the move onto the row landed in `Talk` and slid to the neighbour's caret. So
+the refusal is the cold first press's, and the press after it works.
 
 **`adb shell run-as dev.mnaoumov.asc touch files/force-refuse-character-rects`, then `rig.ps1 rebind`,
 makes every per-character ask refuse** on a debuggable build (it logs `debug: refusing every
