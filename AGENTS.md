@@ -16,7 +16,7 @@ Open work is split by shape, one item each in that same store, and named there r
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
 (two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, with the block step that follows it; the toolbar under a paged handle is fixed and confirmed on the phone, which
 found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse; on the phone, page and end now run to the article's real end, but the collapse did not recur, so the fix's own branch is unexercised), `start` ending
-blind on an image (fixed on the rig and not yet confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, not yet confirmed on the phone), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig, not yet confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
+blind on an image (fixed on the rig, but on the phone the move off the image lands on a hidden header button and the pad is still blind; a `start` from the page's top also sets off Chrome's pull-to-refresh), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, not yet confirmed on the phone), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig, not yet confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
 heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
 `✕` is fixed on the rig and confirmed on the phone); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
@@ -1359,7 +1359,7 @@ the document's real edge.
  grab miss by the omnibox's 196 px.
 - **The wordmark is an `android.widget.Image` with no text**, so its `0..0` comes from a node of length 0, and
  `inMovingFrame`'s rewrite (above) skips any snapshot with `sourceLength <= 0`. Row 001 on the served
- page was text, which is why the profile passed. Fixed on the rig, below; not yet confirmed on the phone.
+ page was text, which is why the profile passed. Fixed on the rig, below; on the phone the move off the image lands on the header's hidden `Search` button instead, so the pad is still blind (after the crossing table below).
 - **A START handle at the left margin is not grabbed.** The touch-down falls in OxygenOS's own edge-gesture
  strip, which stock Android's exclusion does not reach. Not fixable from the pad; it now says so, below.
 - **An upward page swipe starts at y 361**, where heads-up notifications appear. Straight after one
@@ -1405,6 +1405,25 @@ and the status line adds `now moving the start`. `end` on the START edge is the 
 | `⇄ swap`, `⤓ end` on the START, then `← char` ×2, `→ char` | `Moved(8, 38)` on row 120, now the END: `38 -> 37 -> 36 -> 37`, 2 runs of 2 |
 | controls: `⤒ start` on the START, `⤓ end` on the END | unchanged, no flip |
 | the debug target's `TextView`, `⤒ start` on the END from `bravo` | the handle stops on 7, one short of the anchor, so no flip; `7 -> 8 -> 9 -> 8` |
+
+**The phone confirms the crossing, but the move off the image still leaves the pad blind there, and a
+`start` from the page's top reloads the page** (2026-10-10, OnePlus 15, Chrome 154 with the
+extended-selection flag Disabled, `en.wikipedia.org/wiki/Text_editor`). With the page scrolled about
+440 px, long-press `interactive` (`4..15`), then `⤒ start` on the END. The scroll fell short (`scrolled -441
+of -1084.0 — the document's edge`), and the press logged `the edge crossed the anchor — now moving the
+START`. The status line read `moved into another block; now moving the start`, and the screenshot showed
+the selection from the wordmark up to the start of `interactive`. But the wordmark is where it started:
+the walk beyond it found the header's `Search` button (an `android.widget.Button` whose 6-character text is
+the search icon's label, never drawn) and said it `is wrapped and will not measure`, so nothing moved it
+on. With `⇄ swap` first, the same corner drag landed on the wordmark, announced as `0..0, srcLen=-1`, which
+is how the phone's wordmark reads. The move off the image fired, and it aimed at that `Search` button.
+The selection then started on the search icon. In both runs `→ char` and `← char` logged `nothing
+announced — the pad cannot see a selection`. So the walk has to skip nodes that are not page text.
+
+With the page already at its top, the same `⤒ start` swiped downward from (954, 361.5), and that is
+Chrome's pull-to-refresh: the page reloaded and the selection was gone. The pad read the reload as a
+1130 px scroll and reported `Moved(4, 15)`. A hand `input swipe` from the same point showed the refresh
+spinner. Neither defect is fixed yet.
 
 **A page step mid-document can cross the anchor too, and there the landing's node says nothing by
 itself**, because it can be on either side of the anchor, and Chrome announces it as `0..focus` either
