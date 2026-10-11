@@ -16,7 +16,7 @@ Open work is split by shape, one item each in that same store, and named there r
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
 (two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, with the block step that follows it; the toolbar under a paged handle is fixed and confirmed on the phone, which
 found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse; on the phone, page and end now run to the article's real end, but the collapse did not recur, so the fix's own branch is unexercised), `start` ending
-blind on an image (fixed on the rig, but on the phone the move off the image lands on a hidden header button and the pad is still blind; a `start` from the page's top also sets off Chrome's pull-to-refresh), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, not yet confirmed on the phone), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig, not yet confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
+blind on an image (fixed on the rig, but on the phone the move off the image lands on a hidden header button and the pad is still blind; a `start` from the page's top also sets off Chrome's pull-to-refresh), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig, not yet confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
 heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
 `✕` is fixed on the rig and confirmed on the phone); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
@@ -1490,7 +1490,27 @@ drops every handle touch-down in a side zone** on a debuggable build, which is h
 the phone. `rm` it and rebind to undo. With it, on the same page, `char →` from the margin logged
 `debug: swallowed it`, then 13 dropped touch-downs, ended `HandleLost` in 3.1 s, and showed the
 edge message with the selection intact. A mid-line START (`code`, `7..11`) logged no zone and stepped
-`7 -> 8 -> 7`. An END at the right margin goes through the same check but was not measured.
+`7 -> 8 -> 7`.
+
+**The phone confirms it, at both margins (2026-10-10, OnePlus 15, Chrome 154 with the extended-selection
+flag Disabled, `en.wikipedia.org/wiki/Text_editor`).** `mSystemGestureExclusion` read `SkRegion()` with the
+START at the margin, so Chrome's exclusion is not there at all, or not where `dumpsys` shows it.
+
+- **`→ char` on a START at the left margin** (`allows`, `6..12`, after `⇄ swap`). The press logged `the
+  touch-down at (24.5, 1485.0) is in a side gesture zone`, the held grab announced nothing, and the next
+  twelve tries logged `went unanswered — not touching`. It ended `HandleLost` in 3.5 s with the edge
+  message, the selection intact and Chrome still in front, 3 runs of 3. The first grab never landed.
+- **`⤒ start` on a START at the left margin** (`simple`, `25..31`, page scrolled). The scroll ran first
+  (294 px), then the corner drag's one touch-down at (24.5, 1999.0) was flagged and announced nothing.
+  The press ended `Moved(25, 25)` in 2.2 s with the edge message and the selection intact. The scroll
+  still happens before the handle is found unreachable. From the page's top, `⤒ start` sets off
+  pull-to-refresh instead, which reloads the page (*Page, start and end*).
+- **`→ char` on an END at the right margin** (`is`, `99..101`, its caret at x 1190). The handle is drawn
+  at about x 1195..1268, all of it inside OxygenOS's right strip. The grab at (1221.5, 1810.0) was flagged
+  and announced nothing, and the press ended with the edge message, selection intact, 3 runs of 3. It took
+  2.0 s and 7 gestures. Those were one touch-down, then six held snap-through pushes on a pointer Chrome
+  never saw. An END whose aim stayed just short of the zone (x 1161.5, `since`) stepped `80 -> 81` across
+  the wrap in 1 gesture.
 
 **A heads-up notification is another app's window above the target, and a touch-down on it goes to the
 notification.** An upward page swipe starts a quarter of a drop below the band's top: y 361 on the phone,
