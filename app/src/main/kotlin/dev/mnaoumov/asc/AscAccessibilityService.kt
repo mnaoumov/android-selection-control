@@ -526,7 +526,30 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
         band.top = maxOf(band.top, pad.bottom)
       }
     }
-    return ContentBand(band, scrolls = scroller != null)
+    return ContentBand(band, scrolls = scroller != null) {
+      scroller?.let(::verticalScrollability) ?: (null to null)
+    }
+  }
+
+  /**
+   * Which ways [scroller] says it can scroll, from the scroll actions it lists right now: the
+   * directional `ACTION_SCROLL_UP` / `DOWN` where it lists any, otherwise `ACTION_SCROLL_BACKWARD` /
+   * `FORWARD`. Null for both when it lists none of them, because then nothing is known.
+   */
+  private fun verticalScrollability(
+    scroller: android.view.accessibility.AccessibilityNodeInfo,
+  ): Pair<Boolean?, Boolean?> {
+    runCatching { scroller.refresh() }
+    val ids = scroller.actionList.orEmpty().map { it.id }.toSet()
+    val directional = setOf(android.R.id.accessibilityActionScrollUp, android.R.id.accessibilityActionScrollDown)
+    val backward = android.view.accessibility.AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+    val forward = android.view.accessibility.AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+    return when {
+      ids.any { it in directional } ->
+        (android.R.id.accessibilityActionScrollUp in ids) to (android.R.id.accessibilityActionScrollDown in ids)
+      backward in ids || forward in ids -> (backward in ids) to (forward in ids)
+      else -> null to null
+    }.also { Diag.log("  band: the scroller lists scroll actions ${ids.filter { it in directional || it == backward || it == forward }} -> up=${it.first} down=${it.second}") }
   }
 
   private fun onSwapEdge() {

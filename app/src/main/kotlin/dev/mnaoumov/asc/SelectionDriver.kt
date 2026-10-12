@@ -100,7 +100,19 @@ sealed interface Outcome {
  * page step swipes only where [scrolls]: a window that does not scroll gains nothing from a swipe,
  * and its band reaches the status bar, where a downward swipe pulls down the notification shade.
  */
-class ContentBand(val visible: Rect, val scrolls: Boolean)
+class ContentBand(
+  val visible: Rect,
+  val scrolls: Boolean,
+  /**
+   * Whether the scroller says it can scroll toward the document's start (`first`) or its end
+   * (`second`), read from the scroll actions it lists, and read only when asked, because the band is
+   * re-read on every settle poll. Null when it lists none, so nothing is known and the swipe is tried
+   * as before. See `SelectionDriver.pageStep`.
+   */
+  private val readScrollability: () -> Pair<Boolean?, Boolean?> = { null to null },
+) {
+  val scrollability: Pair<Boolean?, Boolean?> by lazy(readScrollability)
+}
 
 /** The gestures the driver needs, kept behind an interface so it does not depend on the service. */
 interface GestureDispatcher {
@@ -2730,6 +2742,20 @@ class SelectionDriver(
     if (content?.scrolls != true) {
       // Nothing to scroll, so the whole document is on screen and its edge is the screen's corner.
       Diag.log("  page: nothing here scrolls")
+      dragAcross(before, atDocumentEdge = true)
+      return
+    }
+    /*
+     * A page that cannot scroll the way the step goes is already at the document's edge, and a swipe
+     * there is worse than useless: downward on a page at its top it is Chrome's pull-to-refresh.
+     * Measured 2026-10-10 on the handset (Wikipedia, Chrome 154): `⤒ start` with the page at its top
+     * swiped down from (954, 361.5), the page reloaded, the selection was gone, and the pad read the
+     * reload as a 1130 px scroll. So the scroller's own scroll actions are asked first, and where it
+     * says no, the step goes straight to the corner drag.
+     */
+    val canScroll = content.scrollability.let { if (forward) it.second else it.first }
+    if (canScroll == false) {
+      Diag.log("  page: the page cannot scroll ${if (forward) "down" else "up"} — already at the document's edge, no swipe")
       dragAcross(before, atDocumentEdge = true)
       return
     }

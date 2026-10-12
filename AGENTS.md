@@ -16,7 +16,7 @@ Open work is split by shape, one item each in that same store, and named there r
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
 (two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, with the block step that follows it; the toolbar under a paged handle is fixed and confirmed on the phone, which
 found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse; on the phone, page and end now run to the article's real end, but the collapse did not recur, so the fix's own branch is unexercised), `start` ending
-blind on an image (fixed on the rig; on the phone the move off the image landed on a hidden header button, and the walk now skips controls, which is fixed on the rig and not yet confirmed on the phone; a page step that reaches the top can still land on the image itself; a `start` from the page's top also sets off Chrome's pull-to-refresh), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig and confirmed on the phone, where the pass also found that a press after a hand scroll can grab at a node's pre-scroll position); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
+blind on an image (fixed on the rig; on the phone the move off the image landed on a hidden header button, and the walk now skips controls, which is fixed on the rig and not yet confirmed on the phone; a page step that reaches the top can still land on the image itself; a `start` from the page's top used to set off Chrome's pull-to-refresh, and now does not swipe at all, which is fixed on the rig and not yet confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig and confirmed on the phone, where the pass also found that a press after a hand scroll can grab at a node's pre-scroll position); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
 heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
 `✕` is fixed on the rig and confirmed on the phone); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
@@ -1423,7 +1423,27 @@ announced — the pad cannot see a selection`. So the walk has to skip nodes tha
 With the page already at its top, the same `⤒ start` swiped downward from (954, 361.5), and that is
 Chrome's pull-to-refresh: the page reloaded and the selection was gone. The pad read the reload as a
 1130 px scroll and reported `Moved(4, 15)`. A hand `input swipe` from the same point showed the refresh
-spinner. The pull-to-refresh is not fixed yet.
+spinner.
+
+**So a page step first asks the page whether it can scroll that way, and where it cannot, it does not
+swipe.** `contentBand`'s scroller lists its scroll actions, and Chrome keeps them current: at the page's
+top it lists `ACTION_SCROLL_DOWN` and `ACTION_SCROLL_FORWARD` only, mid-page all four, at the bottom
+`ACTION_SCROLL_UP` and `ACTION_SCROLL_BACKWARD` only. `pageStep` reads the directional pair where the
+node lists one, else forward/backward, and when the step's way is missing it goes straight to the
+document-edge corner drag (`the page cannot scroll up — already at the document's edge, no swipe`). A
+scroller that lists none keeps the old swipe. Measured 2026-10-12 on the rig (Chrome 143, force-stopped
+before each run, a served page of an `<h1>` and 120 one-line rows, `alpha` on row 005 long-pressed with
+the page at its top):
+
+| press | old build | new build |
+|---|---|---|
+| `⤒ start` on the END | swiped down from (540, 285), `scrolled 0 of -385`, `Moved(13, 13)`; the page came back scrolled to row 012 with no selection | no swipe, `now moving the START`, onto the heading's offset 0 (`0..11`), 1 gesture, ~0.6 s, 2 runs of 2 |
+| `⤒ start` on the START, `⇞ page` on the START | not measured | no swipe, onto the heading's offset 0, 1 gesture, ~0.6 s, 3 runs of 3; `→ char` / `← char` after it `0 -> 1 -> 0` |
+| `⇟ page` at the page's bottom, START on row 108 | not measured | no swipe, crossed the anchor onto row 120's end, then `← char` `33 -> 32` |
+| controls: `⇞ page` scrolled 700 px; `⤓ end` from the top | as before | both swiped as before; `end` ran 7 pages and found the edge by the short scroll |
+
+On the old build the first run's swipe landed on Chrome's "Translate page?" bar, which hid the defect.
+Serve such a page with `<html lang=en>`.
 
 **So the walk skips controls: a button's text is its label, not page text.** `adjacentTextLeaf` now
 passes over any node of a class in `HandleLocator.NOT_PAGE_TEXT_CLASSES`, along with its children: the
@@ -1524,8 +1544,8 @@ START at the margin, so Chrome's exclusion is not there at all, or not where `du
 - **`⤒ start` on a START at the left margin** (`simple`, `25..31`, page scrolled). The scroll ran first
   (294 px), then the corner drag's one touch-down at (24.5, 1999.0) was flagged and announced nothing.
   The press ended `Moved(25, 25)` in 2.2 s with the edge message and the selection intact. The scroll
-  still happens before the handle is found unreachable. From the page's top, `⤒ start` sets off
-  pull-to-refresh instead, which reloads the page (*Page, start and end*).
+  still happens before the handle is found unreachable. From the page's top, `⤒ start` used to set off
+  pull-to-refresh instead, which reloaded the page; it no longer swipes there (*Page, start and end*).
 - **`→ char` on an END at the right margin** (`is`, `99..101`, its caret at x 1190). The handle is drawn
   at about x 1195..1268, all of it inside OxygenOS's right strip. The grab at (1221.5, 1810.0) was flagged
   and announced nothing, and the press ended with the edge message, selection intact, 3 runs of 3. It took
