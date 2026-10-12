@@ -345,7 +345,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     is Outcome.Moved -> outcome.madeProgress()
     is Outcome.Degraded -> true
     Outcome.NoSelection, Outcome.HandleLost, Outcome.RowUnknown, Outcome.ColumnUnknown, Outcome.HandleCovered,
-    Outcome.AtFloor, Outcome.EdgeUnknown, Outcome.Obstructed, Outcome.InEdgeZone -> false
+    Outcome.AtFloor, Outcome.EdgeUnknown, Outcome.Obstructed, Outcome.InEdgeZone, Outcome.OffScreen -> false
   }
 
   /**
@@ -593,6 +593,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     val band = scroller?.let { android.graphics.Rect().also(it::getBoundsInScreen) }
       ?: source.window?.let { window -> android.graphics.Rect().also(window::getBoundsInScreen) }
       ?: return null
+    val drawn = android.graphics.Rect(band)
     val pad = padBounds()
     if (pad != null && android.graphics.Rect.intersects(pad, band) && pad.width() * 2 > band.width()) {
       if (pad.exactCenterY() > band.exactCenterY()) {
@@ -601,7 +602,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
         band.top = maxOf(band.top, pad.bottom)
       }
     }
-    return ContentBand(band, scrolls = scroller != null) {
+    return ContentBand(band, scrolls = scroller != null, drawn = drawn) {
       scroller?.let(::verticalScrollability) ?: (null to null)
     }
   }
@@ -670,6 +671,8 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     Outcome.InEdgeZone -> EDGE_ZONE_STATUS
     // Nothing was touched. Nudging that handle by hand announces where it is.
     Outcome.EdgeUnknown -> "can't see the ${if (driver.activeEdge == Edge.END) "end" else "start"} — nudge its handle once"
+    // Nothing was touched. Scrolling the selection back into view makes the next press work.
+    Outcome.OffScreen -> "the selection is scrolled out of view — scroll it back"
     is Outcome.Degraded -> "one character (${outcome.reason})"
   }
 

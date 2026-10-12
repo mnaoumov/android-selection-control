@@ -16,7 +16,7 @@ Open work is split by shape, one item each in that same store, and named there r
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
 (two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, with the block step that follows it; the toolbar under a paged handle is fixed and confirmed on the phone, which
 found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse; on the phone, page and end now run to the article's real end, but the collapse did not recur, so the fix's own branch is unexercised), `start` ending
-blind on an image (fixed on the rig; on the phone the move off the image landed on a hidden header button, and the walk now skips controls, which is fixed on the rig and not yet confirmed on the phone; a page step that reaches the top can still land on the image itself; a `start` from the page's top used to set off Chrome's pull-to-refresh, and now does not swipe at all, which is fixed on the rig and not yet confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins, and such a press now stops at the first swallowed touch-down, fixed on the rig and not yet confirmed on the phone), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig and confirmed on the phone, where the pass also found that a press after a hand scroll can grab at a node's pre-scroll position); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
+blind on an image (fixed on the rig; on the phone the move off the image landed on a hidden header button, and the walk now skips controls, which is fixed on the rig and not yet confirmed on the phone; a page step that reaches the top can still land on the image itself; a `start` from the page's top used to set off Chrome's pull-to-refresh, and now does not swipe at all, which is fixed on the rig and not yet confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins, and such a press now stops at the first swallowed touch-down, fixed on the rig and not yet confirmed on the phone), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig and confirmed on the phone, where the pass also found that a press after a hand scroll can grab at a node's pre-scroll position, which now refuses instead, fixed on the rig and not yet confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
 heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
 `✕` is fixed on the rig and confirmed on the phone); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
@@ -1651,6 +1651,35 @@ and re-added 1.3 s later), and that dropped the pad's view of the selection.
 
 **The anchor scrolling off screen costs nothing.** The announcing node follows the moving edge, so
 the moving handle is always the one on screen. The pad never needs to locate the other one.
+
+**A HAND scroll can take the moving edge off screen, and Chrome then answers `refresh()` with a box
+squashed flat against the viewport's edge.** A scroll announces nothing, so the pad keeps the
+announcement's bounds. `latestWithFreshBounds` re-reads them, and it used to hand the old bounds back
+whenever the re-read was empty or failed. On the handset (2026-10-11), after a 1050 px hand scroll
+carried the line under the omnibox, `→ char` grabbed at y 1404, the line's row from before the scroll.
+It landed on page text and left the selection as a caret in another node. On the rig (2026-10-12, Chrome 143, a
+served page of one-line rows) it reproduced on the first try. Long-press `alpha` at y 1000, then
+`input swipe 600 1100 600 300 1200`, then `→ char`. The grab went in at y 1051, followed by six held pushes on the
+page, 7 gestures. The re-read had succeeded: the node came back as `Rect(32, 271 - 502, 271)`, zero
+height, at the web contents' top. Scrolled the other way, below the screen, it came back as
+`Rect(32, 1472 - 502, 1472)`. So every press now starts with `SelectionDriver.movingNodeOffScreen`. It
+refuses, with nothing touched, when the node cannot be re-read, when its box is empty, or when the box
+misses the page's drawn area (`ContentBand.drawn`, the band before the pad is cut off, because a handle
+under the pad is reachable). The press ends `OffScreen`, "the selection is scrolled out of view —
+scroll it back". Measured after the change, Chrome force-stopped before each run:
+
+| press | result |
+|---|---|
+| `→ char`, `⇥ word`, `⇟ page` after the 800 px scroll, 3 runs | each refused before its first gesture, 0 gestures, the status line as above |
+| the page scrolled back 800 px, then `→ char` / `← char` | `13 -> 14`, `14 -> 13`, 1 gesture each, 3 of 3 |
+| control: a 150 px scroll, the row still on screen | the grab aimed at the new row (y 917), `13 -> 14 -> 13` |
+| control: the row scrolled down under the pad (handle at y 1243) | `13 -> 14 -> 13`, 1 gesture each; then scrolled below the screen, refused |
+| controls: `⇟ page` ×2, `⤓ end` (12 pages to row 120), `← char` ×2 and `→ char` after it, `⤒ start` | as before |
+| control: the debug target's `TextView`, `char →`, `char ←`, `word →` from `bravo` | `11 -> 12 -> 11`, then `11 -> 19` |
+
+The phone may take the other branch, a failed `refresh()`, which the gotcha above records for an
+off-screen anchor. Both branches refuse. The check runs once, when a press starts. Inside a press
+the pad's own drags keep the moving handle on screen, so the re-reads there are unchanged.
 
 **A scroll that falls short means the document's edge, and the last drag then goes to the SCREEN's
 corner.** The band's corner is not enough, because a document's last rows scroll no higher than the

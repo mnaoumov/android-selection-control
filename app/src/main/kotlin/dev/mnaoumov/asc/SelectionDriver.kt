@@ -103,6 +103,12 @@ sealed interface Outcome {
    * See `SelectionDriver.activeEdgeAnnounced`.
    */
   data object EdgeUnknown : Outcome
+
+  /**
+   * The moving edge's node has been scrolled out of view, or cannot be re-read at all, so nothing was
+   * touched. See `SelectionDriver.movingNodeOffScreen`.
+   */
+  data object OffScreen : Outcome
   data class Degraded(val reason: String) : Outcome
 }
 
@@ -114,6 +120,12 @@ sealed interface Outcome {
 class ContentBand(
   val visible: Rect,
   val scrolls: Boolean,
+  /**
+   * [visible] before the docked pad was cut off it: where the page's text is drawn at all. A handle
+   * under the pad is still reachable (`AscAccessibilityService.clearThePadFor`), so this, not
+   * [visible], says whether the selection's node is on screen. See `SelectionDriver.movingNodeOffScreen`.
+   */
+  val drawn: Rect = visible,
   /**
    * Whether the scroller says it can scroll toward the document's start (`first`) or its end
    * (`second`), read from the scroll actions it lists, and read only when asked, because the band is
@@ -544,6 +556,11 @@ class SelectionDriver(
       onDone(Outcome.NoSelection)
       return
     }
+    movingNodeOffScreen(snapshot)?.let { why ->
+      Diag.log("$command: $why — refusing to touch")
+      onDone(Outcome.OffScreen)
+      return
+    }
     syncBoundaryContext(snapshot)
     Diag.log(
       "$command edge=$activeEdge at ${snapshot.low()}..${snapshot.high()} " +
@@ -579,6 +596,32 @@ class SelectionDriver(
       PadCommand.Unit.PAGE -> sweepPage(command, report)
       PadCommand.Unit.DOCUMENT -> sweepToDocumentEdge(command, report)
     }
+  }
+
+  /**
+   * Why the moving edge's node cannot be where a press would aim, or null when it is on screen.
+   *
+   * A scroll announces nothing, so after a hand scroll the last announcement's bounds are where the
+   * node WAS. [SelectionObserver.latestWithFreshBounds] re-reads them, but when Chrome's `refresh()`
+   * fails it hands the old bounds back, and every rung then aims at them. Measured on the handset
+   * (2026-10-11): after a 1050 px hand scroll took the line under the omnibox, `→ char` grabbed at
+   * y 1404, the line's pre-scroll row, landed on page text and left the selection a caret in another
+   * node. On the rig (2026-10-12) an 800 px scroll did the same: a grab at y 1051 and six pushes, all
+   * on the page. A missed grab is a tap on the page, which on a link navigates, so the press is
+   * refused before anything is touched when the node cannot be re-read, comes back with no box, or
+   * lies wholly outside where the page draws its text. The pad is not cut off that area, because a
+   * handle under the pad is reachable.
+   */
+  private fun movingNodeOffScreen(snapshot: SelectionObserver.Snapshot): String? {
+    val source = snapshot.source ?: return null
+    if (!runCatching { source.refresh() }.getOrDefault(false)) {
+      return "the moving edge's node cannot be re-read, so where it is now is unknown"
+    }
+    val bounds = Rect().also { source.getBoundsInScreen(it) }
+    if (bounds.isEmpty) return "the moving edge's node has no box on screen ($bounds)"
+    val drawn = contentBand(snapshot.copy(bounds = bounds))?.drawn ?: return null
+    if (Rect.intersects(bounds, drawn)) return null
+    return "the moving edge's node is at $bounds, outside the page's view $drawn"
   }
 
   /**
