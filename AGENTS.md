@@ -1291,6 +1291,19 @@ in the half of the band the handle is not in, a quarter of the way in. It never 
 of the screen's top or bottom. Where nothing scrolls (the debug target's `TextView`), there is no
 swipe: `page ↓` there went 11 → 30 in 1 gesture, and `page ↑` on the START edge 6 → 0.
 
+**A planned scroll shorter than twice the touch slop is not swiped at all**
+(`PAGE_SCROLL_SLOP_MULTIPLE`). A swipe that lifts inside the slop is a tap on the page, which
+clears the selection. The drag then starts where the handle already is, a little short of the band's end.
+Measured 2026-10-12 on the rig (Chrome 143, a served page of one-line rows, a hand scroll first so the
+handle sat near the band's bottom), `⇞ page` then `→ char`:
+
+| planned scroll | old build | new build |
+|---|---|---|
+| 13 px | `the selection changed during the scroll`, `HandleLost` in 783 ms; `→ char` `the pad cannot see a selection` | no swipe, 1 gesture, ~0.6 s; `→ char` `6 -> 7`, 2 runs of 2 |
+| 23 px | swiped, `scrolled 4 of 23`, 2 gestures, 1.7 s | no swipe, 1 gesture, 0.58 s; `→ char` `6 -> 7` |
+| 19, 23, 13 px on the START edge | not measured | no swipe; `→ char` / `← char` `0 -> 1 -> 0` |
+| 33 px, and `page ↓` ×2 (348, 768 px) | swiped as before | swiped as before (`scrolled 16 of 33`), `← char` after it exact |
+
 **On the handset, the toolbar used to end a page run after one or two pages.** Measured 2026-10-05 on the
 OnePlus 15 (portrait, Chrome 154 with the extended-selection flag Disabled) against
 `en.m.wikipedia.org/wiki/Text_editor`. The band is `[0,337][1272,2180]`.
