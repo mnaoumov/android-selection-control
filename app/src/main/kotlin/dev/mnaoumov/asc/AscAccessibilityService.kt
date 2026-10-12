@@ -858,6 +858,8 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
   override fun screenHeight(): Int = resources.displayMetrics.heightPixels
 
+  override fun touchSlop(): Int = ViewConfiguration.get(this).scaledTouchSlop
+
   /**
    * [point], moved onto the screen if it lies off it.
    *

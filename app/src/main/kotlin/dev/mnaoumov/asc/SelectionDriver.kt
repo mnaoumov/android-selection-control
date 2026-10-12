@@ -152,6 +152,9 @@ interface GestureDispatcher {
   fun screenWidth(): Int
   fun screenHeight(): Int
 
+  /** The platform's touch slop in screen pixels: a stroke shorter than it that lifts is a tap. */
+  fun touchSlop(): Int
+
   /**
    * Press the handle at [from], travel to [to], and **do not lift** (the held-pointer fix).
    *
@@ -2831,7 +2834,18 @@ class SelectionDriver(
       dragAcross(before, atDocumentEdge = true)
       return
     }
-    if (kotlin.math.abs(scrollBy) < MIN_PAGE_SCROLL_PX) {
+    /*
+     * A swipe shorter than the touch slop that lifts is a TAP on the page, which clears the selection
+     * or follows a link. Measured 2026-10-12 on the rig (Chrome 143): a `⇞ page` whose planned scroll was
+     * 15 px, under the 16 px slop, swiped and lost the selection, while a 17 px one scrolled 2 px. So a
+     * scroll is swiped only when it clears the slop twice over, as the drag's detour does; a shorter one
+     * is skipped, and the drag starts where the handle already is, a little short of the band's end.
+     */
+    val minScroll = maxOf(MIN_PAGE_SCROLL_PX, gestures.touchSlop() * PAGE_SCROLL_SLOP_MULTIPLE)
+    if (kotlin.math.abs(scrollBy) < minScroll) {
+      if (kotlin.math.abs(scrollBy) >= MIN_PAGE_SCROLL_PX) {
+        Diag.log("  page: a scroll of $scrollBy is under ${minScroll} px, inside the touch slop — no swipe")
+      }
       dragAcross(before, atDocumentEdge = false)
       return
     }
@@ -3455,6 +3469,9 @@ class SelectionDriver(
 
     /** A scroll shorter than this is not worth a gesture: the drag starts where the handle already is. */
     const val MIN_PAGE_SCROLL_PX = 8f
+
+    /** A scroll swipe must travel this many touch slops, or it lifts as a tap. See `pageStep`. */
+    const val PAGE_SCROLL_SLOP_MULTIPLE = 2f
 
     /** The scroll swipe, and the stillness before its lift that keeps it from flinging. */
     const val PAGE_SCROLL_MS = 400L
