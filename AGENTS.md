@@ -16,7 +16,7 @@ Open work is split by shape, one item each in that same store, and named there r
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
 (two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, with the block step that follows it; the toolbar under a paged handle is fixed and confirmed on the phone, which
 found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse; on the phone, page and end now run to the article's real end, but the collapse did not recur, so the fix's own branch is unexercised), `start` ending
-blind on an image (fixed on the rig; on the phone the move off the image landed on a hidden header button, and the walk now skips controls, which is fixed on the rig and not yet confirmed on the phone; a page step that reaches the top can still land on the image itself; a `start` from the page's top used to set off Chrome's pull-to-refresh, and now does not swipe at all, which is fixed on the rig and not yet confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig and confirmed on the phone, where the pass also found that a press after a hand scroll can grab at a node's pre-scroll position); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
+blind on an image (fixed on the rig; on the phone the move off the image landed on a hidden header button, and the walk now skips controls, which is fixed on the rig and not yet confirmed on the phone; a page step that reaches the top can still land on the image itself; a `start` from the page's top used to set off Chrome's pull-to-refresh, and now does not swipe at all, which is fixed on the rig and not yet confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins, and such a press now stops at the first swallowed touch-down, fixed on the rig and not yet confirmed on the phone), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig and confirmed on the phone, where the pass also found that a press after a hand scroll can grab at a node's pre-scroll position); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
 heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
 `✕` is fixed on the rig and confirmed on the phone); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
@@ -1523,13 +1523,13 @@ the strip. A press there cannot be made to work. The pad now does three things:
   is the back gesture's own shape. Now, once a zone touch-down has been followed by no announcement,
   every later touch-down in a zone is dropped (`went unanswered — not touching`). The press then ends
   with `the handle is in the screen edge's swipe zone` on the status line, instead of `lost the handle`
-  or `didn't move`. The driver still counts and waits out its tries, so that ending takes ~3 s and
-  reports 13 "gestures" of which 1 touched the screen.
+  or `didn't move`. A dropped drag now reports itself not completed, and every grab asks first (below),
+  so the press stops at the first unanswered touch-down instead of waiting out its tries.
 
 **`adb shell run-as dev.mnaoumov.asc touch files/force-swallow-edge-zone`, then `rig.ps1 rebind`,
 drops every handle touch-down in a side zone** on a debuggable build, which is how the rig reproduces
 the phone. `rm` it and rebind to undo. With it, on the same page, `char →` from the margin logged
-`debug: swallowed it`, then 13 dropped touch-downs, ended `HandleLost` in 3.1 s, and showed the
+`debug: swallowed it`, then (before the stop-at-once change below) 13 dropped touch-downs, ended `HandleLost` in 3.1 s, and showed the
 edge message with the selection intact. A mid-line START (`code`, `7..11`) logged no zone and stepped
 `7 -> 8 -> 7`.
 
@@ -1552,6 +1552,32 @@ START at the margin, so Chrome's exclusion is not there at all, or not where `du
   2.0 s and 7 gestures. Those were one touch-down, then six held snap-through pushes on a pointer Chrome
   never saw. An END whose aim stayed just short of the zone (x 1161.5, `since`) stepped `80 -> 81` across
   the wrap in 1 gesture.
+
+**So a press that a zone has swallowed stops at once, and once the ROM is known to swallow, a press
+whose handle is in a zone touches nothing at all.** Every grab, and every page step's swipe, passes
+through `SelectionDriver.uncovered` first, which asks `edgeZoneSwallows`. That is true for an aim in a
+side zone when this press's zone touch-down went unanswered, or when the service has learned that this
+ROM swallows them (`edgeZoneSwallowsHere`). The press then ends `InEdgeZone` with the edge message and
+nothing touched. A held pointer whose zone grab went unanswered refuses `moveHeld` and lifts, so no
+snap-through push follows. The verdict is learned from the first zone touch-down of a service
+connection: `true` when it went unanswered and the press got nowhere, `false` when it was answered. It
+is not kept across a rebind, because "unanswered" can also be a grab that simply missed, and a wrong
+`true` would refuse every margin grab after it. So the first margin press of a connection on a
+swallowing ROM still pays one touch, and a first page step still pays its scroll. Every later one pays
+neither. Measured 2026-10-12 on the rig with the marker below (Chrome 143, a served page of one-line
+rows with a 16 px body margin, 60 px zones), a rebind before each run, 3 runs of 3 each:
+
+| press | before | after |
+|---|---|---|
+| `→ char`, START at the left margin (`code` → `⇄ swap` → `⇤ word` to `0..11`) | `HandleLost` in 3.1 s, 13 "gestures" | `InEdgeZone` in 23-39 ms (the one dropped grab); the next press 8-19 ms, 0 gestures |
+| `← char` then `→ char`, END at the right margin (`is`, `24..26`) | not measured | `InEdgeZone` in 28-33 ms, then 10-13 ms with 0 gestures |
+| `⇞ page` ×2 then `⤒ start`, START at the left margin, page scrolled | not measured | the first scrolled 346-358 px and ended `Moved(0, 0)` with the edge message in ~2.0 s; the second `⇞ page` and the `⤒ start` ended `InEdgeZone` in 11-17 ms, 0 gestures, no scroll |
+| controls, no marker: the same presses | as before | `0 -> 1 -> 0 -> 1` at the left margin and `26 -> 25 -> 26` at the right, 1 gesture each; `⇞ page` crossed into the row above, then `0 -> 1 -> 0`; `a touch-down there was answered` |
+
+The marker drops the grab without dispatching it, so the rig cannot show the phone's own shape: a grab
+that IS dispatched and that Chrome never sees. There the held pointer's next push is refused
+(`the grab in a side gesture zone went unanswered — lifting rather than pushing on`), and that branch is
+unproven until the phone runs it.
 
 **A heads-up notification is another app's window above the target, and a touch-down on it goes to the
 notification.** An upward page swipe starts a quarter of a drop below the band's top: y 361 on the phone,
