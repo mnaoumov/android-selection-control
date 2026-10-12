@@ -1520,6 +1520,27 @@ above). In the scrolled run, a `⇥ word` with the START at y 299 ended `HandleC
 three runs of three: Chrome's toolbar sat over that handle near the band's top. That is the toolbar refusal
 (*A grab under the floating toolbar*) firing on the rig for the first time.
 
+**The phone confirms all three cases (2026-10-12, OnePlus 15, Chrome 154 with the extended-selection
+flag Disabled, `en.wikipedia.org/wiki/Text_editor`).**
+
+| case | result |
+|---|---|
+| `⇄ swap` on `interactive` (`4..15`), `⇟ page`, 3 runs | `landed in Rect(56, 1754 - 1151, 2010), the anchor's node is at Rect(378, 375 - 721, 445) — past the anchor`, now the END, `Moved(4, 87)` in 1.7 s and 2 gestures; `→ char` `87 -> 88`, `← char` `88 -> 87`, 1 gesture each |
+| `⇞ page` on the END from `features` (`27..39`), the page scrolled, 2 runs | the scroll was under the slop, so no swipe; `past the anchor`, now the START, onto offset 0 of the caption above (`Editors like `), `Moved(39, 0)` in 0.55 s and 1 gesture; `→ char` `0 -> 1` and `3 -> 2` were exact, one `→ char` went `1 -> 3` |
+| `⇟ page` ×2 on the END from `software`, then `⇞ page` | `the anchor's node cannot be re-read — the edge keeps its name`, `Moved(89, 18)`; `→ char` `18 -> 19`, `← char` `19 -> 18` as the END |
+
+The pass also found three defects, none of them in the crossing:
+
+- **An END in a one-character node refuses.** A long-press on `environment` took the trailing `.` into the
+  selection, and that `.` is a node of its own. The END then sat in a node whose honest per-character rectangle
+  is the node's whole box. The toolbar bound assumes the START is in that node too, so every press ended
+  `ColumnUnknown`.
+- **A START `← char` onto the caption's caret 0 was announced `0..0`.** That ended `HandleLost`, and the pad
+  stayed blind afterwards, 2 runs of 2.
+- **A `⇞ page` with the omnibox already hidden scrolled 56 px of a planned 230.** It read that as the
+  document's edge and made the corner drag to (24, 24). Above the web contents, Chrome does auto-scroll a held
+  handle, so the START ran to the article's title.
+
 **A handle at the screen's side margin sits inside the system's edge-gesture zone, and only stock
 Android lets the grab through.** A START on a line's first character is drawn beyond the caret: on
 the phone, with Wikipedia's 16 dp margin, at x 0..56. Gesture navigation claims a 105 px (30 dp)
