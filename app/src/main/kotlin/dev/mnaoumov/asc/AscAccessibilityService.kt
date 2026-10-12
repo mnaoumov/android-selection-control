@@ -283,6 +283,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
      */
     padCleared = false
     touchedEdgeZone = false
+    heldDownInEdgeZone = false
     touchedForeignWindow = false
     val edgeBefore = driver.activeEdge
     driver.perform(command) { outcome ->
@@ -296,11 +297,12 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
           "a notification is in the way"
         } else if (touchedEdgeZone && isStuck(outcome)) {
           Diag.log("  the press touched down in a side gesture zone and went nowhere")
-          "the handle is in the screen edge's swipe zone"
+          EDGE_ZONE_STATUS
         } else {
           describe(outcome)
         }
       )
+      learnEdgeZoneVerdict(outcome)
       busy = false
       // The press just moved the selection, so the toolbar has just moved too. After `busy` clears,
       // or the guard in refreshMask would skip it.
@@ -343,7 +345,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     is Outcome.Moved -> outcome.madeProgress()
     is Outcome.Degraded -> true
     Outcome.NoSelection, Outcome.HandleLost, Outcome.RowUnknown, Outcome.ColumnUnknown, Outcome.HandleCovered,
-    Outcome.AtFloor, Outcome.EdgeUnknown, Outcome.Obstructed -> false
+    Outcome.AtFloor, Outcome.EdgeUnknown, Outcome.Obstructed, Outcome.InEdgeZone -> false
   }
 
   /**
@@ -388,25 +390,98 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
    * is the back gesture's own shape. So once a touch-down in a zone has gone unanswered, every later
    * one in the press is dropped. A zone grab that worked announced something, and is not held to it.
    */
-  private fun noteEdgeZone(down: PointF): Boolean {
-    val zones = sideGestureZones()
-    if (down.x >= zones.left && down.x < screenWidth() - zones.right) return false
-    if (touchedEdgeZone && observer.announced === announcedAtEdgeDown) {
+  private fun noteEdgeZone(down: PointF): EdgeZoneDown {
+    if (!inSideZone(down)) return EdgeZoneDown.CLEAR
+    if (edgeZoneUnanswered()) {
       Diag.log("  the last touch-down in a side gesture zone went unanswered — not touching (${down.x}, ${down.y})")
-      return true
+      edgeZoneSwallowsHere = true
+      return EdgeZoneDown.UNANSWERED
     }
     touchedEdgeZone = true
     announcedAtEdgeDown = observer.announced
+    val zones = sideGestureZones()
     Diag.log(
       "  the touch-down at (${down.x}, ${down.y}) is in a side gesture zone " +
         "(left ${zones.left} px, right ${zones.right} px)"
     )
-    if (forceSwallowEdgeZone) Diag.log("  debug: swallowed it")
-    return forceSwallowEdgeZone
+    if (!forceSwallowEdgeZone) return EdgeZoneDown.MADE
+    Diag.log("  debug: swallowed it")
+    return EdgeZoneDown.SWALLOWED
   }
+
+  /** What [noteEdgeZone] made of a touch-down. */
+  private enum class EdgeZoneDown {
+    /** Not in a zone. */
+    CLEAR,
+
+    /** In a zone, and made. */
+    MADE,
+
+    /** In a zone, and dropped by the debug marker as the ROM's own edge gesture would take it. */
+    SWALLOWED,
+
+    /** In a zone after one that went unanswered this press, so dropped. */
+    UNANSWERED,
+  }
+
+  private fun inSideZone(point: PointF): Boolean {
+    val zones = sideGestureZones()
+    return point.x < zones.left || point.x >= screenWidth() - zones.right
+  }
+
+  /** Whether this press made a touch-down in a side zone and nothing has been announced since. */
+  private fun edgeZoneUnanswered(): Boolean = touchedEdgeZone && observer.announced === announcedAtEdgeDown
 
   /** What had been announced at this press's last touch-down in a side gesture zone. */
   private var announcedAtEdgeDown: SelectionObserver.Snapshot? = null
+
+  /** Whether the held pointer was put down in a side gesture zone this press. */
+  private var heldDownInEdgeZone = false
+
+  /**
+   * Whether this ROM swallows a touch-down in a side gesture zone: null until a press has made one,
+   * then what that press found. Kept for the connection, not for ever, because "unanswered" can also
+   * be a grab that simply missed, and a wrong `true` would refuse every margin grab after it. A
+   * rebind clears it.
+   *
+   * It is what lets a press stop before it starts. Measured 2026-10-10 on the handset (OxygenOS), each
+   * press paid for re-learning it: `⤒ start` scrolled 294 px before its one grab, a right-margin
+   * `→ char` pushed a pointer Chrome never saw six times, and a left-margin one waited out twelve
+   * dropped tries. Stock Android takes the grab (the `handset` profile, 2026-10-05), so the first
+   * press of a connection has to try.
+   */
+  private var edgeZoneSwallowsHere: Boolean? = null
+
+  override fun edgeZoneSwallows(point: PointF): Boolean {
+    val p = onScreen(point)
+    if (!inSideZone(p)) return false
+    return when {
+      edgeZoneUnanswered() -> {
+        Diag.log("  (${p.x}, ${p.y}) is in a side gesture zone, and this press's touch-down there went unanswered")
+        edgeZoneSwallowsHere = true
+        true
+      }
+      edgeZoneSwallowsHere == true -> {
+        Diag.log("  (${p.x}, ${p.y}) is in a side gesture zone, and this ROM has swallowed a touch-down there")
+        true
+      }
+      else -> false
+    }
+  }
+
+  /** Updates [edgeZoneSwallowsHere] from a press that made a touch-down in a side zone. */
+  private fun learnEdgeZoneVerdict(outcome: Outcome) {
+    if (!touchedEdgeZone) return
+    val verdict = when {
+      !edgeZoneUnanswered() -> false
+      outcome == Outcome.InEdgeZone || isStuck(outcome) -> true
+      else -> return
+    }
+    if (verdict != edgeZoneSwallowsHere) {
+      Diag.log("  side gesture zones: ${if (verdict) "this ROM swallows a touch-down there" else "a touch-down there was answered"}")
+    }
+    edgeZoneSwallowsHere = verdict
+  }
 
   /** Whether this press dropped a touch-down because another app's window owned its pixel. */
   private var touchedForeignWindow = false
@@ -591,6 +666,8 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     Outcome.AtFloor -> "one character left — the app keeps it"
     // Nothing was touched; a heads-up goes by itself, and swiping it away works too.
     Outcome.Obstructed -> "a notification is in the way"
+    // Nothing more was touched. The selection is intact, and the other edge can still be moved.
+    Outcome.InEdgeZone -> EDGE_ZONE_STATUS
     // Nothing was touched. Nudging that handle by hand announces where it is.
     Outcome.EdgeUnknown -> "can't see the ${if (driver.activeEdge == Edge.END) "end" else "start"} — nudge its handle once"
     is Outcome.Degraded -> "one character (${outcome.reason})"
@@ -656,10 +733,20 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       onFinished(false)
       return
     }
-    if (noteEdgeZone(start)) {
-      Diag.log("  the drag was not dispatched")
-      onFinished(true)
-      return
+    when (noteEdgeZone(start)) {
+      EdgeZoneDown.CLEAR, EdgeZoneDown.MADE -> Unit
+      // Played as far as the press can tell, as on a ROM whose edge gesture took it.
+      EdgeZoneDown.SWALLOWED -> {
+        Diag.log("  the drag was not dispatched")
+        onFinished(true)
+        return
+      }
+      // Not dispatched, and said so, so the escalation ends here rather than waiting out every try.
+      EdgeZoneDown.UNANSWERED -> {
+        Diag.log("  the drag was not dispatched")
+        onFinished(false)
+        return
+      }
     }
     clearThePadFor(start) { dispatch(GestureDescription.StrokeDescription(path, 0, durationMs), onFinished) }
   }
@@ -727,15 +814,38 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     if (heldPointer.isHeld) heldPointer.releaseNow()
     // Not past [to]: the same bound [drag] uses, as far as [to] or one pixel past the slop.
     val shortDetour = if (pastTarget) null else ViewConfiguration.get(this).scaledTouchSlop + 1f
-    if (noteForeignWindow(onScreen(from)) || noteEdgeZone(onScreen(from))) {
+    if (noteForeignWindow(onScreen(from))) {
       Diag.log("  the grab was not dispatched")
       onGrabbed(false)
       return
     }
+    when (noteEdgeZone(onScreen(from))) {
+      EdgeZoneDown.CLEAR -> Unit
+      EdgeZoneDown.MADE -> heldDownInEdgeZone = true
+      EdgeZoneDown.SWALLOWED, EdgeZoneDown.UNANSWERED -> {
+        Diag.log("  the grab was not dispatched")
+        onGrabbed(false)
+        return
+      }
+    }
     clearThePadFor(onScreen(from)) { heldPointer.grab(from, to, detourBack, shortDetour, onGrabbed) }
   }
 
-  override fun moveHeld(to: PointF): Boolean = heldPointer.moveTo(to)
+  /**
+   * Refused, and the pointer lifted, when it went down in a side gesture zone and nothing has been
+   * announced since: the edge gesture took the down, so the target app is not following this
+   * pointer, and every push of it is time spent on nothing. Measured 2026-10-10 on the handset, a
+   * right-margin grab went on into six snap-through pushes, about 1.6 s of a 2.0 s press.
+   */
+  override fun moveHeld(to: PointF): Boolean {
+    if (heldDownInEdgeZone && heldPointer.isHeld && edgeZoneUnanswered()) {
+      Diag.log("  held: the grab in a side gesture zone went unanswered — lifting rather than pushing on")
+      edgeZoneSwallowsHere = true
+      heldPointer.releaseNow()
+      return false
+    }
+    return heldPointer.moveTo(to)
+  }
 
   override fun releaseHeld(onLifted: () -> Unit) = heldPointer.release(onLifted)
 
@@ -811,6 +921,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
     /** The debug marker file that drops a handle touch-down in a side gesture zone: see [noteEdgeZone]. */
     const val FORCE_SWALLOW_EDGE_ZONE = "force-swallow-edge-zone"
+
+    /** The status line for a press the side gesture zone stopped. */
+    const val EDGE_ZONE_STATUS = "the handle is in the screen edge's swipe zone"
 
     /** How far [contentBand] walks up from a source node looking for the page's scroller. */
     const val MAX_ANCESTORS = 64

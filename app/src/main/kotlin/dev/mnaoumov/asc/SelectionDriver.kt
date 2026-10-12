@@ -78,6 +78,17 @@ sealed interface Outcome {
   data object Obstructed : Outcome
 
   /**
+   * The handle's aim is in a side system-gesture zone that swallows touch-downs, so nothing was
+   * touched, or nothing more after the one that went unanswered.
+   *
+   * OxygenOS runs an edge gesture of its own that stock Android's exclusion does not reach, so a
+   * handle drawn at the screen's margin cannot be grabbed there (see
+   * `AscAccessibilityService.noteEdgeZone`). The selection is intact; scrolling the text sideways or
+   * moving the other edge is what works.
+   */
+  data object InEdgeZone : Outcome
+
+  /**
    * A shrink was asked for with one character left, so nothing was touched.
    *
    * A dragged handle cannot take the selection below one character: a `TextView` keeps it, and
@@ -171,6 +182,12 @@ interface GestureDispatcher {
 
   /** Where the held pointer is, or null when nothing is down. */
   fun heldAt(): PointF?
+
+  /**
+   * Whether a touch-down at [point] would be swallowed by a side system-gesture zone: the ROM is
+   * known to swallow them, or one already went unanswered this press. See [Outcome.InEdgeZone].
+   */
+  fun edgeZoneSwallows(point: PointF): Boolean = false
 }
 
 /**
@@ -214,6 +231,18 @@ class SelectionDriver(
     if (foreign != null) {
       Diag.log("  grab: another app's window $foreign covers (${aim.x}, ${aim.y}) — refusing to touch")
       onRefused(Outcome.Obstructed)
+      return null
+    }
+    /*
+     * An edge strip that swallows the down leaves the press nothing to do with it, and every try after
+     * it is wasted, or worse: measured 2026-10-10 on the handset, a page step scrolled 294 px before it
+     * found the handle unreachable, a held grab went on into six pushes Chrome never saw, and a char
+     * step waited out twelve dropped tries. Asked here because every grab, and every page step's
+     * swipe, passes through here first.
+     */
+    if (aim != null && gestures.edgeZoneSwallows(aim)) {
+      Diag.log("  grab: (${aim.x}, ${aim.y}) is in a side gesture zone that swallows touch-downs — refusing to touch")
+      onRefused(Outcome.InEdgeZone)
       return null
     }
     when {
