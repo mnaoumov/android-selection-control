@@ -2550,10 +2550,9 @@ class SelectionDriver(
     stopRequested = true
   }
 
-  /** What one page step did, for [sweepPage] to report and [sweepToDocumentEdge] to continue from. */
   /**
-   * The last drag of `start` / `end`: to the screen's corner, held, and on into the nearest TEXT when
-   * the corner leaves the edge in a node that has none.
+   * A page step's drag: to the band's far end, or at the document's edge to the screen's corner, held,
+   * and on into the nearest TEXT when it leaves the edge in a node that has none.
    *
    * The corner puts the edge before the document's first selectable thing, and that need not be text.
    * Measured 2026-10-05 on the handset, Wikipedia's `Text_editor`: `⤒ start` ended on the wordmark, an
@@ -2564,16 +2563,26 @@ class SelectionDriver(
    * down, and where the landing has no text it moves on to the outer caret of the text node beyond
    * it, the first character of the document's text for `start` and the last for `end`. From the
    * corner that move is a shrink, so it is character-granular and lands on the caret.
+   *
+   * **An ordinary page step is held the same way, because its drag can land on the image too.**
+   * Measured 2026-10-12 on the rig (Chrome 143), a served page opening with a wordmark and a header
+   * button, scrolled ~150 px: `⇄ swap`, `⤒ start` scrolled `-110 of -131`, which is not short, so
+   * the step was an ordinary one, and its released drag to the band's top (y 343) landed on the
+   * wordmark. It ended `HandleLost`, and the next press said the pad could not see a selection. A
+   * released drag cannot be taken back off the image, because nothing can locate a handle there.
+   * Held, the same step logged `the drag left the edge in a node with no text (0..0, srcLen=-1)`,
+   * moved onto `Text editor`, and `→ char` / `← char` after it went `0 -> 1 -> 0`. Mid-document the
+   * held drag lands where the released one did: one band a page, the column kept.
    */
-  private fun toDocumentEdge(
+  private fun holdOntoText(
     scrolled: SelectionObserver.Snapshot,
     grab: PointF,
-    corner: PointF,
+    to: PointF,
     forward: Boolean,
     ended: (Outcome) -> Unit,
     report: (SelectionObserver.Snapshot?) -> Unit,
   ) {
-    gestures.grabAndHold(grab, corner, pastTarget = false) { grabbed ->
+    gestures.grabAndHold(grab, to, pastTarget = false) { grabbed ->
       if (!grabbed) {
         gestures.releaseHeld { ended(Outcome.HandleLost) }
         return@grabAndHold
@@ -2585,13 +2594,13 @@ class SelectionDriver(
         }
         val caret = locator.adjacentNodeCaret(textless, forward = !forward, oneIn = false)
         if (caret == null) {
-          Diag.log("  page: the corner left the edge in a node with no text, and no text node is beyond it")
+          Diag.log("  page: the drag left the edge in a node with no text, and no text node is beyond it")
           gestures.releaseHeld { report(observer.latest) }
           return@awaitChange
         }
         val aim = PointF(handleX(caret.geometry.caretX), caret.geometry.lineBottom + locator.handleDrop)
         Diag.log(
-          "  page: the corner left the edge in a node with no text (${textless.low()}..${textless.high()}, " +
+          "  page: the drag left the edge in a node with no text (${textless.low()}..${textless.high()}, " +
             "srcLen=${textless.sourceLength}) — moving on to the text's ${if (forward) "last" else "first"} caret at (${aim.x}, ${aim.y})"
         )
         gestureCount++
@@ -2618,6 +2627,7 @@ class SelectionDriver(
     sourceLength <= 0 ||
       runCatching { source?.className?.toString() }.getOrNull() in HandleLocator.NOT_PAGE_TEXT_CLASSES
 
+  /** What one page step did, for [sweepPage] to report and [sweepToDocumentEdge] to continue from. */
   private class PageStep(
     val outcome: Outcome,
     /** The scroll ran out before its full distance: the page is at the document's end. */
@@ -2798,17 +2808,7 @@ class SelectionDriver(
         onResult(PageStep(outcome, atDocumentEdge))
       }
       gestureCount++
-      if (atDocumentEdge) {
-        toDocumentEdge(scrolled, grab, target, forward, ended, ::report)
-        return
-      }
-      gestures.drag(grab, target, PAGE_DRAG_MS, pastTarget = false) { completed ->
-        if (!completed) {
-          ended(Outcome.HandleLost)
-          return@drag
-        }
-        awaitChange(scrolled, maxMs = MAX_PAGE_SETTLE_MS, onResult = ::report)
-      }
+      holdOntoText(scrolled, grab, target, forward, ended, ::report)
     }
 
     if (content?.scrolls != true) {
@@ -3459,7 +3459,6 @@ class SelectionDriver(
     /** The scroll swipe, and the stillness before its lift that keeps it from flinging. */
     const val PAGE_SCROLL_MS = 400L
     const val PAGE_SCROLL_HOLD_MS = 150L
-    const val PAGE_DRAG_MS = 300L
 
     /**
      * How long a page drag's announcement is waited for. A drag across a whole band is announced
