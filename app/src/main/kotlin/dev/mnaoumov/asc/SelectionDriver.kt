@@ -2527,10 +2527,12 @@ class SelectionDriver(
    * Whether the edge is in a node that is not text: a link or a figure around an image (no text at
    * all), or the image itself. Chrome gives an `android.widget.Image` its file name as text when it has
    * no other, so its length says nothing: on the rig, a bare `<img src="/wordmark.svg">` was announced
-   * `0..0` with `srcLen=8`, while the handset's Wikipedia wordmark had none.
+   * `0..0` with `srcLen=8`, while the handset's Wikipedia wordmark had none. A control's text is a
+   * label, so a button reads the same ([HandleLocator.NOT_PAGE_TEXT_CLASSES]).
    */
   private fun SelectionObserver.Snapshot.holdsNoText(): Boolean =
-    sourceLength <= 0 || runCatching { source?.className?.toString() }.getOrNull() == HandleLocator.IMAGE_CLASS
+    sourceLength <= 0 ||
+      runCatching { source?.className?.toString() }.getOrNull() in HandleLocator.NOT_PAGE_TEXT_CLASSES
 
   private class PageStep(
     val outcome: Outcome,

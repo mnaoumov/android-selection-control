@@ -16,7 +16,7 @@ Open work is split by shape, one item each in that same store, and named there r
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
 (two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, with the block step that follows it; the toolbar under a paged handle is fixed and confirmed on the phone, which
 found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse; on the phone, page and end now run to the article's real end, but the collapse did not recur, so the fix's own branch is unexercised), `start` ending
-blind on an image (fixed on the rig, but on the phone the move off the image lands on a hidden header button and the pad is still blind; a `start` from the page's top also sets off Chrome's pull-to-refresh), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig and confirmed on the phone, where the pass also found that a press after a hand scroll can grab at a node's pre-scroll position); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
+blind on an image (fixed on the rig; on the phone the move off the image landed on a hidden header button, and the walk now skips controls, which is fixed on the rig and not yet confirmed on the phone; a page step that reaches the top can still land on the image itself; a `start` from the page's top also sets off Chrome's pull-to-refresh), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig and confirmed on the phone, where the pass also found that a press after a hand scroll can grab at a node's pre-scroll position); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
 heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
 `✕` is fixed on the rig and confirmed on the phone); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
@@ -1359,7 +1359,7 @@ the document's real edge.
  grab miss by the omnibox's 196 px.
 - **The wordmark is an `android.widget.Image` with no text**, so its `0..0` comes from a node of length 0, and
  `inMovingFrame`'s rewrite (above) skips any snapshot with `sourceLength <= 0`. Row 001 on the served
- page was text, which is why the profile passed. Fixed on the rig, below; on the phone the move off the image lands on the header's hidden `Search` button instead, so the pad is still blind (after the crossing table below).
+ page was text, which is why the profile passed. Fixed on the rig, below. On the phone the move off the image then landed on the header's hidden `Search` button, so the pad was still blind. The walk now skips controls, which is fixed on the rig and not yet confirmed on the phone (after the crossing table below).
 - **A START handle at the left margin is not grabbed.** The touch-down falls in OxygenOS's own edge-gesture
  strip, which stock Android's exclusion does not reach. Not fixable from the pad; it now says so, below.
 - **An upward page swipe starts at y 361**, where heads-up notifications appear. Straight after one
@@ -1423,7 +1423,28 @@ announced — the pad cannot see a selection`. So the walk has to skip nodes tha
 With the page already at its top, the same `⤒ start` swiped downward from (954, 361.5), and that is
 Chrome's pull-to-refresh: the page reloaded and the selection was gone. The pad read the reload as a
 1130 px scroll and reported `Moved(4, 15)`. A hand `input swipe` from the same point showed the refresh
-spinner. Neither defect is fixed yet.
+spinner. The pull-to-refresh is not fixed yet.
+
+**So the walk skips controls: a button's text is its label, not page text.** `adjacentTextLeaf` now
+passes over any node of a class in `HandleLocator.NOT_PAGE_TEXT_CLASSES`, along with its children: the
+image, and Button, ImageButton, ToggleButton, CheckBox, RadioButton, Switch, EditText, Spinner, SeekBar and
+ProgressBar. The landing test `holdsNoText` reads the same set, so a corner drag that lands on such a
+control moves on too. The rig's served page reproduces the phone's header: `<a><img src=/wordmark.svg></a>`,
+then `<button>` holding an icon `<svg>` and a clipped `<span>Search</span>`, then `<h1>Text editor</h1>`,
+then 120 one-line rows. Chrome reports that button as `android.widget.Button` with the text `Search`, as on
+the phone. An `aria-label` alone comes through as a content description, with no text, so it never
+reproduced the defect. Measured 2026-10-12 on the rig (Chrome 143, force-stopped before each run, page
+scrolled ~400 px, long-press `alpha` on row 005):
+
+| press | old build | new build |
+|---|---|---|
+| `⇄ swap`, `⤒ start`, then `→ char`, `← char` | `adjacent: the next node (6 chars …) is wrapped and will not measure`, `HandleLost`; the next press `the pad cannot see a selection` | onto `0..11` of `Text editor`, 3 gestures, ~1.9 s; `0 -> 1 -> 0` (or `-> 2 -> 1`), 1 gesture each, 3 runs of 3 |
+| `⤒ start` on the END (the anchor crossed), then `→ char`, `← char` | not measured | `now moving the START`, onto `0..11`; `0 -> 1 -> 0`, 1 gesture each, 2 runs of 2 |
+| control: `→ char`, `← char` across rows 004/005 from `delta` | as before | `33 -> 1 -> 33`, the block step, 2 gestures each |
+
+A different shape stays blind. When the page reaches its top inside an ordinary page step (the scroll is
+not short, so there is no corner drag), that step's drag can land on the wordmark itself. It then ends
+`HandleLost`, and the pad cannot see the selection after it. That case is tracked on its own.
 
 **A page step mid-document can cross the anchor too, and there the landing's node says nothing by
 itself**, because it can be on either side of the anchor, and Chrome announces it as `0..focus` either

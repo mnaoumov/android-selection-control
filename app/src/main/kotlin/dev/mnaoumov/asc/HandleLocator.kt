@@ -340,8 +340,8 @@ class HandleLocator(private val density: () -> Float) {
   /**
    * The first text leaf after [source] in tree order ([forward]), or the last one before it: the
    * next sibling's first leaf, else the parent's next sibling's, and so on up. Visible nodes with
-   * text only, since a node off screen has no handle to drag onto it, and never an image, whatever
-   * text Chrome gives it ([IMAGE_CLASS]).
+   * text only, since a node off screen has no handle to drag onto it, and never an image or a control,
+   * whatever text Chrome gives it ([NOT_PAGE_TEXT_CLASSES]).
    */
   private fun adjacentTextLeaf(source: AccessibilityNodeInfo, forward: Boolean): AccessibilityNodeInfo? {
     var node = source
@@ -370,7 +370,9 @@ class HandleLocator(private val density: () -> Float) {
 
   private fun textLeaf(node: AccessibilityNodeInfo, forward: Boolean, depth: Int): AccessibilityNodeInfo? {
     if (!runCatching { node.isVisibleToUser }.getOrDefault(false)) return null
-    val count = runCatching { node.childCount }.getOrDefault(0).coerceAtMost(MAX_ADJACENT_SIBLINGS)
+    // Not its children either: a `<button>`'s label can be a text node of its own inside it.
+    if (runCatching { node.className?.toString() }.getOrNull() in NOT_PAGE_TEXT_CLASSES) return null
+    val count =runCatching { node.childCount }.getOrDefault(0).coerceAtMost(MAX_ADJACENT_SIBLINGS)
     if (count > 0 && depth > 0) {
       val order = if (forward) 0 until count else count - 1 downTo 0
       for (i in order) {
@@ -378,8 +380,7 @@ class HandleLocator(private val density: () -> Float) {
         textLeaf(child, forward, depth - 1)?.let { return it }
       }
     }
-    val hasText = (runCatching { node.text?.length }.getOrNull() ?: 0) > 0 &&
-      runCatching { node.className?.toString() }.getOrNull() != IMAGE_CLASS
+    val hasText = (runCatching { node.text?.length }.getOrNull() ?: 0) > 0
     val bounds = Rect().also { node.getBoundsInScreen(it) }
     return node.takeIf { hasText && !bounds.isEmpty }
   }
@@ -891,6 +892,28 @@ class HandleLocator(private val density: () -> Float) {
      * `<img>` that has no other name by its file name, `wordmark` for `/wordmark.svg` on the rig.
      */
     const val IMAGE_CLASS = "android.widget.Image"
+
+    /**
+     * The classes whose text is not page text a handle can be dragged into: an image's file name, and
+     * the controls. Measured 2026-10-10 on the handset, Wikipedia's header: the walk off the wordmark
+     * found the `Search` button, an `android.widget.Button` whose 6-character text is the search icon's
+     * label and is never drawn. The pointer moved onto the icon and the pad went blind, or the walk
+     * stopped there because the label "will not measure". On the rig a `<button>` holding an icon and a
+     * clipped `<span>Search</span>` is reported the same way, and an `aria-label` alone is not text.
+     */
+    val NOT_PAGE_TEXT_CLASSES = setOf(
+      IMAGE_CLASS,
+      "android.widget.Button",
+      "android.widget.ImageButton",
+      "android.widget.ToggleButton",
+      "android.widget.CheckBox",
+      "android.widget.RadioButton",
+      "android.widget.Switch",
+      "android.widget.EditText",
+      "android.widget.Spinner",
+      "android.widget.SeekBar",
+      "android.widget.ProgressBar",
+    )
 
     /**
      * Where Chrome's moving handle sits relative to the caret, in dp — the one unit both measured
