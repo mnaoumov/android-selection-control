@@ -1372,6 +1372,34 @@ gesture each. A tap onto row 005's first character, then `char →`, logged `a c
 character and no toolbar` and touched nothing. The rig's `page ↓` ×3 and `end` (26 pages to row 400)
 were unchanged.
 
+**A caret just after an image can be announced from the IMAGE's side, as a `0..0` in a node with no
+text.** On the handset (2026-10-12, Wikipedia's `Text_editor`) a START `← char` from caret 1 of a figure
+caption (`Editors like `) moved exactly one character, and Chrome drew the handle on the caption's
+first caret. But the press logged `-> 0..0` and `HandleLost`, and every press after it said "the pad
+cannot see a selection". That happened 2 times in 2. The rewrite above skips a snapshot whose node has
+no text, so it never applied. The rig reproduces it with a served copy of the thumbnail markup
+(`<figure>` as a table, `<a><img></a>`, then a `<figcaption>` opening `Editors like `). A START moved
+onto the caption's first caret, whether by hand or by `→ char` back out of the block above, was
+announced `0..0` from the image's link: an `android.view.View` with `srcLen=-1` and the image's box.
+So for the START edge, `inMovingFrame` now re-homes such a `0..0` onto the first caret of the next
+text leaf in tree order (`rehomedOntoText`, via `HandleLocator.textLeafAfter`), and then applies the
+rewrite above to it. A page drag still sees the landing as it arrived (`Snapshot.rehomedFrom`), so
+its move off a text-less node is unchanged. The held grab's log line now names the landing's node
+(class, length and box, never its text). Measured 2026-10-13 on the rig, Chrome 143 force-stopped
+before each run:
+
+| press | result |
+|---|---|
+| START dragged by hand onto the caption's caret 0, then `→ char`, `← char` ×2, `→ char` | `0 -> 1 -> 0`, 1 gesture each, then `0 -> 21` into the lead row above and back `21 -> 0`, each re-homed, 2 gestures |
+| START dragged onto caret 1, then `← char`, `→ char`, `← char`, `← char` | `1 -> 0 -> 1 -> 0`, then out into the row above, nothing blind |
+| `⇞ page` on the START from the paragraph below (the drag passes the image) | the corner drag's text-less landing re-homed, `Moved(10, 0)` on the lead row; `→ char` / `← char` `0 -> 1 -> 0` |
+| control: the debug target's `TextView`, `char →`, `char ←`, `word →` from `bravo` | `11 -> 12 -> 11`, then `11 -> 19` |
+
+On the rig the `1 -> 0` press itself was announced from the caption, so only the hand drag and the
+`→ char` from the row above produced the image-side `0..0` there. The handset's `← char` is the
+case still to confirm. The re-homing is for the START only, because the START is the only edge that
+has been seen announced this way.
+
 **The phone confirms the toolbar fallback, and finds four defects the rig did not show** (2026-10-05,
 OnePlus 15, Chrome 154.0.8037.92 with the extended-selection flag Disabled,
 `en.m.wikipedia.org/wiki/Text_editor`). The mobile skin collapses every section after the lead, so

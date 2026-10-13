@@ -334,6 +334,9 @@ class HandleLocator(private val density: () -> Float) {
     return neighbour
   }
 
+  /** The first text leaf after [source] in tree order, as [adjacentNodeCaret] walks it. */
+  fun textLeafAfter(source: AccessibilityNodeInfo): AccessibilityNodeInfo? = adjacentTextLeaf(source, forward = true)
+
   private var adjacentMemoKey: String? = null
   private var adjacentMemoValue: NeighbourCaret? = null
 
