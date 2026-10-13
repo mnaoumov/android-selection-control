@@ -369,14 +369,62 @@ class SelectionDriver(
    * after it as "the pad cannot see a selection". So `0..0` is read as `0..length` too. A caret the
    * user tapped onto a node's first character looks the same, which is why [perform] believes such a
    * reading only while the toolbar is up ([caretReadAsStart]).
+   *
+   * **That caret can also be announced from the node BEFORE it, when that node has no text**
+   * ([rehomedOntoText]).
    */
   private fun inMovingFrame(snapshot: SelectionObserver.Snapshot): SelectionObserver.Snapshot {
-    if (activeEdge != Edge.START || snapshot.sourceLength <= 0) return snapshot
-    if (nodeKey(snapshot) == anchorNodeKey) return snapshot
-    if (snapshot.from != 0 || snapshot.to < 0 || snapshot.to >= snapshot.sourceLength) return snapshot
-    if (snapshot.to == 0) caretReadAsStart = snapshot.atMs
-    return snapshot.copy(from = snapshot.to, to = snapshot.sourceLength)
+    if (activeEdge != Edge.START) return snapshot
+    val inText = if (snapshot.holdsNoText()) rehomedOntoText(snapshot) ?: return snapshot else snapshot
+    if (nodeKey(inText) == anchorNodeKey) return snapshot
+    if (inText.from != 0 || inText.to < 0 || inText.to >= inText.sourceLength) return snapshot
+    if (inText.to == 0) caretReadAsStart = inText.atMs
+    return inText.copy(from = inText.to, to = inText.sourceLength)
   }
+
+  /**
+   * [snapshot], a `0..0` from a node with no text, read as the first caret of the text node after it.
+   *
+   * A caret between an image and the text that follows it belongs to both, and Chrome can announce it
+   * from the image's side. Measured 2026-10-12 on the rig (Chrome 143), a served copy of Wikipedia's
+   * thumbnail markup (`<figure>` as a table, `<a><img></a>`, then a `<figcaption>` opening `Editors
+   * like `): the START handle dragged by hand from the paragraph below onto the caption's first caret
+   * was announced `0..0` from the image's link, an `android.view.View` with `srcLen=-1` and the
+   * image's box. Chrome drew the handle on the caption's first caret, and the pad read the empty range
+   * as no selection, on that press and every press after it. It is the handset's `← char` from the
+   * caption's caret 1, which logged `-> 0..0` and `HandleLost` twice in two.
+   *
+   * Only for the START, because only the START has been measured there. Memoised per announcement,
+   * because the frame is read on every [SelectionObserver.latest] and this walks the tree.
+   */
+  private fun rehomedOntoText(snapshot: SelectionObserver.Snapshot): SelectionObserver.Snapshot? {
+    if (snapshot.from != 0 || snapshot.to != 0) return null
+    rehomeMemo?.let { (announced, rehomed) -> if (announced === snapshot) return rehomed }
+    val leaf = snapshot.source?.let(locator::textLeafAfter)
+    val length = leaf?.let { runCatching { it.text?.length }.getOrNull() }
+    if (leaf == null || length == null || length <= 0) {
+      if (rehomeRefused !== snapshot) Diag.log("a caret announced from a node with no text (${describeNode(snapshot)}), and no text after it")
+      rehomeRefused = snapshot
+      return null
+    }
+    val bounds = Rect().also { leaf.getBoundsInScreen(it) }
+    Diag.log(
+      "a caret announced from a node with no text (${describeNode(snapshot)}) — " +
+        "reading it as the first caret of the text after it ($length chars at $bounds)"
+    )
+    val rehomed = snapshot.copy(bounds = bounds, sourceLength = length, source = leaf, rehomedFrom = snapshot)
+    rehomeMemo = snapshot to rehomed
+    return rehomed
+  }
+
+  /**
+   * The last announcement [rehomedOntoText] re-homed, and where. Only an answer is memoised: the walk
+   * runs while Chrome is still moving things, and a refusal kept would blind the pad for good.
+   */
+  private var rehomeMemo: Pair<SelectionObserver.Snapshot, SelectionObserver.Snapshot>? = null
+
+  /** The last announcement [rehomedOntoText] found no text after, so the refusal is logged once. */
+  private var rehomeRefused: SelectionObserver.Snapshot? = null
 
   /**
    * Whether a page landing on the anchor's side is past the anchor.
@@ -1183,7 +1231,7 @@ class SelectionDriver(
       awaitChange(before) { after ->
         Diag.log(
           "  held grab: handle=(${handle.x}, ${handle.y}) to=(${to.x}, ${to.y}) -> " +
-            if (after == null) "nothing" else "${after.low()}..${after.high()}"
+            if (after == null) "nothing" else "${after.low()}..${after.high()} ${describeNode(after)}"
         )
         when {
           // A grab aimed into another block that announced nothing has no snap to push through:
@@ -2591,7 +2639,8 @@ class SelectionDriver(
         return@grabAndHold
       }
       awaitChange(scrolled, maxMs = MAX_PAGE_SETTLE_MS) { landed ->
-        val textless = landed?.takeIf { it.holdsNoText() } ?: run {
+        // The landing as it arrived: the START frame reads a text-less caret in the text after it.
+        val textless = landed?.let { it.rehomedFrom ?: it }?.takeIf { it.holdsNoText() } ?: run {
           gestures.releaseHeld { awaitQuiet(observer.latest ?: return@releaseHeld report(landed), 0, report) }
           return@awaitChange
         }
@@ -3294,6 +3343,12 @@ class SelectionDriver(
    * make every other node's record stale.
    */
   private val lastSeenInNode = mutableMapOf<String, SelectionObserver.Snapshot>()
+
+  /** The announcing node's shape for the log: its class, length and box. Never its text. */
+  private fun describeNode(snapshot: SelectionObserver.Snapshot): String {
+    val className = runCatching { snapshot.source?.className?.toString() }.getOrNull()?.substringAfterLast('.')
+    return "in $className srcLen=${snapshot.sourceLength} ${snapshot.bounds}"
+  }
 
   /**
    * The announcing node, by its own identity where the event carried one, and by its bounds and

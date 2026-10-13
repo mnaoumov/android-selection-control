@@ -56,6 +56,11 @@ class SelectionObserver {
      * `android.widget.TextView`. Read from the extras' KEYS, never from any value in them.
      */
     val isBlink: Boolean = false,
+    /**
+     * The announcement as it arrived, when the driver's frame read it in another node: a caret
+     * announced from a node with no text, re-homed onto the text it is drawn on. Null otherwise.
+     */
+    val rehomedFrom: Snapshot? = null,
   ) {
     fun low(): Int = minOf(from, to)
 
