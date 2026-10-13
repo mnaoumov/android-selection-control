@@ -651,6 +651,14 @@ class HandleLocator(private val density: () -> Float) {
    * frame is not the `0..focus` / `focus..length` shape Chrome gives a node without the anchor: the
    * END's `low > 0`, the START's `high < length`.
    *
+   * **Where the other edge is NOT in this node, nothing is asked.** `END <= 2 * centre - box.left`
+   * holds only while the START is at or right of `box.left`, and with the anchor in an earlier node
+   * the START is left of it, or on an earlier row. Measured 2026-10-12 on the handset: `environment.`
+   * on Wikipedia, whose `.` is a 1-character node of its own at 675..703. The END was announced as
+   * `0..1` there, its average 703 was the true caret, and the bound (toolbar centred at 585) refused
+   * it, so every press ended `ColumnUnknown`. A 1-character node's honest rectangle IS its box, so
+   * the per-character ask can never vouch for it either. The START's bound is the mirror.
+   *
    * "Each edge is on its own side of the centre" would be tighter, and is not used. A toolbar wider
    * than the selection gets pushed in from the screen's edge, which moves its centre a long way. On
    * that same `editor` the toolbar was held at the left margin, centred at 311 against the
@@ -680,15 +688,12 @@ class HandleLocator(private val density: () -> Float) {
     val bothHere = anchorInSource(snapshot) ||
       (edge == Edge.END && snapshot.low() > 0) ||
       (edge == Edge.START && snapshot.high() < length)
+    // Each bound leans on the OTHER edge being inside the box. Without the anchor here it can be
+    // anywhere earlier (for the END) or later (for the START), so neither bound holds.
+    if (!bothHere) return false
     val low = average(snapshot.low())
     val high = average(snapshot.high())
-    val outruns = if (bothHere) {
-      endOutruns(high) || startOutruns(low)
-    } else if (edge == Edge.END) {
-      endOutruns(high)
-    } else {
-      startOutruns(low)
-    }
+    val outruns = endOutruns(high) || startOutruns(low)
     if (outruns) {
       Diag.log(
         "  locate: the box's average puts the carets at $low..$high, which the toolbar centred at " +

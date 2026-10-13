@@ -930,6 +930,26 @@ the refusal is the cold first press's, and the press after it works.
 makes every per-character ask refuse** on a debuggable build (it logs `debug: refusing every
 per-character ask`), which is how the rig reproduces that phone case. `rm` it and rebind to undo.
 
+**The toolbar bound needs the OTHER edge inside the box, so it is asked only where the anchor is
+in the announcing node.** `END <= 2·centre − box.left` holds only while the START is at or right
+of `box.left`. An END grown into a later inline node is announced `0..focus` there, with the anchor,
+and so the START, in an earlier node to the left. On the handset (2026-10-12, Wikipedia) the END sat
+in `environment.`'s 1-character `.` node, `Rect(675, 1810 - 703, 1863)`. Its average, 703, was the
+true caret, and a toolbar centred at 585 refused it on every press (`ColumnUnknown`). A 1-character
+node's honest rectangle is its whole box, so the per-character ask could not vouch for it either.
+`averageOutrunsToolbar` now returns false when the other edge is not known to be in the node, for
+the START as well (its bound needs the END at or left of `box.right`). Measured 2026-10-12 on the rig
+with the refusal marker, Chrome 143, Chrome force-stopped before each run, a served
+`<p>… a <span>debugging environment</span>.<sup>[4]</sup> …</p>` (long-press `environment`, then
+`→ char` lands `0..1` of the 3-character `[4]` node, `Rect(460, 1093 - 500, 1133)`, toolbar centred
+at 349.5):
+
+| press, END in `[4]` | old build | new build |
+|---|---|---|
+| `→ char`, `← char`, `⇞ page` | `ColumnUnknown` each, 0 gestures (`carets at 460.0..473.3, which the toolbar centred at 349.5 rules out`) | `1 -> 2 -> 1`, 1 gesture each, 3 runs of 3 |
+| `⇞ page` (page at its top) | not measured | no swipe, crossed the anchor onto the heading's offset 0, then `0 -> 1 -> 0` as the START, 2 runs of 2 |
+| control: `editor` in `<h1><span>Text editor</span></h1>` on Chromium 157 (box `32..688`) | `ColumnUnknown` | `ColumnUnknown` on the END and, after `⇄ swap`, on the START, 3 runs of 3 |
+
 **Long-pressing a link opens Chrome's link context menu**, not a selection.
 
 **`screencap` returns pure black on `FLAG_SECURE` apps** — Tor Browser is one. The "only a screenshot is
