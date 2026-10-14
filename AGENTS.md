@@ -152,6 +152,20 @@ the second press on an unchanged selection returned the memo without asking, so 
 then ready to give could never arrive, and the whole thing read as a permanent refusal. Only a successful
 answer is cached now.
 
+**On a cold Chromium 157 the second ask can be refused too, so a press whose caret is refused asks
+again before it aims.** Measured 2026-10-13 on the rig, Chromium r1709360 force-stopped before each run,
+a served page of one-line `<p>` rows (`padding-top: 300px`), long-press `delta` on row 003, then `→ char`
+about 2 s later. In 3 runs of 6 the primer's ask and the press's ask were both refused. The END was then
+placed by the `<p>`'s block-wide box, caret 688 against glyphs ending at 502, and grabbed at x 706,
+inside the 60 px right edge zone. It missed and ended `HandleLost`. The toolbar was up, but it was
+pushed in from the right edge (`130..688`), so the END's ceiling was dropped. Unpushed, that ceiling would have
+been 786 anyway, above the average. Now `perform` checks the moving caret on a Blink node, and when the platform
+refuses it, re-asks every 100 ms for up to 1 s (`awaitCaretMeasured`), once per announcement. After
+the change, 6 cold runs of 6 went `33 -> 1 -> 33`, then `⇥ word` `33 -> 4`. 2 of the 6 needed the wait,
+and both were answered on the first re-ask, 100 ms in. Chrome 143 needed it once in 2 runs, and the
+debug target's `TextView` never asks (`11 -> 12 -> 11`, `11 -> 19`). With the refusal marker, the wait
+runs its whole second and the average's miss remains. Nothing on that row can rule it out.
+
 **A third trap: the whitespace a line WRAPS at has no box, and Chrome answers for it with the node's
 own bounds however often it is asked.** Loaded or not, that one index never becomes honest, and a word
 grow parks the end edge on exactly that index whenever the word ends a line. Measured 2026-09-24 on the
@@ -1851,7 +1865,12 @@ nothing touched. A held pointer whose zone grab went unanswered refuses `moveHel
 snap-through push follows. The verdict is learned from the first zone touch-down of a service
 connection: `true` when it went unanswered and the press got nowhere, `false` when it was answered. It
 is not kept across a rebind, because "unanswered" can also be a grab that simply missed, and a wrong
-`true` would refuse every margin grab after it. So the first margin press of a connection on a
+`true` would refuse every margin grab after it. For the same reason a press whose aim was a one-line box's
+average (`HandleLocator.aimedByAverage`) never teaches `true`: on 2026-10-13 a cold Chromium `<p>`'s END
+placed by its block box at x 706, 186 px right of the handle, went unanswered on stock Android, and every
+margin grab after it was refused. Under the refusal marker that miss now logs `not learning from this
+press`, and the next press grabs again. A miss whose aim was measured still teaches it, and the swallow
+marker's left-margin `→ char` still ended `InEdgeZone` and then refused the next one with 0 gestures. So the first margin press of a connection on a
 swallowing ROM still pays one touch, and a first page step still pays its scroll. Every later one pays
 neither. Measured 2026-10-12 on the rig with the marker below (Chrome 143, a served page of one-line
 rows with a 16 px body margin, 60 px zones), a rebind before each run, 3 runs of 3 each:
@@ -2115,7 +2134,10 @@ works only when it is unique, so `char` alone matches two buttons and `char/righ
 2026-09-24: over the debug target the button row sat at y 1360, and over Chrome it sat at y 1312.
 Switching app logged nothing, so `press` aimed at the old row 48 px low and hit `⇟ page` instead of
 `⇥ word`. After changing the foreground app, run `rig.ps1 pad`. It rebinds the service, so the pad
-logs where it really is (the process survives, and so does the boundary set). Never clear logcat
+logs where it really is (the process survives, and so does the boundary set). Until 2026-10-13 it
+rebound only when the log held no pad rectangles at all, so after the first run of a sitting it
+rebound nothing: the rectangles stayed the last app's, and the side-zone verdict, which a rebind is
+meant to clear, carried over from run to run. It rebinds every time now. Never clear logcat
 before a `press`, because that also discards the rectangles it reads.
 
 Each step is also an action of its own — `up`, `down`, `build`, `install`, `rebind`, `target`, `pad`,

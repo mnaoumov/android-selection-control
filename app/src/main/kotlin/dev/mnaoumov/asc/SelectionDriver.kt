@@ -665,8 +665,12 @@ class SelectionDriver(
   /** Gestures spent on the press in flight — the number that says whether a press feels slow. */
   private var gestureCount = 0
 
-  fun perform(command: PadCommand, onDone: (Outcome) -> Unit) {
-    val startedAt = android.os.SystemClock.uptimeMillis()
+  fun perform(
+    command: PadCommand,
+    // Set when the press comes back from [awaitCaretMeasured], so its time includes the wait.
+    startedAt: Long = android.os.SystemClock.uptimeMillis(),
+    onDone: (Outcome) -> Unit,
+  ) {
     gestureCount = 0
     stopRequested = false
 
@@ -689,6 +693,20 @@ class SelectionDriver(
     movingNodeOffScreen(snapshot)?.let { why ->
       Diag.log("$command: $why — refusing to touch")
       onDone(Outcome.OffScreen)
+      return
+    }
+    if (snapshot.isBlink && snapshot.atMs != caretWarmedFor && locator.caretRefused(snapshot, activeEdge)) {
+      caretWarmedFor = snapshot.atMs
+      Diag.log("$command: the platform will not measure the $activeEdge's caret yet — asking again for up to ${CARET_WARM_MS}ms")
+      awaitCaretMeasured(snapshot, 0L) { waited, answered ->
+        if (stopRequested) {
+          Diag.log("  warm: stopped by a touch after ${waited}ms, nothing touched")
+          onDone(Outcome.Moved(snapshot.movingOffset(), snapshot.movingOffset()))
+          return@awaitCaretMeasured
+        }
+        Diag.log("  warm: ${if (answered) "measured after ${waited}ms" else "still refused after ${waited}ms — going on without it"}")
+        perform(command, startedAt, onDone)
+      }
       return
     }
     syncBoundaryContext(snapshot)
@@ -742,6 +760,41 @@ class SelectionDriver(
       PadCommand.Unit.PAGE -> sweepPage(command, report)
       PadCommand.Unit.DOCUMENT -> sweepToDocumentEdge(command, report)
     }
+  }
+
+  /**
+   * The announcement whose moving caret [perform] has already waited on, so a node that never answers
+   * costs the wait once per selection rather than on every press.
+   */
+  private var caretWarmedFor: Long? = null
+
+  /**
+   * Re-asks the platform for [snapshot]'s moving caret every [CARET_WARM_POLL_MS] until it answers or
+   * [CARET_WARM_MS] has passed, then calls [onResult] with the time waited and whether it answered.
+   *
+   * "Ask once to make it measure, ask again to be answered" assumes the gap a human leaves between a
+   * selection and a press is enough, and on a cold Chromium 157 it is not always. Measured 2026-10-13 on
+   * the rig, r1709360 force-stopped before each run, a served page of one-line `<p>` rows, long-press
+   * `delta` on row 003, then `→ char` 2 s later: in 3 runs of 6 the primer's ask and the press's ask were
+   * both refused. The END was then placed by the `<p>`'s block-wide box (caret 688 against glyphs ending
+   * at 502), aimed into the right edge zone at x 706, and the grab missed. The `← char` 3 s after it was
+   * answered every time. A press whose caret the platform refuses now asks again before aiming, and an
+   * average is used only once the platform has had its time.
+   */
+  private fun awaitCaretMeasured(
+    snapshot: SelectionObserver.Snapshot,
+    waited: Long,
+    onResult: (Long, Boolean) -> Unit,
+  ) {
+    if (waited > 0 && !locator.caretRefused(snapshot, activeEdge)) {
+      onResult(waited, true)
+      return
+    }
+    if (waited >= CARET_WARM_MS || stopRequested || observer.latest?.atMs != snapshot.atMs) {
+      onResult(waited, false)
+      return
+    }
+    handler.postDelayed({ awaitCaretMeasured(snapshot, waited + CARET_WARM_POLL_MS, onResult) }, CARET_WARM_POLL_MS)
   }
 
   /**
@@ -3756,6 +3809,10 @@ class SelectionDriver(
      * fixed wait on every gesture of a multi-step press is most of why one felt slow.
      */
     const val POLL_MS = 25L
+
+    /** How long [awaitCaretMeasured] gives a cold node to measure, and how often it asks. */
+    const val CARET_WARM_MS = 1000L
+    const val CARET_WARM_POLL_MS = 100L
 
     /**
      * Measured: a successful step completes in ~170 ms *including* its 150 ms drag, so the

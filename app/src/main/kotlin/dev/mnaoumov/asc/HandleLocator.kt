@@ -142,6 +142,13 @@ class HandleLocator(private val density: () -> Float) {
   var toolbarNow: () -> Rect? = { null }
   var screenWidthNow: () -> Int = { Int.MAX_VALUE }
 
+  /**
+   * Whether [locate] has placed a one-line caret by the node's average since the service last cleared
+   * this, at a press's start. A grab aimed that way can simply miss, and the silence that follows says
+   * nothing about a side gesture zone.
+   */
+  var aimedByAverage = false
+
   fun forgetAnchor() {
     knownAnchorX = null
   }
@@ -184,6 +191,7 @@ class HandleLocator(private val density: () -> Float) {
     edge: Edge,
     crossing: Crossing = Crossing.RIGHTWARD,
     at: Int? = null,
+    quiet: Boolean = false,
   ): CharacterGeometry? {
     val source = snapshot.source ?: return null
     val bounds = snapshot.bounds ?: return null
@@ -237,7 +245,7 @@ class HandleLocator(private val density: () -> Float) {
       if (rect != null) Diag.log("  locate: index $index has no box of its own — the caret was read from $other")
     }
     if (rect == null) {
-      Diag.log("  locate: per-character rects are the node's own bounds here — the platform is not answering")
+      if (!quiet) Diag.log("  locate: per-character rects are the node's own bounds here — the platform is not answering")
       return null
     }
 
@@ -248,6 +256,16 @@ class HandleLocator(private val density: () -> Float) {
       characterWidth = rect.width(),
     )
     return memoValue
+  }
+
+  /**
+   * Whether the platform could measure the [edge]'s caret in [snapshot]'s node and declines to, right
+   * now. False where there is nothing to ask (no node, no box, no length), so a caller waiting on it
+   * never waits for an answer that cannot come.
+   */
+  fun caretRefused(snapshot: SelectionObserver.Snapshot, edge: Edge): Boolean {
+    if (snapshot.source == null || snapshot.bounds == null || snapshot.sourceLength <= 0) return false
+    return characterGeometry(snapshot, edge, quiet = true) == null
   }
 
   /**
@@ -845,6 +863,7 @@ class HandleLocator(private val density: () -> Float) {
         return PointF(if (edge == Edge.START) seamX - handleInset else seamX + handleInset, box.bottom + handleDrop)
       }
       if (measured == null && averageOutrunsToolbar(snapshot, edge, toolbarCentreX)) return null
+      if (measured == null) aimedByAverage = true
       val anchorX = measured ?: average
       val x = if (edge == Edge.START) anchorX - handleInset else anchorX + handleInset
       return PointF(x, measuredRowAbove(geometry, bounds) ?: (bounds.bottom + handleDrop))
