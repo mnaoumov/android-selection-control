@@ -992,6 +992,22 @@ the reading only while the toolbar is up. Chromium force-stopped before each run
 | control: Chrome 143, marker off: `→`, `→`, `←`, `←` | not measured | `21 -> 1` (`.`) `-> 1` (`[4]`) `-> 1` (`.`) `-> 21`, 1 gesture each, with no re-homing |
 | control: one-line rows on Chromium 157, `→ char` across rows 003/004 and back | as before | `33 -> 1 -> 33`, 2 gestures each, with no re-homing |
 
+**The phone's Chrome does not announce that seam as `0..0`, and nothing there regressed (2026-10-14,
+OnePlus 15, Chrome 154.0.8037.127, `en.wikipedia.org/wiki/Text_editor`).** Chrome announced selections
+the old way, so the extended-selection trial was not active. On the phone the `.` is inside the
+13-character ` environment.` node, so the seam before `[4]` is that node's last caret. A long-press on
+`environment` sometimes selected `environment.[4` (`0..1` of the `4` node), so the END was walked back
+with `← char` ×3: `4` → `[` → `1..13` → `1..12`. Then:
+
+| press, 3 runs of 3 | result |
+|---|---|
+| `→ char` from `1..12` | `1..13` of ` environment.`, `Moved(12, 13)` in 1 gesture, 0.72-0.73 s; the screenshot showed `environment.` selected and the status line `moved 12 → 13` |
+| the next `→ char` | `inline: leaving the node for the next one on its row`, onto `0..1` of `[`, 1 gesture, 0.71-0.74 s |
+| `← char`, `← char` | `1 -> 13` (the seam, in ` environment.`'s frame), then `13 -> 12`, 1 gesture each |
+
+No press logged `an END announced 0..0` or `the pad cannot see a selection`. So `endBeforeSeam` did not
+fire on the phone, and the rig's Chromium 157 remains the only place it has.
+
 **Chromium 157 keeps no handle position INSIDE `[4]`, so from the `.` the smallest step is to `[4]`'s
 end.** The grab aimed one character into `[4]` was announced `0..0` of `[4]`, the same caret it started
 on. The held correction then counted its target in the `.`'s 1-character frame, as 2, and the snap-through,
