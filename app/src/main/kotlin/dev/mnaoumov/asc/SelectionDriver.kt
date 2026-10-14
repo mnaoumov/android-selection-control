@@ -89,6 +89,13 @@ sealed interface Outcome {
   data object InEdgeZone : Outcome
 
   /**
+   * The handle sits too deep in the bottom system-gesture zone to be grabbed above it, so nothing was
+   * touched. A down there is the system's: dragged up it opens Recents. See
+   * [HandleLocator.clearOfGestureBar]. The selection is intact; scrolling it higher is what works.
+   */
+  data object InGestureBar : Outcome
+
+  /**
    * A shrink was asked for with one character left, so nothing was touched.
    *
    * A dragged handle cannot take the selection below one character: a `TextView` keeps it, and
@@ -163,6 +170,12 @@ interface GestureDispatcher {
    * pixels: the status bar, or the top system-gesture zones where they are deeper.
    */
   fun systemTopInset(): Int
+
+  /**
+   * How far up from the screen's bottom the system takes a touch-down for its own gestures, in screen
+   * pixels: the bottom system-gesture zones. See [HandleLocator.clearOfGestureBar].
+   */
+  fun systemBottomInset(): Int = 0
 
   /** The platform's touch slop in screen pixels: a stroke shorter than it that lifts is a tap. */
   fun touchSlop(): Int
@@ -252,7 +265,17 @@ class SelectionDriver(
    */
   private fun uncovered(handle: PointF, onRefused: (Outcome) -> Unit): PointF? {
     val toolbar = toolbarBounds()
-    val aim = locator.clearOfToolbar(handle, toolbar)
+    val offToolbar = locator.clearOfToolbar(handle, toolbar)
+    val barTop = gestures.screenHeight() - gestures.systemBottomInset()
+    val aim = offToolbar?.let { locator.clearOfGestureBar(it, barTop) }
+    if (offToolbar != null && aim == null) {
+      Diag.log("  grab: the handle at (${offToolbar.x}, ${offToolbar.y}) is too deep in the bottom gesture zone (from y $barTop) — refusing to touch")
+      onRefused(Outcome.InGestureBar)
+      return null
+    }
+    if (aim != null && aim !== offToolbar) {
+      Diag.log("  grab: (${offToolbar!!.x}, ${offToolbar.y}) is in the bottom gesture zone (from y $barTop) — aiming at y ${aim.y} instead")
+    }
     // A heads-up over the handle takes the down and opens the notification. See [Outcome.Obstructed].
     val foreign = aim?.let(foreignWindowAt)
     if (foreign != null) {
@@ -280,8 +303,8 @@ class SelectionDriver(
         )
         onRefused(Outcome.HandleCovered)
       }
-      aim !== handle -> Diag.log(
-        "  grab: the toolbar at $toolbar covers (${handle.x}, ${handle.y}) — aiming at y ${aim.y} instead"
+      offToolbar !== handle -> Diag.log(
+        "  grab: the toolbar at $toolbar covers (${handle.x}, ${handle.y}) — aiming at y ${offToolbar?.y} instead"
       )
     }
     return aim

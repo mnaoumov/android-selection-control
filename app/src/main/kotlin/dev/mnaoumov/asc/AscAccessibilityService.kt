@@ -349,7 +349,8 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     is Outcome.Moved -> outcome.madeProgress()
     is Outcome.Degraded -> true
     Outcome.NoSelection, Outcome.HandleLost, Outcome.RowUnknown, Outcome.ColumnUnknown, Outcome.HandleCovered,
-    Outcome.AtFloor, Outcome.AtDocumentEdge, Outcome.EdgeUnknown, Outcome.Obstructed, Outcome.InEdgeZone, Outcome.OffScreen -> false
+    Outcome.AtFloor, Outcome.AtDocumentEdge, Outcome.EdgeUnknown, Outcome.Obstructed, Outcome.InEdgeZone, Outcome.InGestureBar,
+    Outcome.OffScreen -> false
   }
 
   /**
@@ -533,6 +534,11 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
    * avoids such a window where it can, so reaching this means a heads-up arrived mid-press.
    */
   private fun noteForeignWindow(down: PointF): Boolean {
+    // The bottom gesture zone is the system's whatever is drawn there: see [HandleLocator.clearOfGestureBar].
+    if (down.y >= screenHeight() - systemBottomInset()) {
+      Diag.log("  the touch-down at (${down.x}, ${down.y}) is in the bottom system-gesture zone — not touching")
+      return true
+    }
     val foreign = foreignWindowAt(down) ?: return false
     touchedForeignWindow = true
     Diag.log("  the touch-down at (${down.x}, ${down.y}) is inside another app's window $foreign — not touching")
@@ -684,6 +690,8 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     Outcome.Obstructed -> "a notification is in the way"
     // Nothing more was touched. The selection is intact, and the other edge can still be moved.
     Outcome.InEdgeZone -> EDGE_ZONE_STATUS
+    // Nothing was touched. Higher on screen the handle is clear of the system's gesture bar.
+    Outcome.InGestureBar -> "the handle is on the gesture bar — scroll the text higher"
     // Nothing was touched. Nudging that handle by hand announces where it is.
     Outcome.EdgeUnknown -> "can't see the ${if (driver.activeEdge == Edge.END) "end" else "start"} — nudge its handle once"
     // Nothing was touched. Scrolling the selection back into view makes the next press work.
@@ -883,7 +891,16 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       )
     }
 
-  override fun touchSlop(): Int = ViewConfiguration.get(this).scaledTouchSlop
+  override fun systemBottomInset(): Int =
+    getSystemService(WindowManager::class.java).currentWindowMetrics.windowInsets.let { insets ->
+      // The rig reports a 48 px navigation bar and a 64 px mandatory gesture zone above the screen's bottom.
+      maxOf(
+        insets.getInsets(android.view.WindowInsets.Type.systemGestures()).bottom,
+        insets.getInsets(android.view.WindowInsets.Type.mandatorySystemGestures()).bottom,
+      )
+    }
+
+  override fun touchSlop(): Int =ViewConfiguration.get(this).scaledTouchSlop
 
   /**
    * [point], moved onto the screen if it lies off it.

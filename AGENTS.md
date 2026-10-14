@@ -2215,6 +2215,30 @@ importance 3 and no banner option. The `SET_TIMER` intent starts an activity, wh
 and clears the selection, so start the timer first, bring Chrome back, and select after that. The banner also
 hides itself after about a minute, so check that it is on screen before a press that is meant to meet it.
 
+**A touch-down in the bottom system-gesture zone is the system's, whatever is drawn there, so no grab
+starts in it.** On gesture navigation the zone runs above the navigation bar. The rig's
+`mandatorySystemGestures` is `[0,1456][720,1520]`, against a navigation bar of `[0,1472][720,1520]`
+(`dumpsys window`). An END on a document's last row hangs its handle at y 1465, under the docked pad and
+9 px inside the zone. Measured 2026-10-13 on the rig, Chrome 143, a served page of 40 rows:
+`⤓ end`, `← char`, then `⤒ start`. The page could not scroll down, so its scroll did nothing. The held
+drag from (308, 1465) straight up then opened Recents, and the launcher came to the front. So
+`uncovered` now passes every grab through `HandleLocator.clearOfGestureBar`, which works like
+`clearOfToolbar`. The aim moves to 2 dp above the zone when that is within 12 dp of the handle's centre
+and below the text line. Otherwise the press ends `InGestureBar` with nothing touched, and the status
+line reads "the handle is on the gesture bar — scroll the text higher". As a floor under every caller,
+the service drops any touch-down in the zone (`noteForeignWindow`). The zone is
+`GestureDispatcher.systemBottomInset`, the deeper of the bottom `systemGestures` and
+`mandatorySystemGestures` insets. A held pointer may still MOVE into the zone, as the `⤓ end` corner
+drag to y 1496 does, because only the touch-down decides who owns a gesture. Measured 2026-10-14 on the
+rig, Chrome 143 force-stopped before each run:
+
+| press | result |
+|---|---|
+| the repro: `⤓ end`, `← char`, `⤒ start`, 3 runs | `aiming at y 1452.0 instead` each time; `← char` went `20 -> 19` in 1 gesture, and `⤒ start` paged up to the caption, with Chrome still in front |
+| `← char` with a hand scroll that put the END's handle at y 1489 | `InGestureBar` in 17 ms, 0 gestures, the selection intact |
+| control: the same row at y 1443, just above the zone, `← char`, `→ char` | `9 -> 8 -> 9`, 1 gesture each, the aim unchanged |
+| control: the debug target's `TextView` from `bravo`: `→ char`, `← char`, `⇥ word`, `⇟ page`, `← char` | `11 -> 12 -> 11`, `11 -> 19`, `19 -> 30`, `30 -> 29` |
+
 **So a page step forgives a shortfall that the band's own move explains, and settles the band as well
 as the node.** `pageStep` re-reads the content band after the scroll, and the document's edge now needs
 a shortfall of more than a line PLUS however far the band's top and bottom moved. For the case above
