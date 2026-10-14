@@ -2626,6 +2626,9 @@ bravo here</p>` rows (20 px, `margin: 0 40px`, `padding-top: 300px`). Long-press
 then a hand drag (`input motionevent`) that parks the row's box at the depth shown. A finger move of
 522 px scrolled 483. Do not run `uiautomator dump` with a selection up: after one, the next press said
 "the pad cannot see a selection" while Chrome still showed it. Read the bounds before long-pressing.
+A dump with NO selection up can break the long-press too. On 2026-10-14, after two dumps of Wikipedia's
+`Text_editor`, five long-presses in a row selected nothing and announced nothing, while taps still
+reached the page. A Chrome force-stop and reload ended it.
 
 | press | result |
 |---|---|
@@ -2800,6 +2803,27 @@ the seam after `As `:
 | then `→ char`, `→ char`, `← char`, `← char` | not reached | `2 -> 0` (the seam, re-homed) `-> 1 -> 0 -> 2`, 1 gesture each, 0.57-0.76 s |
 | control: START on the last row's first caret, `← char`, `→ char`, `← char` | as before | `0 -> 41 -> 0 -> 41`, the block step, 2 gestures each |
 | control: the debug target's `TextView` from `bravo` | as before | `11 -> 12 -> 11`, `11 -> 19`; after `⇄ swap`, `6 -> 5 -> 6` |
+
+**The phone confirms it (2026-10-14, OnePlus 15, Chrome 154.0.8037.127, `en.wikipedia.org/wiki/Text_editor`
+with *Plain text and rich text* expanded).** Chrome announced selections the old way (`seeded from a fresh
+selection`), so the extended-selection trial was not active. Chrome was force-stopped and the service rebound
+before each run. Scroll the omnibox away by hand, so the band is `Rect(0, 141 - 1272, 2180)`. A long-press on
+`a` in `… is represented by a fixed-length …` selected nothing, so long-press `fixed-length` (`96..108`), then
+`⇄ swap` and `← char` ×2 onto `a` (94). Then `⇞ page`: `scrolled -595..-606 of -625..-639` and a drag to
+(97.5, 484), which landed the START on `As |source code`. The press logged `a START announced on its node's
+last caret (in TextView srcLen=3 …) — reading it as the first caret of the text after it (11 chars …)` and
+ended `Moved(94, 0, crossedNode=true)` in 1.6-1.7 s and 2 gestures. Then:
+
+| press, 3 runs of 3 | result |
+|---|---|
+| `← char` | `edge=START at 0..11 srcLen=11`, `inline: leaving the node for the next one on its row (3 chars)`, onto `2..3` of `As `, 1 gesture, 0.74 s; the screenshot showed the selection starting at the space |
+| `→ char`, `→ char`, `← char`, `← char` | `2 -> 0` (the seam, re-homed again) `-> 1 -> 0 -> 2`, 1 gesture each, 0.58-0.75 s; one character on screen each |
+
+No press took the block step, ended `HandleLost` or said `cannot see a selection`. In one extra run the swap
+from the run before carried over, so the END moved. `⇞ page` then crossed the anchor and put the START on the
+other seam, `source code| is text`. That START was announced from `source code` (`srcLen=11`) and re-homed onto
+the 58-character ` is text, …`. From there `← char` went `0 -> 10` of `source code` in 3 gestures, through the
+inline push. Then `→ char`, `→ char`, `← char`, `← char` went `10 -> 0 -> 1 -> 0 -> 10`, one character each.
 
 **The same misreading made a `⤒ start` sweep stop on a caption link below an image.** On a served
 page with a lead row, then `<figure><a><img></a><figcaption>Editors like <a>Mousepad</a>, …`, then 40
