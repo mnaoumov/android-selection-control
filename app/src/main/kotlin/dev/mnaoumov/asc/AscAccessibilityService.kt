@@ -83,6 +83,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     val debuggable = applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
     observer.forceNoExtendedSelection = debuggable && java.io.File(filesDir, FORCE_NO_EXTENDED_SELECTION).exists()
     if (observer.forceNoExtendedSelection) Diag.log("debug: treating the platform as below 36.1")
+    // And for the handset's Chrome 154, which announced a seam beside a bare `<sup>` from the `<p>`.
+    observer.forceContainerFrame = debuggable && java.io.File(filesDir, FORCE_CONTAINER_FRAME).exists()
+    if (observer.forceContainerFrame) Diag.log("debug: announcing every leaf's selection in its container's frame")
     // Likewise for a node that never answers a per-character ask, which the rig's Chromium answers.
     locator.forceRefuseCharacterRects = debuggable && java.io.File(filesDir, FORCE_REFUSE_CHARACTER_RECTS).exists()
     if (locator.forceRefuseCharacterRects) Diag.log("debug: refusing every per-character ask")
@@ -1098,6 +1101,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
     /** The debug marker file that cuts every page scroll short: see `SelectionDriver.forceShortScroll`. */
     const val FORCE_SHORT_SCROLL = "force-short-scroll"
+
+    /** The debug marker file that announces a leaf's selection in its container's frame: see `SelectionObserver.forceContainerFrame`. */
+    const val FORCE_CONTAINER_FRAME = "force-container-frame"
 
     /** The status line for a press the side gesture zone stopped. */
     const val EDGE_ZONE_STATUS = "the handle is in the screen edge's swipe zone"
