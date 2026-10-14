@@ -934,6 +934,23 @@ A move that ends in another node is now always reported as a crossing (`perform`
 two nodes' offsets say nothing next to each other. That `char ←` is `0..1` of `[4]` to `0..1` of `.`,
 which read as `Moved(1, 1)`, "didn't move", and would have stopped a repeat run.
 
+**The phone confirms it (2026-10-14, OnePlus 15, Chrome 154.0.8037.127, `en.wikipedia.org/wiki/Text_editor`).**
+Chrome announced selections the old way (`seeded from a fresh selection`), so the extended-selection
+trial was not active. On the phone the shapes differ from the rig's. ` environment.` is one 13-character
+node with its `.`, `Rect(318, 1779 - 661, 1849)`, and `[4]` is three 1-character nodes whose boxes end
+21 px above it (`[` is `Rect(658, 1775 - 679, 1828)`). A long-press on `environment` selected
+`environment.[4`, and every per-character ask on the reference was refused, with the caret wait
+running its whole second. Then `← char` three times:
+
+| press | result, 3 runs of 3 |
+|---|---|
+| `← char` from `0..1` of `4` | onto `0..1` of `[`, `Moved(1, 1, crossedNode=true)` in 1 gesture, 1.6 s |
+| `← char` from `0..1` of `[` | `next block: the neighbour's row is 21.0px off this one's, under half a line — the same row`, onto `1..13` (the seam, after the `.`), 1 gesture, 1.6-1.7 s; the status line read `moved into another block` |
+| `← char` from 13 | `13 -> 12`, the end of `environment`, 1 gesture, 0.57 s |
+
+No press logged `next block: the edge is on its block's first caret`, `HandleLost` or `cannot see a
+selection`, and the screenshots showed one character fewer selected each time.
+
 **A char grow from a node's outer caret into the next node ON THE SAME ROW aims at that node's first
 character, not by the node it leaves.** The `char →` from `environment`'s end used to reach 20 px,
 `environment`'s average, past the 12 px `.` node, and the grab's slop detour (17 px here) went further
