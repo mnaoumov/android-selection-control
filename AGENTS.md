@@ -16,7 +16,7 @@ Open work is split by shape, one item each in that same store, and named there r
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
 (two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, with the block step that follows it; the toolbar under a paged handle is fixed and confirmed on the phone, which
 found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse; on the phone, page and end now run to the article's real end, but the collapse did not recur, so the fix's own branch is unexercised; with the omnibox already hidden, a short `⇞ page` scroll still read as the edge there, and now the page must also stop listing that scroll direction, fixed on the rig and not yet confirmed on the phone), `start` ending
-blind on an image (fixed on the rig; on the phone the move off the image landed on a hidden header button, and the walk now skips controls, which is fixed on the rig and confirmed on the phone; a page step that reaches the top used to land on the image itself, and every page drag now holds and moves off it, fixed on the rig and not yet confirmed on the phone; a `start` from the page's top used to set off Chrome's pull-to-refresh, and now does not swipe at all, which is fixed on the rig and confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins, and such a press now stops at the first swallowed touch-down, fixed on the rig and not yet confirmed on the phone), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig and confirmed on the phone, where the pass also found that a press after a hand scroll can grab at a node's pre-scroll position, which now refuses instead, fixed on the rig and not yet confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
+blind on an image (fixed on the rig; on the phone the move off the image landed on a hidden header button, and the walk now skips controls, which is fixed on the rig and confirmed on the phone; a page step that reaches the top used to land on the image itself, and every page drag now holds and moves off it, fixed on the rig and not yet confirmed on the phone; a `start` from the page's top used to set off Chrome's pull-to-refresh, and now does not swipe at all, which is fixed on the rig and confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins, and such a press now stops at the first swallowed touch-down, fixed on the rig and confirmed on the phone, which also showed that the strip lets through a grab whose first move is vertical), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig and confirmed on the phone, where the pass also found that a press after a hand scroll can grab at a node's pre-scroll position, which now refuses instead, fixed on the rig and not yet confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
 heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
 `✕` is fixed on the rig and confirmed on the phone); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
@@ -1936,8 +1936,36 @@ rows with a 16 px body margin, 60 px zones), a rebind before each run, 3 runs of
 
 The marker drops the grab without dispatching it, so the rig cannot show the phone's own shape: a grab
 that IS dispatched and that Chrome never sees. There the held pointer's next push is refused
-(`the grab in a side gesture zone went unanswered — lifting rather than pushing on`), and that branch is
-unproven until the phone runs it.
+(`the grab in a side gesture zone went unanswered — lifting rather than pushing on`).
+
+**The phone confirms the stop, the refusal and the controls (2026-10-14, OnePlus 15, Chrome 154,
+`en.wikipedia.org/wiki/Text_editor`, the service re-enabled before each case so the verdict was fresh).**
+Chrome announced selections the old way (`seeded from a fresh selection`), so the extended-selection trial
+was not active.
+
+| press | result |
+|---|---|
+| `→ char`, START at the left margin (`allows`, `6..12`, after `⇄ swap`) | grab at (24.5, 1485) flagged, announced nothing, then `refusing to touch`: `InEdgeZone` in 523 ms, 1 gesture (was 3.5 s and 13 "gestures"); the next `→ char` `InEdgeZone` in 17 ms, 0 gestures |
+| the page scrolled 291 px by hand, then `⤒ start` and `⇞ page` on that START | `InEdgeZone` in 14 ms and 8 ms, 0 gestures, the page did not move, the selection intact |
+| `← char`, END at the right margin (`for`, `49..52`, caret 1218) | grab at (1249.5, 2111), an inward horizontal move, announced nothing: `InEdgeZone` in 510 ms, 1 gesture; the next one 17 ms, 0 gestures |
+| controls, after the ROM was learned to swallow: `features` (`18..26`) mid-line, END `→ char`, `← char`, then START `→ char`, `← char` | `26 -> 27 -> 26`, `18 -> 19 -> 18`, 1 gesture each, 0.56-0.74 s |
+
+**OxygenOS's strip does not swallow every touch-down in it: one whose first move is vertical gets
+through.** With a fresh verdict, `→ char` from the same `for` crosses the wrap, and its grab at the same
+(1249.5, 2111) went straight down first. The press logged `a touch-down there was answered` and
+`Moved(52, 53)` in 1.1 s and 2 gestures, and the service learned `false`. The `← char` above, from the
+same pixel but moving inward along the row, was swallowed. So the strip judges the stroke, not only the
+touch-down, and a verdict learned from a vertical grab says nothing about a horizontal one. That is
+tracked on its own, along with whether a grab can be made to start vertically on purpose.
+
+**The `lifting rather than pushing on` branch fired once on the phone, and on an ambiguous press.** After
+that crossing the END sat on 53, the first caret of `editing` at the left margin, under the pad. The next
+`→ char` grabbed at (87.5, 2206) after the 110 ms pass-through wait, announced nothing, and logged
+`held: the grab in a side gesture zone went unanswered — lifting rather than pushing on`. It ended
+`InEdgeZone` in 660 ms and 2 gestures instead of six pushes. But a grow from a word's start is silent on
+Chrome anyway (the left-margin silent-grow defect), so whether OxygenOS swallowed that grab is not known.
+The right-margin `→ char` that the branch was written for, a same-row step from an END in the strip, was
+not found on this page.
 
 **A grow from the document's first or last caret has nowhere to go. Unless it touches nothing, its
 silence teaches the verdict wrong.** Measured 2026-10-13 on the rig (Chrome 143, no marker, so the zone
