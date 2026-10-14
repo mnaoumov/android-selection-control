@@ -871,9 +871,27 @@ before each run:
 
 A move that ends in another node is now always reported as a crossing (`perform`'s report), because
 two nodes' offsets say nothing next to each other. That `char ←` is `0..1` of `[4]` to `0..1` of `.`,
-which read as `Moved(1, 1)`, "didn't move", and would have stopped a repeat run. The `char →` from
-`environment`'s end skips the `.` and lands on `0..1` of `[4]`, two characters on. That is a separate
-defect and is still open.
+which read as `Moved(1, 1)`, "didn't move", and would have stopped a repeat run.
+
+**A char grow from a node's outer caret into the next node ON THE SAME ROW aims at that node's first
+character, not by the node it leaves.** The `char →` from `environment`'s end used to reach 20 px,
+`environment`'s average, past the 12 px `.` node, and the grab's slop detour (17 px here) went further
+still. It landed on `0..1` of `[4]`, two characters on, and `crossedTarget`, which takes the two nodes
+to be adjacent, took that as the step. `SelectionDriver.inlineNeighbour` now finds the next text leaf
+where `blockStep` declines because it is on the same row, and the grab aims one character into it. A
+landing in any other node is moved onto it by `intoTheNeighbour`, the block step's correction. Measured
+2026-10-13 on the rig, Chrome force-stopped before each run, `→ char` ×2, `← char` ×2 from `environment`:
+
+| run | before | after |
+|---|---|---|
+| Chrome 143, refusal marker on | `21 -> 1` of `[4]`, 4 runs of 4 | `21 -> 1` of `.` `-> 1` of `[4]` `-> 1` of `.` `-> 21`, 1 gesture each, 3 runs of 3 |
+| Chrome 143, marker off | not measured | the same, 3 runs of 3 |
+| Chromium 157, marker off | not measured | the first press onto `.`, 1 gesture; the next two are the Chromium 157 defects above, unchanged |
+| control: `chrome://terms` seam, `→ char` ×2, `← char` ×2 from `terms` | `14 -> 15 -> 1 -> 15 -> 14` | the same, now through the new aim, 3 runs of 3 |
+| control: one-line rows, `→ char`, `← char`, `⇥ word` from `delta` | `33 -> 1 -> 33`, `33 -> 4` | the same (the block step), 2 runs of 2 |
+| control: the debug target's `TextView` | `11 -> 12 -> 11`, `11 -> 19`; `→ char` from `echo` `AtDocumentEdge` | the same |
+
+The correction move did not fire in these runs: the aimed grab landed in the right node every time.
 
 **Chromium 157 announces an END on an inline seam from the node AFTER it, as `0..0`.** The END's frame
 in a node without the anchor is `0..focus`, so a focus on that node's first caret is an empty range,

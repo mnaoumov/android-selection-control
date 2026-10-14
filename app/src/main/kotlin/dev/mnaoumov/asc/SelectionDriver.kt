@@ -1312,6 +1312,8 @@ class SelectionDriver(
     val rowChange = crossRowDelta(before, start, next, 0f)?.let { PointF(handle.x + it.x, handle.y + it.y) }
     // From a block's outer caret the step leaves the block: see [blockStep].
     val nodeChange = if (rowChange == null) blockStep(before, command, handle) else null
+    // And from an inline node's outer caret into the next node on the same row: see [inlineNeighbour].
+    val inline = if (rowChange == null && nodeChange == null) inlineNeighbour(before, command, handle) else null
     /*
      * Into another block in TWO moves, and the order is what makes it land. A grow goes straight onto
      * the new block's row first, then along it onto the caret ([intoTheNextBlock]). Measured
@@ -1324,6 +1326,7 @@ class SelectionDriver(
      */
     val to = rowChange
       ?: nodeChange?.let { if (it.growing) PointF(handle.x, it.aim.y) else PointF(it.aim.x, handle.y) }
+      ?: inline?.let { PointF(handleX(it.geometry.caretX), handle.y) }
       ?: PointF(handle.x + reach, handle.y)
 
     /*
@@ -1423,9 +1426,14 @@ class SelectionDriver(
              * announced nothing 2 times of 3. It fell back to the released path, at 4-7 gestures and
              * 2-9 s a press against 1 gesture and about 1 s.
              */
+            locator.rememberAnchor(handle.x - reach.coerceAtLeast(0f))
+            // A landing past the inline neighbour, in a node further on, is moved back onto it first.
+            if (inline != null && crossedNodes(before, after) && !inline.holds(after)) {
+              intoTheNeighbour(BlockStep(to, growing = true, neighbour = inline), before, after, gestures.heldAt() ?: to, start, command, onDone)
+              return@awaitChange
+            }
             // Still re-key: a landing across a node makes the old node's offsets meaningless.
             syncBoundaryContext(after)
-            locator.rememberAnchor(handle.x - reach.coerceAtLeast(0f))
             heldCorrect(targetOffset(before, after, command, start), start, command, onDone, frame = after)
           }
         }
@@ -2437,6 +2445,27 @@ class SelectionDriver(
   }
 
   /**
+   * The next text node on the SAME row when a grow leaves its node from the outer caret, or null.
+   * That is the case [blockStep] declines, and the step there was sized by the node it leaves.
+   *
+   * Measured 2026-10-13 on the rig, Chrome 143 with the refusal marker, a served `…<span>debugging
+   * environment</span>.<sup>[4]</sup> …`: `→ char` from `environment`'s end reached 20 px, that node's
+   * average, past the 12 px `.` node, and the grab's slop detour went further still. The edge landed
+   * on `0..1` of `[4]`, two characters on, and [crossedTarget], which takes two nodes to be adjacent,
+   * took that as the step. So the grab aims at this neighbour's caret one character in, and a landing
+   * in any other node is moved onto it ([intoTheNeighbour]).
+   */
+  private fun inlineNeighbour(snapshot: SelectionObserver.Snapshot, command: PadCommand, handle: PointF): NeighbourCaret? {
+    val length = snapshot.sourceLength
+    if (length <= 0 || !snapshot.isBlink || !growsSelection(command)) return null
+    if (snapshot.movingOffset() != if (command.toRight) length else 0) return null
+    val neighbour = locator.adjacentNodeCaret(snapshot, command.toRight, oneIn = true) ?: return null
+    if (!onTheSameRow(snapshot, handle.y - locator.handleDrop, neighbour)) return null
+    Diag.log("  inline: leaving the node for the next one on its row (${neighbour.length} chars) — aiming one character into it")
+    return neighbour
+  }
+
+  /**
    * Whether [neighbour]'s caret is on the row whose bottom is [row], the edge's own. Bottoms that
    * match are one row. So are bottoms closer than half a line, where both lines can be measured:
    * a superscript's box sits above its line, and a real row change moves by a whole line.
@@ -2535,6 +2564,9 @@ class SelectionDriver(
    * neighbour's caret landed on `0..1` of `source code` once and `0..3` of `As ` twice, cold each
    * time. The first was taken as the step, because [crossedTarget] counts one character into
    * WHATEVER node the edge is in.
+   *
+   * A step into the next node on the SAME row ([inlineNeighbour]) ends here too, with [step]'s aim
+   * the grab's own destination.
    */
   private fun intoTheNeighbour(
     step: BlockStep,
