@@ -46,7 +46,14 @@ data class CharacterGeometry(val caretX: Float, val lineBottom: Float, val chara
  * row lower, for the same 33 characters. Two inline nodes of one row are told apart by their length
  * or their columns, and the defect this exists for was a 3-character node against a 58-character one.
  */
-data class NeighbourCaret(val geometry: CharacterGeometry, val length: Int, val bounds: Rect) {
+data class NeighbourCaret(
+  val geometry: CharacterGeometry,
+  val length: Int,
+  val bounds: Rect,
+  // The outer caret asked for is past a wrap space and hides its handle, so this is the caret one in:
+  // see [HandleLocator.adjacentNodeCaret].
+  val pastWrapSpace: Boolean = false,
+) {
   fun holds(snapshot: SelectionObserver.Snapshot): Boolean =
     snapshot.sourceLength == length &&
       snapshot.bounds?.let { it.left < bounds.right && bounds.left < it.right } == true
@@ -281,6 +288,19 @@ class HandleLocator(private val density: () -> Float) {
   }
 
   /**
+   * Whether [snapshot]'s node ends ([forward]) or starts with the space a line wraps at: that outer
+   * character has no box while the one inside it has. The outer one is asked again after the inner
+   * answers, as in [adjacentNodeCaret], so a node that is only cold does not pass.
+   */
+  fun outerIsWrapSpace(snapshot: SelectionObserver.Snapshot, forward: Boolean): Boolean {
+    val length = snapshot.sourceLength
+    if (length < 2) return false
+    val outer = if (forward) length - 1 else 0
+    val inner = if (forward) length - 2 else 1
+    return !hasOwnBox(snapshot, outer) && hasOwnBox(snapshot, inner) && !hasOwnBox(snapshot, outer)
+  }
+
+  /**
    * A caret in the text node after [snapshot]'s source ([forward]) or before it: ONE character into
    * it when [oneIn], else its outer caret on the near side. Null where the tree has no such node on
    * screen or its geometry cannot be read.
@@ -305,6 +325,11 @@ class HandleLocator(private val density: () -> Float) {
    * average is coarse: good for the row, and the caller re-aims along the row once it is there.
    * Where a block's first row holds several inline nodes the walk finds the first of them, and the
    * answer carries that node's length and box so the caller can tell whether a landing is in it.
+   *
+   * A node whose near character is the space a line wraps at has no box for it, so the caret is read
+   * from the character inside it. For the outer caret that is one in, past the space, because an END
+   * on the caret after a wrap space has no handle drawn (see [SelectionDriver]'s block step), and the
+   * answer says so with [NeighbourCaret.pastWrapSpace].
    */
   fun adjacentNodeCaret(
     snapshot: SelectionObserver.Snapshot,
@@ -322,13 +347,25 @@ class HandleLocator(private val density: () -> Float) {
     val length = node.text?.length ?: return null
     val bounds = Rect().also { node.getBoundsInScreen(it) }
     val index = if (forward) 0 else length - 1
-    val rect = characterRect(node, bounds, index) ?: characterRect(node, bounds, index)
-    val seam = if (rect == null) seamCaret(snapshot, bounds, forward, oneIn) else null
+    val asked = characterRect(node, bounds, index) ?: characterRect(node, bounds, index)
+    // The outer character refused while the one inside it answers: the line wraps at that outer
+    // character, a space with no box, and the caret one in is read from the inner one's near edge.
+    // The outer one is asked once more after the inner answers, because a cold node can start
+    // answering between two asks, and only a refusal from a node that answers is a wrap space.
+    val inside = if (asked == null && length >= 2) characterRect(node, bounds, if (forward) 1 else length - 2) else null
+    val rect = asked ?: inside?.let { characterRect(node, bounds, index) }
+    val inner = inside.takeIf { rect == null }
+    val seam = if (rect == null && inner == null) seamCaret(snapshot, bounds, forward, oneIn) else null
     val geometry = when {
       rect != null -> CharacterGeometry(
         caretX = if (forward == oneIn) rect.right else rect.left,
         lineBottom = rect.bottom,
         characterWidth = rect.width(),
+      )
+      inner != null -> CharacterGeometry(
+        caretX = if (forward) inner.left else inner.right,
+        lineBottom = inner.bottom,
+        characterWidth = inner.width(),
       )
       seam != null -> seam
       snapshot.copy(bounds = bounds, sourceLength = length, source = node).sourceIsOneLine() -> {
@@ -343,6 +380,8 @@ class HandleLocator(private val density: () -> Float) {
     }
     val how = when {
       rect != null -> ""
+      inner != null && !oneIn -> ", one in: its ${if (forward) "first" else "last"} character is a wrap space, past which Chrome hides the handle"
+      inner != null -> ", read from the character inside its wrap space"
       seam != null -> ", at the seam: it wraps on from this node's row"
       else -> ", by its average"
     }
@@ -350,7 +389,7 @@ class HandleLocator(private val density: () -> Float) {
       "  adjacent: the ${if (forward) "next" else "previous"} node ($length chars at $bounds) " +
         (geometry?.let { "puts the caret at (${it.caretX}, ${it.lineBottom})$how" } ?: "is wrapped and will not measure")
     )
-    val neighbour = geometry?.let { NeighbourCaret(it, length, bounds) }
+    val neighbour = geometry?.let { NeighbourCaret(it, length, bounds, pastWrapSpace = inner != null && !oneIn) }
     if (neighbour != null) {
       adjacentMemoKey = key
       adjacentMemoValue = neighbour
