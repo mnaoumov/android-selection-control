@@ -2515,6 +2515,26 @@ rig, Chrome 143 force-stopped before each run:
 | control: the same row at y 1443, just above the zone, `← char`, `→ char` | `9 -> 8 -> 9`, 1 gesture each, the aim unchanged |
 | control: the debug target's `TextView` from `bravo`: `→ char`, `← char`, `⇥ word`, `⇟ page`, `← char` | `11 -> 12 -> 11`, `11 -> 19`, `19 -> 30`, `30 -> 29` |
 
+**The phone confirms both halves (2026-10-14, OnePlus 15, Chrome 154).** Chrome announced selections
+the old way (`seeded from a fresh selection`), so the extended-selection trial was not active. On
+gesture navigation the bottom `mandatorySystemGestures` zone is `[0,2660][1272,2772]`, against a
+navigation bar of `[0,2716][1272,2772]`. So the aim is y 2653 (2 dp above), and a handle centre more
+than 42 px (12 dp) into the zone refuses. The page was a served page of one-line `<p>Row 0NN has alpha
+bravo here</p>` rows (20 px, `margin: 0 40px`, `padding-top: 300px`). Long-press `bravo` (`18..23`),
+then a hand drag (`input motionevent`) that parks the row's box at the depth shown. A finger move of
+522 px scrolled 483. Do not run `uiautomator dump` with a selection up: after one, the next press said
+"the pad cannot see a selection" while Chrome still showed it. Read the bounds before long-pressing.
+
+| press | result |
+|---|---|
+| `← char`, row at `2549..2636` (handle at y 2685), 2 runs | `grab: (944.5, 2685.0) is in the bottom gesture zone (from y 2660) — aiming at y 2653.0 instead`, `23 -> 22` in 1 gesture and 0.67 s |
+| `→ char` back | the same aim, `22 -> 23` in 1 gesture |
+| `⇞ page` | the same aim, then the swipe from (318, 361.5) and the held drag, crossed the anchor, now the START |
+| `⤒ start`, row at `2549..2633` (handle at y 2682) | the same aim, 2 pages to the document's start, `Moved(22, 0)` in 3.5 s and 4 gestures |
+| `← char`, `⇞ page`, `⤒ start`, row at `..2671` (handle at y 2720) | `the handle at (941.5, 2720.0) is too deep in the bottom gesture zone (from y 2660) — refusing to touch`, `InGestureBar` in 12-18 ms, 0 gestures; the status line read `the handle is on the gesture bar — scroll the text higher` |
+
+After every press Chrome was still the focused window. Recents and Home never opened.
+
 **So a page step forgives a shortfall that the band's own move explains, and settles the band as well
 as the node.** `pageStep` re-reads the content band after the scroll, and the document's edge now needs
 a shortfall of more than a line PLUS however far the band's top and bottom moved. For the case above
