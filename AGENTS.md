@@ -940,10 +940,39 @@ other. Three of the five rows runs ended their first press before any of this co
 Chromium the `<p>`'s text node reported the block's box, so the END was aimed by its average at x 706,
 inside the right edge zone. One run grabbed there and ended `HandleLost`, and two refused with `InEdgeZone`.
 
-One defect remains on Chromium 157, past `[4]`. A `→ char` from `[4]`'s end reads the wrapped
-` More text after.` box (`(32, 997 - 678, 1093)`) as another row, takes the block step, and grabs on its
-second line (y 1121), landing in the next paragraph. A `← char` from that node's first caret does the
-mirror image.
+**A short phrase that starts late on a line and wraps passes the one-line test, and its box then puts
+its first carets on its LAST line.** ` More text after.` after `[4]` is `(32, 997 - 678, 1093)`: two lines,
+each across the whole width, so its 17 characters average 38 px over a 96 px box, a ratio of 0.4, which
+the one-line test reads as one line. Wrapping did not divide the width, so nothing about the shape
+says it wraps. Where Chromium had not measured it, its first caret was placed by that average at x 70
+and at the box's bottom, on the second line. A `→ char` from `[4]`'s end then took it for another row,
+took the block step, and grew into the next paragraph (`Moved(3, 27)`). A `← char` from its `0..1`
+grabbed at y 1121, on the second line, with the handle drawn on the first, and ended `HandleLost`.
+Three fixes, all in `HandleLocator`:
+
+- **The neighbour's caret is read at the seam** (`seamCaret`) when the neighbour's box is half again
+  taller than the source's one-line box, starts on its row (tops forward, bottoms backward, within half
+  its height), and reaches back past the seam. A node that stays on the row never does that.
+- **An unmeasured caret inside such a node is placed along the row it continues** (`rowContinuedFrom`):
+  from the end of the node before it, by that node's average, and refused where that runs past the box.
+  The step is sized by the same average (`seamAverage`).
+- **A measured caret a line above a one-line box's bottom gives the row** (`measuredRowAbove`), where
+  the row used to stay `bounds.bottom` regardless.
+
+Measured 2026-10-13 on the rig, Chromium r1709360 force-stopped before each run, long-press
+`environment`, then the presses below:
+
+| run | before | after |
+|---|---|---|
+| `→ char` ×3, marker on or off | `21 -> 1 -> 3`, then `3 -> 0` of the next paragraph, via `0..27` (marker off) | `21 -> 1 -> 3 -> 1` of ` More`, the last in 1 gesture, 8 runs of 8 |
+| then `← char`, `→ char`, `← char`, `← char`, marker on | `← char` `HandleLost`, then blind | `1 -> 3` (`[4]`'s end) `-> 1 -> 3 -> 1` (`.`), 1 gesture each, 2 runs of 2 |
+| `→ char` ×4, `← char` ×2, `→ char`, `← char`, marker off | `← char` from `0..1` grabbed at y 1121, `HandleLost` | `21 -> 1 -> 3 -> 1 -> 2`, `2 -> 1 -> 3`, `3 -> 1`, `1 -> 3`, 2 runs of 2 |
+| control: Chrome 143, `→ char` ×3, `← char` ×2 | `21 -> 1 -> 1 -> 2 -> 1 -> 1` | the same |
+| control: one-line rows, `→ char`, `← char`, `⇥ word` from `delta`, Chrome 143 | `33 -> 1 -> 33`, `33 -> 4` | the same |
+| control: the debug target's `TextView` from `bravo` | `11 -> 12 -> 11`, `11 -> 19` | the same |
+
+On Chromium the rows control's first `→ char` ended `HandleLost` at x 706, the cold `<p>` box defect
+above; its `← char` and `⇥ word` were exact.
 
 **`word →` from the word before a block's trailing `.` lands on the block's last caret, and that is
 not Chrome's next-word-start hold.** Measured 2026-10-05 on the handset, Wikipedia's `Text_editor`: from
