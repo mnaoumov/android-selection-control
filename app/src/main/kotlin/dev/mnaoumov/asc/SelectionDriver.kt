@@ -3474,6 +3474,7 @@ class SelectionDriver(
     grab: PointF,
     to: PointF,
     forward: Boolean,
+    atDocumentEdge: Boolean,
     ended: (Outcome) -> Unit,
     report: (SelectionObserver.Snapshot?) -> Unit,
   ) {
@@ -3483,7 +3484,14 @@ class SelectionDriver(
         return@grabAndHold
       }
       awaitChange(scrolled, maxMs = MAX_PAGE_SETTLE_MS) { landed ->
-        if (landed != null && endOnBlocksFirstCaret(landed)) {
+        /*
+         * Not the corner drag to the document's START, because an END that reaches the first text's
+         * caret 0 there has crossed the anchor, and that `0..0` is the START, which [crossTheAnchor]
+         * re-reads once the drag is reported. Measured 2026-10-14 on the rig (Chrome 143, one-line rows,
+         * the page at its top): `⤒ start` on the END from `has` on row 003 took that `0..0` for a block's
+         * first caret, found no text before row 001, went into the block, and ended on offset 27 of row 002.
+         */
+        if (landed != null && !(atDocumentEdge && !forward) && endOnBlocksFirstCaret(landed)) {
           backOntoPreviousText(scrolled, landed, ended, report)
           return@awaitChange
         }
@@ -3853,9 +3861,15 @@ class SelectionDriver(
       // because the document's last lines scroll no higher than the viewport's bottom, which the
       // docked pad covers: measured 2026-09-28, the band's corner left `end` on row 394 of 400. The
       // down is on the handle, so the moves belong to the page wherever they go.
+      //
+      // The corner's column is never further inward than the grab. Chrome keeps the finger's offset
+      // from its own handle, so a finger moved inward carries the caret inward by as much. Measured
+      // 2026-10-14 on the rig (Chrome 143, one-line rows with a 16 px body margin): a START on a row's
+      // first caret is grabbed at x 14, 18 px left of the caret at 32, and the move to the corner's
+      // x 24 hit-tested at 42, inside row 001's `R`, so `⇞ page` at the page's top ended on offset 1.
       val target = if (atDocumentEdge) {
         PointF(
-          if (forward) (gestures.screenWidth() - EDGE_INSET).toFloat() else EDGE_INSET.toFloat(),
+          if (forward) maxOf((gestures.screenWidth() - EDGE_INSET).toFloat(), grab.x) else minOf(EDGE_INSET.toFloat(), grab.x),
           if (forward) (gestures.screenHeight() - EDGE_INSET).toFloat() else EDGE_INSET.toFloat(),
         )
       } else {
@@ -3892,7 +3906,7 @@ class SelectionDriver(
         onResult(PageStep(outcome, atDocumentEdge))
       }
       gestureCount++
-      holdOntoText(scrolled, grab, target, forward, ended, ::report)
+      holdOntoText(scrolled, grab, target, forward, atDocumentEdge, ended, ::report)
     }
 
     if (content?.scrolls != true) {

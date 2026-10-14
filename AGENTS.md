@@ -2810,6 +2810,30 @@ corner.** The band's corner is not enough, because a document's last rows scroll
 viewport's bottom, which the docked pad covers: `end` stopped on row 394 of 400 until the target
 moved. The down is on the handle, so the moves belong to the page wherever they go.
 
+**The corner's column is never further inward than the grab, because Chrome keeps the finger's
+offset from its handle.** A START on a row's first caret is drawn left of it, so it is grabbed at
+x 14 against a caret at 32 on the rig's 16 px margin. The old corner, (24, 24), moved the finger
+10 px inward, and Chrome hit-tested at x 42, inside row 001's `R`. With the page at its top,
+`⇞ page` ended `Moved(0, 1)` on row 001, and a `← char` was needed to reach 0. So the start corner's
+x is now the lesser of 24 and the grab's x (`dragAcross`), and the end corner's the greater of its
+own x and the grab's. A second defect was found in the same sitting. `⤒ start` on the END, with the
+page at its top, crossed the anchor onto row 001's caret 0, which Chrome announced as `0..0`.
+`holdOntoText` took that for the END on a block's first caret. It found no text before row 001,
+went into the block, and ended on offset 27 of row 002. A backward corner drag never takes that branch
+now, so the crossing is re-read as the START. Measured 2026-10-14 on the rig, Chrome 143
+force-stopped before each run, a served page of 120 one-line rows at its top, long-press `has` on
+row 003:
+
+| press | old build | new build |
+|---|---|---|
+| `⇄ swap`, `⇤ word` ×2 to `0..11`, then `⇞ page` | `drag to (24.0, 24.0)`, `Moved(0, 1)` on row 001 | `drag to (14.0, 24.0)`, `Moved(0, 0)` on row 001; `→ char`, `← char` `0 -> 1 -> 0`; 3 runs of 3 |
+| the same, then `⤒ start` | not measured | `Moved(0, 0)` on row 001, then `0 -> 1 -> 0` |
+| `⤒ start` on the END (`8..11`) | into the block, `Moved(11, 27)` on row 002 | crossed the anchor, `Moved(11, 0)` on row 001, then `0 -> 1 -> 0` as the START; 2 runs of 2 |
+| `⇞ page` on the END | not measured | the same, `Moved(11, 0)` |
+| control: a mid-line START (`4..11`), `⇞ page` | as before | `drag to (24.0, 24.0)`, `Moved(4, 0)` |
+| control: `⤓ end` from `has` | as before | 10 pages to row 120's end (`28`) |
+| control: the debug target's `TextView` from `bravo` | as before | `11 -> 12 -> 11`, `11 -> 19`; `⇄ swap`, `⤒ start` `6 -> 0`, then `0 -> 1` |
+
 **Rows of a scrolled page land in identical rectangles, so a node is known by its identity, not by
 its bounds.** Rows 047 and 058, both 27 characters long, were both at `(32, 1007 - 424, 1045)`
 either side of one page step. The bounds-and-length key read that as "did not move" and stopped
