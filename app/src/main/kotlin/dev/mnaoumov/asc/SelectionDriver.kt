@@ -423,10 +423,65 @@ class SelectionDriver(
       caretReadAsEdge = inText.atMs
       return inText.copy(from = 0, to = anchor)
     }
+    if (inText === snapshot && inText.from == 0 && inText.to > 0 && inText.to == inText.sourceLength) {
+      return startAfterSeam(snapshot) ?: snapshot
+    }
     if (inText.from != 0 || inText.to < 0 || inText.to >= inText.sourceLength) return snapshot
     if (inText.to == 0) caretReadAsEdge = inText.atMs
     return inText.copy(from = inText.to, to = inText.sourceLength)
   }
+
+  /**
+   * [snapshot], a START announced `0..length` from a node without the anchor, read as the first caret
+   * of the text node after it on the same row, or null to leave it as it arrived.
+   *
+   * It is the mirror of [endBeforeSeam]. A caret on an inline seam belongs to both nodes, and Chrome
+   * can announce a START there from the node BEFORE it, as that node's last caret: `0..focus` with the
+   * focus equal to the length. The `focus..length` rewrite would make that an empty range, so it was
+   * left as it arrived, and `low()` read it as the node's FIRST caret. Measured 2026-10-14 on the
+   * handset (Chrome 154, Wikipedia's `Text_editor`): a `⇞ page` put the START on `As |source code`, the
+   * screenshot showed the highlight starting at `source`, and the pad logged `edge=START at 0..3
+   * moving=0 srcLen=3`. `← char` from there then took the block step into the previous paragraph and
+   * ended `HandleLost`, three characters past the one-character step, and `→ char` read a one-character
+   * step as four.
+   *
+   * The caret is the same one at the start of the node after, and that frame has a non-empty range:
+   * `0..length`, or `0..anchor` when that node holds the anchor. Only on the same ROW: a block's last
+   * caret is announced the same way, and the next block's first caret is drawn on another row.
+   */
+  private fun startAfterSeam(snapshot: SelectionObserver.Snapshot): SelectionObserver.Snapshot? {
+    startSeamMemo?.let { (announced, rehomed) -> if (announced === snapshot) return rehomed }
+    val here = snapshot.bounds?.takeUnless { it.isEmpty } ?: return null
+    val leaf = snapshot.source?.let(locator::textLeafAfter) ?: return null
+    val length = runCatching { leaf.text?.length }.getOrNull()?.takeIf { it > 0 } ?: return null
+    val bounds = Rect().also { leaf.getBoundsInScreen(it) }
+    if (bounds.isEmpty || !onTheSameRowAs(bounds, here)) {
+      if (startSeamRefused !== snapshot) {
+        Diag.log("a START announced on its node's last caret (${describeNode(snapshot)}), and the text after it is not on its row ($bounds)")
+      }
+      startSeamRefused = snapshot
+      return null
+    }
+    val inNext = snapshot.copy(bounds = bounds, sourceLength = length, source = leaf, rehomedFrom = snapshot)
+    val end = if (nodeKey(inNext) == anchorNodeKey) {
+      lastSeenInNode[anchorNodeKey]?.high()?.takeIf { it in 1..length } ?: return null
+    } else {
+      length
+    }
+    Diag.log(
+      "a START announced on its node's last caret (${describeNode(snapshot)}) — reading it as the first " +
+        "caret of the text after it ($length chars at $bounds)"
+    )
+    val rehomed = inNext.copy(from = 0, to = end)
+    startSeamMemo = snapshot to rehomed
+    return rehomed
+  }
+
+  /** The last announcement [startAfterSeam] re-homed, and where. Only an answer is memoised. */
+  private var startSeamMemo: Pair<SelectionObserver.Snapshot, SelectionObserver.Snapshot>? = null
+
+  /** The last announcement [startAfterSeam] refused, so the refusal is logged once. */
+  private var startSeamRefused: SelectionObserver.Snapshot? = null
 
   /**
    * [snapshot], a `0..0` from a node with no text, read as the first caret of the text node after it.
