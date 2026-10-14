@@ -1179,7 +1179,53 @@ to 21, then the presses below:
 
 No press ended `HandleLost` or went into the next paragraph, and the screenshot after the step showed `[4]` and
 the space selected. With a BARE `<sup>[4]</sup>` on the same page, the phone's Chrome announced every edge at
-that seam from the `<p>` itself (`srcLen=0`), and the pad went blind. That is tracked on its own.
+that seam from the `<p>` itself (`srcLen=0`), and the pad went blind. That is the next entry.
+
+**A selection can be announced from a node with no text of its own, in that node's frame, and it is
+re-homed onto the text leaf that holds the focus.** On the phone (2026-10-14, Chrome 154.0.8037.127, the
+old announcement in effect), a served `<p>Editors run code and provide a <span>debugging
+environment</span>.<sup>[4]</sup> More text after it, which wraps.</p>` was announced from the `<p>`:
+an `android.view.View` with `srcLen=0` and the paragraph's box. Its offsets count the `<p>`'s text
+leaves end to end: `Editors run code and provide a ` (31), `debugging environment` (21), `.` (1),
+`[4]` (3), ` More text after it, which wraps.` (33). So a long-press on `environment` came as `41..55`,
+which is `environment.[4`. The highlight covered `[4` above the line. A `→ char` from `.` landed on
+`31..54`, one character into `[4]`, where it was aimed. The pad has no node to aim by there, so every
+press after it ended `HandleLost` in about 410 ms with 1 gesture. With Wikipedia's citation markup
+(`[`, `4`, `]` as nodes of their own) the same steps were announced from the leaves.
+
+`SelectionObserver.inTextLeaf` now walks such a node's text leaves in tree order, sums their lengths,
+and rewrites the range into the leaf holding the focus, in the shape the old event had: `anchor..focus`
+when the anchor is in that leaf too, `0..focus` when it is not. A focus on a seam is in both leaves.
+An END (the focus after the anchor) goes in the leaf before it, because a `0..0` in the leaf after reads
+as no selection, and a START goes in the leaf after it, at its offset 0. A walk that meets an image or a
+control leaves the announcement as it arrived. Chrome's image link, a `View` with no text over an `Image`
+with a file name, is announced as `0..0` and has its own rule in the driver. An extended selection
+whose focus is a text offset in such a node is read the same way. That shape has not been seen.
+
+**The rig's browsers do not announce this way, so a debug marker makes them.** Chrome 143 and Chromium
+r1709360 announced every step on the same served page from the leaves. `adb shell run-as dev.mnaoumov.asc
+touch files/force-container-frame`, then `rig.ps1 rebind`, rewrites a Blink leaf's announcement into the
+frame of its nearest ancestor with no text, on a debuggable build. It logs `debug: announcing <a>..<f> in
+its parent's frame as ...`, and that rewrite is then fed through the re-homing. `[4]`'s own parent
+is the `<sup>`, which carries `[4]` too, so the marker climbs past it. `[4]` is announced from a `TextView`
+that the `<p>` does not list, where the `<p>` lists a `View` with the same box and length, so that is
+how it is matched. A leaf's `0..focus` does not say where an anchor in another leaf is, so the anchor last
+simulated in the same container stands in for it. `rm` the file and rebind to undo. Measured 2026-10-14
+on the rig, the browser force-stopped before each run:
+
+| run | marker on, re-homing off | marker on, re-homing on |
+|---|---|---|
+| Chrome 143, long-press `environment`, `→ char` ×4, `← char` ×4, 2 runs | announced from the `<p>` as `41..52`, `srcLen=0`; every press `HandleLost` in 430-510 ms, 1 gesture (1 run of 3 presses) | `21 -> 1` (`.`) `-> 1` (`[4]`) `-> 2 -> 3 -> 2 -> 1 -> 1` (`.`) `-> 21`, 1 gesture each, every landing re-homed |
+| Chrome 143, long-press `debugging`, `⇥ word`, `→ char` ×3, `← char` | not run | `9 -> 21` in 7 gestures, then `21 -> 1` (`.`) `-> 1` (`[4]`) `-> 2 -> 1`, 1 gesture each |
+| Chrome 143, long-press `More`, `⇄ swap`, `← char` ×3, `→ char` ×3 | not run | the START `1 -> 0` (re-homed as `5..0` of ` More…`, the leaf after the seam) `-> 2` of `[4]` `-> 1 -> 2 -> 0 -> 1`, 1 gesture each |
+| Chromium 157 (through the extended rung), long-press `environment`, `→ char` ×3, `← char` ×3, 2 runs | not run | `21 -> 1 -> 3 -> 1`, then `1 -> 3 -> 1 -> 21`, the same as without the marker (Chromium keeps no caret inside `[4]`) |
+
+The controls, without the marker, are unchanged and log no re-homing. The same page on Chrome 143 went
+`21 -> 1 -> 1 -> 2 -> 1 -> 1 -> 21`, and on Chromium 157 `21 -> 1 -> 3 -> 1 -> 3 -> 1 -> 21`, the last
+press in 4 gestures with or without the marker. `⤒ start` on a page that opens with `<a><img></a>`
+moved off the image's `0..0` onto the heading, and `0 -> 1 -> 0` followed. The one-line rows went
+`28 -> 1 -> 28` and `⇥ word` `28 -> 4`. The debug target's `TextView` went `11 -> 12 -> 11` and `11 -> 19`.
+The phone itself has not run the fix.
 
 **`word →` from the word before a block's trailing `.` lands on the block's last caret, and that is
 not Chrome's next-word-start hold.** Measured 2026-10-05 on the handset, Wikipedia's `Text_editor`: from
