@@ -233,10 +233,11 @@ one line. After the change, Chrome force-stopped before each run:
 | `⇥ word` ×2, `← char`, `⇤ word` from `are`, 2 runs | `17 -> 23` (`often`), `23 -> 32` (`included`), `32 -> 31`, `31 -> 24` |
 | controls: one-line rows, `→ char`, `← char`, `⇥ word`; the debug target's `TextView` from `bravo` | `20 -> 1 -> 20`, `20 -> 4`; `11 -> 12 -> 11`, `11 -> 19` |
 
-The grow from line 2's first caret of the `features` paragraph does not work yet. The END handle there
-is at x 50, inside the rig's 60 px left gesture zone. Chrome holds an edge on a word's start, so the
-grab is silent there. The edge-zone logic reads that silence as a swallowed touch-down and refuses
-every margin press after it. That is tracked on its own.
+The grow from line 2's first caret of the `features` paragraph now works too. The END handle there
+is at x 50, inside the rig's 60 px left gesture zone, and Chrome holds an edge on a word's start, so the
+grab is silent. That silence used to be read as a swallowed touch-down. The press now checks the
+toolbar instead (*A silent zone touch-down is answered when the toolbar went down*, under the edge-zone
+entries below): `→ char` from 46 goes `46 -> 47`, and `⇥ word` from `features` goes `45 -> 49`.
 
 **The grow escalation stops at the screen's edge.** Each reach is clamped to the screen, and the press
 ends once the previous reach was already off it. Measured `word →` from the end of a paragraph's last
@@ -2151,6 +2152,33 @@ that crossing the END sat on 53, the first caret of `editing` at the left margin
 Chrome anyway (the left-margin silent-grow defect), so whether OxygenOS swallowed that grab is not known.
 The right-margin `→ char` that the branch was written for, a same-row step from an END in the strip, was
 not found on this page.
+
+**A silent zone touch-down is answered when the toolbar went down, because the target app takes it
+down only for a drag it is following.** Silence alone does not say the ROM took the touch. Chrome holds
+an edge on a word's START until the finger passes the word's middle, so a grab or a short grow from
+there is silent on stock Android too. Measured 2026-10-13 on the rig (Chrome 143, the served
+`As source code is text, editors have features for it.`, which wraps after `features`): with the END on
+46, line 2's first caret, aimed at x 50 inside the 60 px left zone, `→ char` was refused as swallowed
+(`InEdgeZone` in 785 ms, 2 gestures). The connection learned `true`, and every margin press after it was
+refused in 17-19 ms. `⇥ word` from `features` did the same after its row change, 2 runs of 2. A
+touch-down the ROM swallows never reaches the app, so its toolbar stays up. So the service records
+whether the toolbar was up at a zone touch-down, and looks again when the grab completes, when a
+released drag lifts, and before the held pointer is pushed (`noteToolbarAfterEdgeDown`). A toolbar that
+was up and is gone means the app is following the pointer. The touch-down then counts as answered: the
+pushes go on, later tries in the press are made, and the verdict learned is `false`. A touch-down
+straight after another drag finds the toolbar still down from that one, which says nothing, so a zone
+touch-down first waits up to 900 ms for the toolbar to come back (`awaitToolbarBeforeEdgeDown`). The
+row change's lift needed 75 ms. Measured 2026-10-14 on the rig, Chrome force-stopped before each run:
+
+| press | before | after |
+|---|---|---|
+| `→ char` ×2, `← char`, `→ char` from `features`, 3 runs | `45 -> 46`, then `InEdgeZone`, then refused | `45 -> 46 -> 47 -> 46 -> 47`; the grab at x 50 logged `the app took its toolbar down`, then one snap-through push, 3 gestures, ~1.07 s |
+| `⇥ word`, `← char`, `→ char` from `features`, 2 runs | `InEdgeZone` in 1.33 s, then refused | `45 -> 49` (`for`) in 1.9 s and 4 gestures, grow try 1 silent and answered, try 2 landed; then `49 -> 48 -> 49` |
+| the swallow marker, `→ char` ×2 from `features` | `InEdgeZone`, then refused with 0 gestures | the same: a grab that is not dispatched leaves the toolbar up |
+| control: the debug target's `TextView`, `bravo` and a START swapped onto `alpha` at x 14 in the zone | `11 -> 12 -> 11`, `11 -> 19`; `0 -> 1 -> 0 -> 1` | the same |
+
+The rig cannot show the phone's own shape: a grab that IS dispatched and that OxygenOS's strip takes.
+Whether Chrome keeps its toolbar up then, which is what the check relies on, needs the phone.
 
 **A grow from the document's first or last caret has nowhere to go. Unless it touches nothing, its
 silence teaches the verdict wrong.** Measured 2026-10-13 on the rig (Chrome 143, no marker, so the zone
