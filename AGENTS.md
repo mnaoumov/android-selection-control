@@ -850,6 +850,31 @@ there logged `srcLen=3` and went `1 -> 143`, back onto `cost.`, in 2 gestures an
 direction worked 3 runs of 3. On the phone the slide alone was enough. The correction move (`moving the
 pointer`) never fired, so it is still unproven against a real wrong node.
 
+**A superscript's box sits above its line, so "another row" means more than half a line away.**
+`blockStep` used to call any neighbour whose bottom differed by more than 1 px another row. A `<sup>`
+node's box ends above the line's: on a served `…<span>debugging environment</span>.<sup>[4]</sup> More
+text after.` at 20 px, `[4]` ended at y 1029 and the `.` before it at 1045. So `char ←` from `0..1` of
+`[4]` was taken as a step into the previous block. The first move landed correctly on `0..1` of the `.`,
+but the second move, down onto the `.`'s row, landed in ` More text after.`. The press ended
+`Moved(1, 21)` in 4 gestures and 2.3 s. `onTheSameRow` now also calls a gap under half the shorter
+one-line box's height the same row. Rows of 38 px sit 46 px apart, so it does not merge them. It falls
+back to the 1 px test where either box wraps. Measured 2026-10-13 on the rig, Chrome 143 force-stopped
+before each run:
+
+| press | old build | new build |
+|---|---|---|
+| `char ←` from `0..1` of `[4]`, with the refusal marker | block step, landed in ` More text after.`, 4 gestures | `the same row`, onto `0..1` of `.` in 1 gesture, ~0.6 s, 3 runs of 3 |
+| the `char ←` after it | not measured | back to 21 of `environment`, 1 gesture |
+| the same presses with the platform answering | not measured | identical, 1 run |
+| controls: `char →`, `char ←` across one-line rows 003/004, `word →` into row 004 | as before | `33 -> 1 -> 33`, 2 gestures each; `word →` `33 -> 4` |
+| control: the debug target's `TextView` from `bravo` | as before | `11 -> 12 -> 11`, `word →` `11 -> 19` |
+
+A move that ends in another node is now always reported as a crossing (`perform`'s report), because
+two nodes' offsets say nothing next to each other. That `char ←` is `0..1` of `[4]` to `0..1` of `.`,
+which read as `Moved(1, 1)`, "didn't move", and would have stopped a repeat run. The `char →` from
+`environment`'s end skips the `.` and lands on `0..1` of `[4]`, two characters on. That is a separate
+defect and is still open.
+
 **`word →` from the word before a block's trailing `.` lands on the block's last caret, and that is
 not Chrome's next-word-start hold.** Measured 2026-10-05 on the handset, Wikipedia's `Text_editor`: from
 `cost` (`138..142`) the first grow landed on 143, past the period. `landedOnNextWordStart` read it as the
