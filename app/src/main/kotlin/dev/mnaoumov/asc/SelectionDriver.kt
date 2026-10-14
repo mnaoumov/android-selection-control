@@ -3118,6 +3118,15 @@ class SelectionDriver(
       pastTheNearCaret(step, before, first, start, command, onDone)
       return
     }
+    // The heading's own text, right of the padding box the walk found: see [NeighbourCaret.isTextBesideBox].
+    // A cold box placed the caret by its average, at its left edge and on its last line, and the move
+    // landed on `0..9` of `Encoding 1`'s second line; aiming the correction by the box's columns sent it
+    // off the screen. The landing's own geometry is right, so the slide goes by that, as from the near caret.
+    if (step.growing && step.neighbour.isTextBesideBox(first)) {
+      Diag.log("  next block: the move landed in the block's own text (${first.bounds}), beside the box the walk found (${step.neighbour.bounds})")
+      pastTheNearCaret(step, before, first, start, command, onDone)
+      return
+    }
     val aim = when {
       !step.growing -> step.aim
       !step.neighbour.holds(first) -> step.aim.also {
@@ -3220,7 +3229,11 @@ class SelectionDriver(
           return
         }
         if (waited > 0) Diag.log("  next block: caret $target of the landing measured after ${waited}ms")
-        val back = PointF(handleX(caret.caretX), far.y)
+        // Onto the caret's own row: a landing on a wrapped block's last line is a line below it.
+        val held = locator.characterGeometry(along, activeEdge, crossingOf(command), quiet = true)
+        val rowShift = held?.let { caret.lineBottom - it.lineBottom }?.takeIf { kotlin.math.abs(it) > HandleLocator.LIE_TOLERANCE } ?: 0f
+        if (rowShift != 0f) Diag.log("  next block: caret $target is ${rowShift}px off the row the pointer is on — moving onto its row")
+        val back = PointF(handleX(caret.caretX), far.y + rowShift)
         val landedStep = BlockStep(back, step.growing, NeighbourCaret(caret, along.sourceLength, bounds), step.skipsWrapSpace)
         gestureCount++
         if (!gestures.moveHeld(back)) {
