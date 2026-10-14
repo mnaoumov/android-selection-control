@@ -2345,6 +2345,27 @@ there is no block step to take. Its grab at x 45.5 reached sideways to x 14.5 an
 cancelled, and the press ended `Moved(0, 0)`. Chrome's magnifier stayed on screen afterwards until a tap
 cleared it, and the side-zone verdict was learned as answered.
 
+**So where the page CAN still scroll that way, the same press refuses too, and asks for a scroll.** With
+no text leaf beyond the edge on screen there is no block step, and a reach along the edge's own row has
+nothing to enter. `nothingBeyond` now ends such a press `BeyondOffScreen` with nothing touched, and the
+status line reads "the text before it is above — scroll up a little" (or "after it is below — scroll down").
+Scrolling the neighbour into view by itself was considered and not done: it chains a swipe and a block
+step, either one missing costs the selection, and the user's own scroll costs one gesture. Measured
+2026-10-14 on the rig (Chrome 143 force-stopped before each run, a served page of 120 one-line rows,
+scrolled so row 002 is the top line and row 001 is under the omnibox). Long-press `has` on row 002, then
+`⇄ swap` and `⇤ word` ×2 to `0..11`:
+
+| press | old build | new build, 3 runs of 3 |
+|---|---|---|
+| `← char` | grab at (14, 339) in the side zone, to x -6, `held: LOST after 8 link(s)`, snap-through to x 0, `Moved(0, 0)` in 1.7 s and 2 gestures; the verdict learned `answered` | `BeyondOffScreen` in 9-10 ms, 0 gestures |
+| `⇤ word` after it | not measured | `BeyondOffScreen` in 4-5 ms, 0 gestures |
+| a hand scroll that brings row 001 in, then `← char`, `→ char` | not measured | the block step, `0 -> 27` of row 001 and back `27 -> 0`, 2 gestures each |
+| control: the page at its top, the START on row 001's `0`, `← char` | `AtDocumentEdge` | `AtDocumentEdge` in 16 ms |
+| control: the debug target's `TextView` from `bravo` | `11 -> 12 -> 11`, `11 -> 19` | the same |
+
+The END's mirror, a next row below the screen's bottom, was not measured: a handle there is inside the
+bottom gesture zone, where `InGestureBar` refuses first.
+
 **A heads-up notification is another app's window above the target, and a touch-down on it goes to the
 notification.** An upward page swipe starts a quarter of a drop below the band's top: y 361 on the phone,
 327 on the rig. That is where heads-ups appear. On the rig an SMS (`adb emu sms send 5551234 <text>`)
