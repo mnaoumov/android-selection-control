@@ -102,6 +102,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       contentBand = ::contentBand,
       foreignWindowAt = ::foreignWindowAt,
     )
+    // And for a page scroll that falls short mid-document, which the rig's Chrome never does by itself.
+    driver.forceShortScroll = debuggable && java.io.File(filesDir, FORCE_SHORT_SCROLL).exists()
+    if (driver.forceShortScroll) Diag.log("debug: every page scroll swipes a quarter of its distance")
 
     pad = Pad(
       context = this,
@@ -926,6 +929,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
     /** The debug marker file that drops a handle touch-down in a side gesture zone: see [noteEdgeZone]. */
     const val FORCE_SWALLOW_EDGE_ZONE = "force-swallow-edge-zone"
+
+    /** The debug marker file that cuts every page scroll short: see `SelectionDriver.forceShortScroll`. */
+    const val FORCE_SHORT_SCROLL = "force-short-scroll"
 
     /** The status line for a press the side gesture zone stopped. */
     const val EDGE_ZONE_STATUS = "the handle is in the screen edge's swipe zone"
