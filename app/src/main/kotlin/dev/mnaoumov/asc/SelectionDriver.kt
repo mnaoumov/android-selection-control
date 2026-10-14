@@ -1391,6 +1391,9 @@ class SelectionDriver(
            * missed is already past the slop, so a push reads to the page as a scroll, and
            * [heldSnapThrough] gives up after [MAX_SNAP_THROUGH_ATTEMPTS].
            */
+          // Into the inline neighbour, the push is sized and bounded by that node: see [throughTheNeighbour].
+          after == null && inline != null ->
+            throughTheNeighbour(BlockStep(to, growing = true, neighbour = inline), before, start, command, onDone)
           after == null && before.isBlink && growsSelection(command) -> {
             Diag.log("  held: silent from $start on Blink — pushing through the word's middle")
             heldSnapThrough(next, start, command, onDone, guard = 1, frame = before)
@@ -1427,6 +1430,11 @@ class SelectionDriver(
              * 2-9 s a press against 1 gesture and about 1 s.
              */
             locator.rememberAnchor(handle.x - reach.coerceAtLeast(0f))
+            // The edge held on the seam it started from: push on into the neighbour.
+            if (inline != null && !crossedNodes(before, after) && after.movingOffset() == start) {
+              throughTheNeighbour(BlockStep(to, growing = true, neighbour = inline), before, start, command, onDone)
+              return@awaitChange
+            }
             // A landing past the inline neighbour, in a node further on, is moved back onto it first.
             if (inline != null && crossedNodes(before, after) && !inline.holds(after)) {
               intoTheNeighbour(BlockStep(to, growing = true, neighbour = inline), before, after, gestures.heldAt() ?: to, start, command, onDone)
@@ -2615,6 +2623,131 @@ class SelectionDriver(
     heldCorrect(targetOffset(before, landed, command, start), start, command, { outcome ->
       onDone(if (outcome is Outcome.Moved) outcome.copy(crossedNode = true) else outcome)
     }, frame = landed)
+  }
+
+  /**
+   * A grab aimed one character into the inline neighbour ([inlineNeighbour]) that left the edge on the
+   * seam it started from: push the held pointer on into the neighbour until the edge leaves the seam,
+   * then let [intoTheNeighbour] bring it onto the neighbour's first character.
+   *
+   * Chromium 157 holds an END on the seam until the finger passes the MIDDLE of the neighbour, and
+   * then snaps it to the neighbour's end, the word snap [heldSnapThrough] exists for. Measured
+   * 2026-10-13 on the rig, Chromium r1709360, a served `…<span>debugging environment</span>.<sup>[4]
+   * </sup> More text after.`: from `.`'s end the grab aimed one character into `[4]` was announced on
+   * the same caret. The held correction then counted its target in the `.`'s 1-character frame, as 2,
+   * which no caret of `.` is, and the snap-through, sized by `.`'s 12 px, pushed on past `[4]` onto
+   * `0..1` of ` More text after.`: the press skipped `[4]` and the space, 2 runs of 2. Chrome 143
+   * lands the same grab on `0..1` of `[4]` and never comes here.
+   *
+   * So the push is sized by the neighbour's own average character and never goes beyond its far
+   * caret, and the landing is judged in the neighbour's frame, where one character in is offset 1 and
+   * a snap to its end is a walk back of two.
+   */
+  private fun throughTheNeighbour(
+    step: BlockStep,
+    before: SelectionObserver.Snapshot,
+    start: Int,
+    command: PadCommand,
+    onDone: (Outcome) -> Unit,
+    attempt: Int = 1,
+  ) {
+    val current = observer.latest ?: before
+    val at = gestures.heldAt()
+    if (at == null) {
+      Diag.log("  inline: nothing is held any more — stopping at $start")
+      onDone(Outcome.HandleLost)
+      return
+    }
+    val bounds = step.neighbour.bounds
+    val perChar = bounds.width().toFloat() / step.neighbour.length.coerceAtLeast(1)
+    val push = (perChar * CHARS_PER_ATTEMPT).coerceAtLeast(STEP_PX)
+    val far = handleX((if (command.toRight) bounds.right else bounds.left).toFloat())
+    val x = if (command.toRight) minOf(at.x + push, far) else maxOf(at.x - push, far)
+    if (attempt > MAX_SNAP_THROUGH_ATTEMPTS || x == at.x) {
+      Diag.log("  inline: the edge stayed on the seam with the pointer at ${at.x}, the neighbour's far caret — letting go")
+      releaseThenReport(start, current.movingOffset(), onDone)
+      return
+    }
+    gestureCount++
+    if (!gestures.moveHeld(PointF(x, at.y))) {
+      Diag.log("  held: the push into the neighbour was refused")
+      gestures.releaseHeld { onDone(Outcome.HandleLost) }
+      return
+    }
+    awaitChange(current) { after ->
+      val still = after == null || (!crossedNodes(before, after) && after.movingOffset() == start)
+      Diag.log(
+        "  inline: push $attempt to x=$x (the neighbour ends at $far) -> " +
+          if (after == null) "nothing" else "${after.sourceLength} chars, ${after.low()}..${after.high()}"
+      )
+      when {
+        still -> throughTheNeighbour(step, before, start, command, onDone, attempt + 1)
+        crossedNodes(before, after!!) && step.neighbour.holds(after) ->
+          backFromTheSnap(before, after, PointF(x, at.y), start, command, onDone)
+        else -> intoTheNeighbour(step, before, after, PointF(x, at.y), start, command, onDone)
+      }
+    }
+  }
+
+  /**
+   * After [throughTheNeighbour]'s push snapped the edge into the neighbour, past its first character:
+   * shrink back onto that character with the pointer still down, and where the app will not stop
+   * there, put the edge back where the snap left it and take that as the step.
+   *
+   * Chromium 157 has no handle position inside `[4]` at all. Measured 2026-10-13 on the rig, Chromium
+   * r1709360, the edge on the `.` before `<sup>[4]</sup>` (`[4]` at x 460..500, the END handle 18 px
+   * right of its caret): released drags from the seam to x 500 and 510 left it on the seam, and one
+   * to 520 put it on `[4]`'s end. From there, released drags back to 500, 494 and 488 all put it on
+   * the seam again, and one to 506 left it on the end. A released walk back from the snap, sized by
+   * `[4]`'s measured glyphs, landed on the seam: the press moved nothing, and every press after it
+   * did the same. So the end of `[4]` is the smallest step the app allows there, and a press that
+   * cannot land inside reports that one rather than none. Where the app does stop inside, which is
+   * every word of ordinary text, [heldCorrect] finishes the step as it does after any snap.
+   */
+  private fun backFromTheSnap(
+    before: SelectionObserver.Snapshot,
+    snapped: SelectionObserver.Snapshot,
+    snapAt: PointF,
+    start: Int,
+    command: PadCommand,
+    onDone: (Outcome) -> Unit,
+  ) {
+    val crossed: (Outcome) -> Unit = { outcome ->
+      onDone(if (outcome is Outcome.Moved) outcome.copy(crossedNode = true) else outcome)
+    }
+    syncBoundaryContext(snapped)
+    val target = targetOffset(before, snapped, command, start)
+    val current = snapped.movingOffset()
+    if (towardAnchor * (target - current) <= 1) {
+      heldCorrect(target, start, command, crossed, frame = snapped)
+      return
+    }
+    val reach = measuredReach(snapped, current, target)
+      ?: (towardAnchor * (target - current) - BOUNDARY_BIAS) * towardAnchor * pixelsPerCharacter(snapped, crossingToward(current, target))
+    val back = PointF(snapAt.x + reach, snapAt.y)
+    gestureCount++
+    if (!gestures.moveHeld(back)) {
+      Diag.log("  held: the move back from the snap was refused")
+      releaseThenReport(start, current, crossed)
+      return
+    }
+    awaitChange(snapped) { after ->
+      Diag.log(
+        "  inline: back from the snap at $current toward $target, to x=${back.x} -> " +
+          if (after == null) "nothing" else "${after.sourceLength} chars, ${after.low()}..${after.high()}"
+      )
+      if (after != null && !crossedNodes(snapped, after)) {
+        heldCorrect(target, start, command, crossed, frame = snapped)
+        return@awaitChange
+      }
+      Diag.log("  inline: the app keeps no caret between the seam and $current here — taking the snap as the step")
+      gestureCount++
+      if (!gestures.moveHeld(snapAt)) {
+        gestures.releaseHeld { onDone(Outcome.HandleLost) }
+        return@awaitChange
+      }
+      awaitChange(after ?: snapped) { _ -> releaseThenReport(start, current, crossed) }
+    }
   }
 
 

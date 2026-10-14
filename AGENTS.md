@@ -914,11 +914,36 @@ the reading only while the toolbar is up. Chromium force-stopped before each run
 | control: Chrome 143, marker off: `→`, `→`, `←`, `←` | not measured | `21 -> 1` (`.`) `-> 1` (`[4]`) `-> 1` (`.`) `-> 21`, 1 gesture each, with no re-homing |
 | control: one-line rows on Chromium 157, `→ char` across rows 003/004 and back | as before | `33 -> 1 -> 33`, 2 gestures each, with no re-homing |
 
-Two defects remain on Chromium 157, past the seam. A `→ char` from the `.`'s end does not stop inside
-`[4]`: the grab reads `0..0` of `[4]` (the same caret), and the correction snaps on to `0..1` of
-` More text after.`, past `[4]` and the space. And a `← char` from there reads that wrapped node's box
-(`(32, 997 - 678, 1093)`) as a block of its own, takes the block step, and grabs on its second line
-(y 1121), where no handle is drawn.
+**Chromium 157 keeps no handle position INSIDE `[4]`, so from the `.` the smallest step is to `[4]`'s
+end.** The grab aimed one character into `[4]` was announced `0..0` of `[4]`, the same caret it started
+on. The held correction then counted its target in the `.`'s 1-character frame, as 2, and the snap-through,
+sized by the `.`'s 12 px, pushed on to `0..1` of ` More text after.`, past `[4]` and the space, 2 runs of 2.
+Released drags by hand (`input swipe`, the END handle 18 px right of its caret, `[4]` at x 460..500)
+show the shape. From the seam, drags to x 500 and 510 stayed on the seam, and one to 520 put the edge on
+`[4]`'s end. From that end, drags back to 500, 494 and 488 all went back to the seam, and one to 506 stayed.
+So `SelectionDriver.throughTheNeighbour` pushes the held pointer on by the NEIGHBOUR's average character,
+never past its far caret, until the edge leaves the seam. `backFromTheSnap` then shrinks back toward the
+neighbour's first character with the pointer still down. Where that lands back on the seam, it puts the
+pointer back where the snap was and takes the neighbour's end as the step. Measured 2026-10-13 on the rig,
+Chromium force-stopped before each run, long-press `environment`, then `→ char` ×2 and `← char` ×2:
+
+| run | before | after |
+|---|---|---|
+| Chromium 157, marker off, 3 runs | `21 -> 1` (`.`) `-> 1` of ` More text after.`, 3-4 gestures | `21 -> 1` (`.`) `-> 3` (`[4]`'s end, 4-5 gestures, 1.4-1.6 s) `-> 1` (`.`, 1 gesture) `-> 21` |
+| Chromium 157, refusal marker on, 2 runs | the same skip | the same as marker off |
+| control: Chrome 143, 2 runs | `21 -> 1 -> 1 -> 1 -> 21`, 1 gesture each | unchanged, never enters the push |
+| control: one-line rows on Chromium 157, `→ char`, `← char`, `⇥ word` from `delta` | `33 -> 1 -> 33`, `33 -> 4` | the same in the runs whose first press grabbed (see below) |
+| control: the debug target's `TextView` from `bravo` | `11 -> 12 -> 11`, `11 -> 19` | the same |
+
+A shrink from `[4]`'s end lands on the `.`'s end, which is the same seam, so the two presses mirror each
+other. Three of the five rows runs ended their first press before any of this code ran. On a cold
+Chromium the `<p>`'s text node reported the block's box, so the END was aimed by its average at x 706,
+inside the right edge zone. One run grabbed there and ended `HandleLost`, and two refused with `InEdgeZone`.
+
+One defect remains on Chromium 157, past `[4]`. A `→ char` from `[4]`'s end reads the wrapped
+` More text after.` box (`(32, 997 - 678, 1093)`) as another row, takes the block step, and grabs on its
+second line (y 1121), landing in the next paragraph. A `← char` from that node's first caret does the
+mirror image.
 
 **`word →` from the word before a block's trailing `.` lands on the block's last caret, and that is
 not Chrome's next-word-start hold.** Measured 2026-10-05 on the handset, Wikipedia's `Text_editor`: from
