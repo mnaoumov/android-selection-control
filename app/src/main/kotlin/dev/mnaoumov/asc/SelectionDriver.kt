@@ -411,7 +411,18 @@ class SelectionDriver(
   private fun inMovingFrame(snapshot: SelectionObserver.Snapshot): SelectionObserver.Snapshot {
     if (activeEdge != Edge.START) return endBeforeSeam(snapshot) ?: snapshot
     val inText = if (snapshot.holdsNoText()) rehomedOntoText(snapshot) ?: return snapshot else snapshot
-    if (nodeKey(inText) == anchorNodeKey) return snapshot
+    if (nodeKey(inText) == anchorNodeKey) {
+      /*
+       * Re-homed into the anchor's own node, the caret is that node's first and the anchor is the END
+       * there. Left as it arrived, the image's `0..0` reads as no selection: on the handset (2026-10-14)
+       * a START dragged off `Editors like ` with `like` long-pressed made every press after it say "the
+       * pad cannot see a selection".
+       */
+      if (inText === snapshot) return snapshot
+      val anchor = lastSeenInNode[anchorNodeKey]?.high()?.takeIf { it in 1..inText.sourceLength } ?: return snapshot
+      caretReadAsEdge = inText.atMs
+      return inText.copy(from = 0, to = anchor)
+    }
     if (inText.from != 0 || inText.to < 0 || inText.to >= inText.sourceLength) return snapshot
     if (inText.to == 0) caretReadAsEdge = inText.atMs
     return inText.copy(from = inText.to, to = inText.sourceLength)
@@ -757,6 +768,16 @@ class SelectionDriver(
       onDone(outcome)
     }
 
+    startBeforeAnImage(snapshot)?.let { image ->
+      if (command.unit == PadCommand.Unit.CHARACTER && command.toRight) {
+        offTheImage(snapshot, image, report)
+      } else {
+        Diag.log("$command: the START is on the caret before an image, where nothing locates its handle — refusing to touch")
+        report(Outcome.EdgeUnknown)
+      }
+      return
+    }
+
     val growing = growsSelection(command)
     if (growing && (command.unit == PadCommand.Unit.CHARACTER || command.unit == PadCommand.Unit.WORD)) {
       nothingBeyond(snapshot, command)?.let { why ->
@@ -782,6 +803,74 @@ class SelectionDriver(
       PadCommand.Unit.CHARACTER -> heldCharacterStep(command, report)
       PadCommand.Unit.PAGE -> sweepPage(command, report)
       PadCommand.Unit.DOCUMENT -> sweepToDocumentEdge(command, report)
+    }
+  }
+
+  /**
+   * The image's box when [snapshot]'s START was re-homed off an image ([rehomedOntoText]) but is on
+   * the caret BEFORE that image, or null.
+   *
+   * Chrome announces both carets beside an image the same way, `0..0` from the image's link with no
+   * text. Measured 2026-10-14 on the rig (Chrome 143, a served copy of Wikipedia's thumbnail markup):
+   * the pad's `← char` onto the caption's first caret, and a hand drag 6 px left of the caption that
+   * selected the whole image, both logged `a caret announced from a node with no text (in View
+   * srcLen=-1 Rect(110, 385 - 610, 625))`. Only the toolbar differs, because it sits above the
+   * selection's start: over the image's lower part (535..630) when the START is on the caption, and
+   * wholly above the image (273..370) when the image is selected. Read as the caption's caret 0, the
+   * second one sends every press to the caption's row, where no handle is: on the handset `→ char`
+   * then ended `HandleLost` in 13 gestures and `← char` "didn't move".
+   */
+  private fun startBeforeAnImage(snapshot: SelectionObserver.Snapshot): Rect? {
+    if (activeEdge != Edge.START) return null
+    val textless = snapshot.rehomedFrom?.takeIf { it.holdsNoText() } ?: return null
+    val image = textless.bounds?.takeUnless { it.isEmpty } ?: return null
+    val text = snapshot.bounds ?: return null
+    val toolbar = toolbarBounds() ?: return null
+    val why = when {
+      toolbar.bottom <= image.top -> "is wholly above the image $image"
+      /*
+       * Or below the text's first row although there is room for it above: Chrome puts the toolbar
+       * above a selection's start when it fits, so a START on the text would have it there. On the
+       * handset (2026-10-14) the selection from before the image put it below the caption, where the
+       * image's own top left no room.
+       */
+      toolbar.top >= text.top && text.top - toolbar.height() >= (contentBand(snapshot)?.visible?.top ?: Int.MAX_VALUE) ->
+        "is below the text's first row $text, with room for it above"
+      else -> return null
+    }
+    Diag.log("  image: the toolbar $toolbar $why — the START is on the caret before the image, not on the text after it")
+    return image
+  }
+
+  /**
+   * `→ char` from the caret before an image: carry the START over the image onto the first caret of
+   * the text after it, [snapshot]'s node. Chrome draws that START handle at the image's bottom-left,
+   * and a drag from there to the caption's first caret leaves the image unselected.
+   */
+  private fun offTheImage(snapshot: SelectionObserver.Snapshot, image: Rect, onDone: (Outcome) -> Unit) {
+    val caret = locator.locate(snapshot, activeEdge, toolbarCentre())
+    val bounds = snapshot.bounds
+    if (caret == null || bounds == null) {
+      Diag.log("  image: the text after the image cannot be located — refusing to touch")
+      onDone(Outcome.EdgeUnknown)
+      return
+    }
+    val from = uncovered(PointF(handleX(image.left.toFloat()), image.bottom + locator.handleDrop), onDone) ?: return
+    val perChar = pixelsPerCharacter(snapshot, Crossing.RIGHTWARD)
+    val to = PointF(maxOf(caret.x, handleX(bounds.left + perChar * EDGE_CARET_FRACTION)), caret.y)
+    Diag.log("  image: carrying the START from the image's corner (${from.x}, ${from.y}) to the text's first caret (${to.x}, ${to.y})")
+    val crossed: (Outcome) -> Unit = { outcome -> onDone(if (outcome is Outcome.Moved) outcome.copy(crossedNode = true) else outcome) }
+    gestureCount++
+    gestures.grabAndHold(from, to, pastTarget = false) { grabbed ->
+      if (!grabbed) {
+        Diag.log("  image: the grab was refused")
+        onDone(Outcome.HandleLost)
+        return@grabAndHold
+      }
+      awaitChange(snapshot) { after ->
+        Diag.log("  image: -> " + if (after == null) "nothing" else "${after.low()}..${after.high()} ${describeNode(after)}")
+        releaseThenReport(0, after?.movingOffset() ?: 0, crossed)
+      }
     }
   }
 
@@ -1449,7 +1538,7 @@ class SelectionDriver(
     val to = rowChange
       ?: nodeChange?.let { if (it.growing) PointF(handle.x, it.aim.y) else PointF(it.aim.x, handle.y) }
       ?: inline?.let { PointF(handleX(it.geometry.caretX), handle.y) }
-      ?: PointF(handle.x + reach, handle.y)
+      ?: PointF(insideTheNode(before, next, perChar, handle.x, handle.x + reach), handle.y)
     /*
      * And across the wrap in TWO moves on Blink, in a block step's order: a grow goes straight onto
      * the other row first and then along it onto the caret, a shrink along its own row first and then
@@ -2664,6 +2753,33 @@ class SelectionDriver(
     val sameRow = gap < minOf(own, theirs) / 2f
     if (sameRow) Diag.log("  next block: the neighbour's row is ${gap}px off this one's, under half a line — the same row")
     return sameRow
+  }
+
+  /**
+   * [pointerX], a step's aim onto caret [target], held a quarter of a character inside [snapshot]'s box
+   * when [target] is the node's outer caret on Blink.
+   *
+   * Past the box's edge Chrome hit-tests whatever is beside the text, not the text. On the handset
+   * (2026-10-14, Wikipedia's `Text_editor`) `← char` from caret 1 of the Mousepad caption (`Editors
+   * like `, box left 196) was sized by the `E`'s measured rectangle, which starts at 193, so the pointer
+   * stopped 3 px left of the caption. Chrome put the START on the caret BEFORE the image above it and
+   * selected the whole image. The rig's rectangles start at the box (110), so the same press landed on
+   * the caption; a hand drag 6 px further left (`input motionevent`) selected the image there too.
+   * Inside the box the nearest caret is still the outer one.
+   */
+  private fun insideTheNode(snapshot: SelectionObserver.Snapshot, target: Int, perChar: Float, fromX: Float, pointerX: Float): Float {
+    if (!snapshot.isBlink || !snapshot.sourceIsOneLine()) return pointerX
+    val bounds = snapshot.bounds ?: return pointerX
+    val inset = perChar * EDGE_CARET_FRACTION
+    val clamped = when (target) {
+      0 -> maxOf(pointerX, handleX(bounds.left + inset))
+      snapshot.sourceLength -> minOf(pointerX, handleX(bounds.right - inset))
+      else -> return pointerX
+    }
+    if (clamped != pointerX) {
+      Diag.log("  aim: $pointerX would put caret $target on or past the edge of the node's box $bounds — aiming at $clamped, inside it")
+    }
+    return clamped
   }
 
   /** The active handle's x for a caret at [caretX]: Chrome draws the END handle right of it, START left. */
@@ -4079,6 +4195,12 @@ class SelectionDriver(
      * the boundary that floor-rounding is ambiguous at, small enough not to reach the next one.
      */
     const val BOUNDARY_BIAS = 0.35f
+
+    /**
+     * How far inside a node's box a step onto its outer caret stops, as a fraction of a character:
+     * inside the box, and still nearer the outer caret than the next. See `insideTheNode`.
+     */
+    const val EDGE_CARET_FRACTION = 0.25f
 
     /**
      * How many times one press may restart its walk back after overshooting the target.
