@@ -16,7 +16,7 @@ Open work is split by shape, one item each in that same store, and named there r
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
 (two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, with the block step that follows it; the toolbar under a paged handle is fixed and confirmed on the phone, which
 found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse; on the phone, page and end now run to the article's real end, but the collapse did not recur, so the fix's own branch is unexercised; with the omnibox already hidden, a short `⇞ page` scroll still read as the edge there, and now the page must also stop listing that scroll direction, fixed on the rig and not yet confirmed on the phone), `start` ending
-blind on an image (fixed on the rig; on the phone the move off the image landed on a hidden header button, and the walk now skips controls, which is fixed on the rig and confirmed on the phone; a page step that reaches the top used to land on the image itself, and every page drag now holds and moves off it, fixed on the rig and not yet confirmed on the phone; a `start` from the page's top used to set off Chrome's pull-to-refresh, and now does not swipe at all, which is fixed on the rig and not yet confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins, and such a press now stops at the first swallowed touch-down, fixed on the rig and not yet confirmed on the phone), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig and confirmed on the phone, where the pass also found that a press after a hand scroll can grab at a node's pre-scroll position, which now refuses instead, fixed on the rig and not yet confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
+blind on an image (fixed on the rig; on the phone the move off the image landed on a hidden header button, and the walk now skips controls, which is fixed on the rig and confirmed on the phone; a page step that reaches the top used to land on the image itself, and every page drag now holds and moves off it, fixed on the rig and not yet confirmed on the phone; a `start` from the page's top used to set off Chrome's pull-to-refresh, and now does not swipe at all, which is fixed on the rig and confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins, and such a press now stops at the first swallowed touch-down, fixed on the rig and not yet confirmed on the phone), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig and confirmed on the phone, where the pass also found that a press after a hand scroll can grab at a node's pre-scroll position, which now refuses instead, fixed on the rig and not yet confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
 heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
 `✕` is fixed on the rig and confirmed on the phone); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
@@ -1706,6 +1706,20 @@ the page at its top):
 
 On the old build the first run's swipe landed on Chrome's "Translate page?" bar, which hid the defect.
 Serve such a page with `<html lang=en>`.
+
+**The phone confirms it (2026-10-13, OnePlus 15, Chrome 154.0.8037.127 with the extended-selection flag
+Disabled, `en.wikipedia.org/wiki/Text_editor` at its very top with the wordmark on screen).** There the
+scroller listed `[16908346, 4096]`, i.e. `up=false down=true`. Every press below logged `the page cannot
+scroll up — already at the document's edge, no swipe`. No refresh spinner appeared, the page did not
+reload, and the selection survived. Long-press `interactive` (`4..15`):
+
+| press | result |
+|---|---|
+| `⇄ swap`, `⤒ start` | the corner drag landed on the wordmark (`0..0, srcLen=-1`) and moved on to the heading, `Moved(4, 0)` in 0.82 s and 2 gestures; `→ char` `0 -> 1`, 1 gesture |
+| `⇄ swap`, `⇞ page` | the same, 0.85 s and 2 gestures; `→ char` `0 -> 1` |
+| `⤒ start` on the END | `the edge crossed the anchor — now moving the START`, `Moved(15, 0)` in 0.87 s; `→ char` `0 -> 1`, `← char` `1 -> 0`, 1 gesture each |
+| `⇞ page` on the END | the same crossing, `Moved(15, 0)` in 0.86 s |
+| control: page scrolled ~550 px by hand, `⇞ page` from `simple` | `up=true down=true` (`[16908344, 16908346, 4096, 8192]`), swiped from (954, 361.5), `scrolled 32 of 61`, one band; `→ char` after it `10 -> 11` |
 
 **So the walk skips controls: a button's text is its label, not page text.** `adjacentTextLeaf` now
 passes over any node of a class in `HandleLocator.NOT_PAGE_TEXT_CLASSES`, along with its children: the
