@@ -111,6 +111,9 @@ class HandleLocator(private val density: () -> Float) {
   /** How far outside the caret the moving handle's centre sits, in raw screen pixels. */
   val handleInset: Float get() = HANDLE_INSET_DP * density()
 
+  /** How much of a handle must stay on screen for the clamped aim to land inside it, in raw pixels. */
+  val screenEdgeHandleMargin: Float get() = SCREEN_EDGE_HANDLE_DP * density()
+
   /** The last anchor-handle x we were confident about, for the mirror rung. */
   private var knownAnchorX: Float? = null
 
@@ -1174,6 +1177,9 @@ class HandleLocator(private val density: () -> Float) {
      */
     const val HANDLE_INSET_DP = 9f
     const val HANDLE_DROP_DP = 14f
+
+    /** See [screenEdgeHandleMargin]. A caret at the screen's last pixel draws Chrome's END handle wholly off it. */
+    const val SCREEN_EDGE_HANDLE_DP = 2f
 
     /**
      * How far from the handle's centre a down may land and still grab it: about the radius of

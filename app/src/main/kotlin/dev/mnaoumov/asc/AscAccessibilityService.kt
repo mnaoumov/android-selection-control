@@ -357,7 +357,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     is Outcome.Degraded -> true
     Outcome.NoSelection, Outcome.HandleLost, Outcome.RowUnknown, Outcome.ColumnUnknown, Outcome.HandleCovered,
     Outcome.AtFloor, Outcome.AtDocumentEdge, Outcome.EdgeUnknown, Outcome.Obstructed, Outcome.InEdgeZone, Outcome.InGestureBar,
-    Outcome.OffScreen, Outcome.BeyondOffScreen, Outcome.NeighbourUnmeasured -> false
+    Outcome.OffScreen, Outcome.BeyondOffScreen, Outcome.NeighbourUnmeasured, Outcome.PastScreenEdge -> false
   }
 
   /**
@@ -749,6 +749,8 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   private fun describe(outcome: Outcome): String = when (outcome) {
     is Outcome.Moved -> when {
       // Two offsets in two different nodes: neither number says anything next to the other.
+      // Stopped one short of where it was going: the next caret's handle would be off the screen.
+      outcome.stoppedAtScreenEdge -> "stopped at the screen's edge"
       outcome.crossedNode -> "moved into another block"
       outcome.fromOffset == outcome.toOffset -> "didn't move"
       else -> "moved ${outcome.fromOffset} → ${outcome.toOffset}"
@@ -790,6 +792,8 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     // Nothing was touched. The text beyond the edge is off screen; the next press works once it is not.
     Outcome.BeyondOffScreen -> "the text ${if (driver.activeEdge == Edge.END) "after it is below — scroll down" else "before it is above — scroll up"} a little"
     Outcome.NeighbourUnmeasured -> "the text ${if (driver.activeEdge == Edge.END) "after" else "before"} it won't say where it is — try again"
+    // Nothing was touched. A handle on that caret would be drawn off the screen, and nothing can grab it there.
+    Outcome.PastScreenEdge -> "the next character is at the screen's edge"
     is Outcome.Degraded -> "one character (${outcome.reason})"
   }
 

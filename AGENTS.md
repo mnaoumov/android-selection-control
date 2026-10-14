@@ -1695,6 +1695,32 @@ A `TextView`'s rectangles do not overlap, so there the aim is the old one to the
 both, and the grab's coordinates were identical, so that is the grab's sampling (the word-snap entry
 above), not this change.
 
+**A caret at the screen's side has no handle, so a step stops on the last caret whose handle stays on
+screen.** Chrome draws the END handle right of its caret and the START handle left of it. Measured
+2026-10-14 on the rig, Chrome 145, a served `<h2>Encoding 1</h2>` indented so that `Encoding` ends at
+x 720, the screen's right edge. `⇥ word` into it walked `0..2` … `0..7`. The push for caret 8 was aimed
+at 720 plus the grab's 18 px and clamped to 719, which Chrome reads as caret 7. The walk then took the
+silence as a hold and recorded 7 as a word boundary. A hand drag that grabbed the handle 4 px from its
+caret did reach 8, and Chrome then drew no END handle at all. The next `← char` grabbed at 719 into
+nothing, ended `InEdgeZone`, and taught the side-zone verdict that the ROM swallows touch-downs. So
+`SelectionDriver.caretPastScreen` asks whether the next caret on the same row is within 2 dp of the
+screen's side (`SCREEN_EDGE_HANDLE_DP`). A grow there ends `PastScreenEdge` with nothing touched ("the
+next character is at the screen's edge"). The word walk stops on the caret before it, records no
+boundary, and reports `Moved` with `stoppedAtScreenEdge` ("stopped at the screen's edge"). Chrome
+force-stopped before each run:
+
+| presses | before | after |
+|---|---|---|
+| long-press `charlie`, `⇥ word` ×2, 6 runs | `36 -> 7` in 11 gestures, `boundaries=[7]` | `36 -> 7` in 10 gestures, `stoppedAtScreenEdge`, `boundaries=[]`, 4 runs; the other 2 are the cold-`<h2>` block step below |
+| then `→ char`, `⇥ word` | `7 -> 7` in 2 gestures, "didn't move" | `PastScreenEdge` in 6-12 ms, 0 gestures |
+| then `← char`, `→ char` | not measured | `7 -> 6 -> 7`, 1 gesture each |
+| control: one-line rows, `here` on row 002: `→ char`, `← char`, `⇥ word` ×2 | `28 -> 1 -> 28`, `28 -> 4 -> 7` | the same |
+| control: the debug target's `TextView` from `bravo` | `11 -> 12 -> 11`, `⇥ word` to 19, 25, 30, then `AtDocumentEdge` | the same |
+
+In 2 of the 6 cold runs the block step into the heading read its caret from the `<h2>`'s padding box
+on the second line (`growing into the next one at (94.5, 1019.0)`), landed on `0..9`, and never
+reached the walk. That is older than this change and tracked on its own.
+
 **The same hold catches a released `word →` from a word's end: one character on is the next word's
 START, not a step.** Measured 2026-09-24 on the served seven-line paragraph, Chrome force-stopped:
 from 43, the end of `of`, a 1.5-glyph reach landed on 44, the start of `selecting`, and the pad used to

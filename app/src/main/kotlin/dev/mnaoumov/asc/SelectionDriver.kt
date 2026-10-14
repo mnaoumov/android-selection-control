@@ -26,7 +26,13 @@ sealed interface Outcome {
    * [fromOffset] and [toOffset] are each local to their own node, so when [crossedNode] is set they
    * are in different frames and comparing them says nothing: equal numbers can be a page apart.
    */
-  data class Moved(val fromOffset: Int, val toOffset: Int, val crossedNode: Boolean = false) : Outcome {
+  data class Moved(
+    val fromOffset: Int,
+    val toOffset: Int,
+    val crossedNode: Boolean = false,
+    // The step stopped on the last caret whose handle stays on screen. See `SelectionDriver.caretPastScreen`.
+    val stoppedAtScreenEdge: Boolean = false,
+  ) : Outcome {
     fun madeProgress(): Boolean = crossedNode || fromOffset != toOffset
   }
   data object NoSelection : Outcome
@@ -126,6 +132,13 @@ sealed interface Outcome {
    * own row has nothing to enter there. See `SelectionDriver.nothingBeyond`.
    */
   data object NeighbourUnmeasured : Outcome
+
+  /**
+   * A grow was asked for, and the next caret is so close to the screen's side that its handle would
+   * be drawn off the screen, so nothing was touched. A handle there can be neither reached nor
+   * grabbed again. See `SelectionDriver.caretPastScreen`.
+   */
+  data object PastScreenEdge : Outcome
 
   /**
    * The edge being moved is in a node nothing has announced since the swap, so nothing was touched.
@@ -854,6 +867,11 @@ class SelectionDriver(
       nothingBeyond(snapshot, command)?.let { (outcome, why) ->
         Diag.log("$command: $why — not touching")
         report(outcome)
+        return
+      }
+      caretPastScreen(snapshot, command)?.let { caretX ->
+        Diag.log("$command: the next caret is at x $caretX, where its handle would be drawn off the screen — not touching")
+        report(Outcome.PastScreenEdge)
         return
       }
     }
@@ -2465,6 +2483,15 @@ class SelectionDriver(
       releaseThenReport(origin, from.movingOffset(), onDone)
       return
     }
+    caretPastScreen(from, command)?.let { caretX ->
+      // Not a word boundary: the walk stops because the next caret cannot be reached, not because the
+      // handle held. So nothing is recorded, and the pad says why it stopped short.
+      Diag.log("  word walk: the next caret is at x $caretX, where its handle would be drawn off the screen — stopping on ${from.movingOffset()}")
+      pullBackThenRelease(origin, from.movingOffset()) { outcome ->
+        onDone(if (outcome is Outcome.Moved) outcome.copy(stoppedAtScreenEdge = true) else outcome)
+      }
+      return
+    }
     // Asked before the reach is sized, so a refusal here that the sizing's own re-ask turns into an
     // answer reads as unmeasured: the safe side, which keeps the two-push rule.
     val measured = locator.characterGeometry(from, activeEdge, crossingOf(command)) != null
@@ -2518,6 +2545,33 @@ class SelectionDriver(
     if ((x - pointerX) * (if (command.toRight) 1f else -1f) <= 0f) return null
     Diag.log("  word walk: aiming at the measured caret of $next (${there.caretX}) + $grabOffset, not ${pointerX} + a width")
     return x
+  }
+
+  /**
+   * The x of the next caret a grow of [command] would put the moving edge on, when that caret is on
+   * the same row and so close to the screen's side that its handle would be drawn off the screen.
+   * Null otherwise, including wherever either caret is unmeasured.
+   *
+   * Chrome's END handle is drawn right of its caret and its START handle left of it, so a caret within
+   * [HandleLocator.screenEdgeHandleMargin] of the side leaves no handle to grab. Measured 2026-10-14 on
+   * the rig, Chrome 145, an `<h2>Encoding 1</h2>` indented so `Encoding` ends at x 720, the screen's
+   * right edge: the word walk aimed caret 8 at 720 + the grab's 18 px, clamped to 719, which Chrome
+   * reads as caret 7, and the walk recorded 7 as a word boundary. A hand drag that grabbed the handle
+   * 4 px from its caret did reach 8, and Chrome then drew no END handle at all. The next `← char`
+   * grabbed at 719 into nothing, ended `InEdgeZone`, and taught the side-zone verdict that this ROM
+   * swallows touch-downs. So the step stops on the last caret whose handle stays on screen.
+   */
+  private fun caretPastScreen(from: SelectionObserver.Snapshot, command: PadCommand): Float? {
+    val crossing = crossingOf(command)
+    val current = from.movingOffset()
+    val next = current + if (command.toRight) 1 else -1
+    if (next !in 0..from.sourceLength) return null
+    val here = locator.characterGeometry(from, activeEdge, crossing, current, quiet = true) ?: return null
+    val there = locator.characterGeometry(from, activeEdge, crossing, next, quiet = true) ?: return null
+    if (kotlin.math.abs(there.lineBottom - here.lineBottom) > HandleLocator.LIE_TOLERANCE) return null
+    val margin = locator.screenEdgeHandleMargin
+    val past = if (activeEdge == Edge.END) there.caretX > gestures.screenWidth() - 1 - margin else there.caretX < margin
+    return if (past) there.caretX else null
   }
 
   /** The node's width over its length where it is one line, otherwise whatever a step can measure. */
@@ -3463,7 +3517,7 @@ class SelectionDriver(
       growToWordEnd(command) { grown ->
         onDone(
           when (grown) {
-            is Outcome.Moved -> Outcome.Moved(stepped.fromOffset, grown.toOffset, crossedNode = true)
+            is Outcome.Moved -> grown.copy(fromOffset = stepped.fromOffset, crossedNode = true)
             Outcome.HandleLost -> grown
             // Anything else left the crossing standing: the edge is in the new block, one character in.
             else -> stepped
