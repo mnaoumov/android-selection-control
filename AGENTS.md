@@ -3163,6 +3163,25 @@ row 003:
 | control: `⤓ end` from `has` | as before | 10 pages to row 120's end (`28`) |
 | control: the debug target's `TextView` from `bravo` | as before | `11 -> 12 -> 11`, `11 -> 19`; `⇄ swap`, `⤒ start` `6 -> 0`, then `0 -> 1` |
 
+**The phone lands both cases on row 001's offset 0. Its grab is not left of 24, so the column rule
+does not change the phone's corner (2026-10-14, OnePlus 15, Chrome 154.0.8037.127).** Chrome announced
+selections the old way (`seeded from a fresh selection`), so the extended-selection trial was not
+active. The page was the rig's, served over `adb reverse`, with Chrome force-stopped and the service
+rebound before each run, and the page at its top. Long-press `has` on row 003 (`8..11`). On the phone
+the 16 px margin is 56 px, so the START on a row's first caret is grabbed at x 24.5. The corner is the
+lesser of that and 24, which is 24, as before the fix. The grab is inside the 105 px side zone, and the
+corner drag does not rise first. Every one was answered (`a touch-down there was answered`):
+
+| press, 3 runs of 3 each | result |
+|---|---|
+| `⇄ swap`, `⇤ word` ×2 to `0..11`, then `⇞ page` | `cannot scroll up`, no swipe, `drag to (24.0, 24.0)`, `Moved(0, 0, crossedNode=true)` on row 001, 1 gesture, 0.58-0.61 s; `→ char`, `← char` `0 -> 1 -> 0`, 1 gesture each |
+| the same with `⤒ start` | the same, 0.59-0.60 s |
+| `⤒ start` on the END (`8..11`) | no swipe, `the edge crossed the anchor — now moving the START`, `Moved(11, 0)` on row 001, 0.60-0.62 s; then `0 -> 1 -> 0` |
+| `⇞ page` on the END | the same, 0.59-0.60 s |
+
+No run logged `into the block`. The screenshots showed row 001 through `Row 003 ` selected, with the START
+handle at row 001's left margin.
+
 **Rows of a scrolled page land in identical rectangles, so a node is known by its identity, not by
 its bounds.** Rows 047 and 058, both 27 characters long, were both at `(32, 1007 - 424, 1045)`
 either side of one page step. The bounds-and-length key read that as "did not move" and stopped
