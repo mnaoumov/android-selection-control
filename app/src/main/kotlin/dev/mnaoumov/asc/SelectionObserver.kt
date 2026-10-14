@@ -151,6 +151,24 @@ class SelectionObserver {
   val latest: Snapshot?
     get() = announced?.let { snapshot -> frame?.invoke(snapshot) ?: snapshot }
 
+  /** The last [RECENT_KEPT] announcements as they arrived, oldest first: see [announcedSince]. */
+  private val recent = ArrayDeque<Snapshot>()
+
+  /**
+   * Every announcement since [atMs], in its reader's frame, oldest first. A selection that flaps
+   * between two frames of one caret leaves only one of them in [latest] at any moment, and which one
+   * a settle ends on is chance; this lets a reader ask whether the other was announced too.
+   */
+  fun announcedSince(atMs: Long): List<Snapshot> =
+    synchronized(recent) { recent.filter { it.atMs > atMs } }.map { snapshot -> frame?.invoke(snapshot) ?: snapshot }
+
+  private fun remember(snapshot: Snapshot) {
+    synchronized(recent) {
+      recent.addLast(snapshot)
+      while (recent.size > RECENT_KEPT) recent.removeFirst()
+    }
+  }
+
   /**
    * The latest snapshot with its geometry re-read from the live node, because remembered bounds go
    * stale on every scroll.
@@ -201,7 +219,7 @@ class SelectionObserver {
       atMs = SystemClock.uptimeMillis(),
       source = source,
       isBlink = isBlink(source),
-    )
+    ).also(::remember)
     return true
   }
 
@@ -452,6 +470,9 @@ class SelectionObserver {
   }
 
   companion object {
+    /** Announcements [announcedSince] can look back over; a held drag's settle sees about a dozen. */
+    private const val RECENT_KEPT = 32
+
     private const val MAX_DEPTH = 60
 
     /** A cap on the leaves [collectTextLeaves] gathers, so a container the size of a page cannot stall an event. */

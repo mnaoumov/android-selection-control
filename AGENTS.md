@@ -2500,6 +2500,41 @@ The phone also showed a page step leaving the END on a row below the screen, whi
 reach, and on the zoomed page, a margin step whose settle never went quiet (1 run of 3), and a node that
 could not be re-read after page 1 (1 run of 3). Both are tracked on their own.
 
+**A heading's text box can end LEFT of its own first glyph, so the move into it goes to the screen's
+side.** On the phone (2026-10-14, Chrome 154, `padding-left: 420px` `<h2>`s) the heading's box was
+`Rect(36, 1892 - 1009, 2033)` while `Encoding` was drawn from about x 1010 past the screen's right edge.
+The row end was taken from the box (1040.5), which is not past caret 1 (1075.5), so every page step
+moved back and a `⤓ end` sweep ended `Moved(35, 36)` at page 2, reported as a move. The `handset`
+profile reproduces it with a 44 px `<h2>` indented 420 px. Chrome then zooms the page out, and the
+heading's box read `Rect(32, 1834 - 897, 2048)`, with caret 1 measured at 946 and the glyphs running
+from ~903 past 1272. Now `intoTheBlockAt` moves along the row to the screen's side (`screenWidth -
+EDGE_INSET`) when the box's end is short of caret 1 (`the block's box ends at 897, short of its caret 1
+(975.5) — growing along its row to the screen's edge instead`). A first word wider than the space left
+on screen is passed at its middle that way. Where even the screen's side is not past caret 1, or the
+move along it does not enter the block, the step goes back and reports `stopped at the screen's edge`
+(`blockBeyondScreenEdge`), and so does a sweep that ends on it. Measured 2026-10-14 on the `handset`
+profile, Chrome 143 force-stopped before each run, long-press `charlie` in `Paragraph 1`:
+
+| page, presses | before | after |
+|---|---|---|
+| the zoomed page, `⇟ page` ×3, `← char`, `→ char`, 3 runs | `35 -> 36`, then `36 -> 36` on every page (`not past its caret 1`) | `35 -> 36`, `36 -> 2` (into `Encoding 1`, 3 gestures, 1.2-1.4 s), `2 -> 36` (`Paragraph 2`'s end); `36 -> 35 -> 36` |
+| the zoomed page, `⤓ end` | not measured | 62 page steps to `Encoding 30`'s end (`35 -> 11`) in 160 s; then `11 -> 10 -> 11` |
+| control: the same page with a 26 px `<h2>`, not zoomed, `⇟ page` ×4, `← char`, `→ char` | `35 -> 36 -> 3 -> 36 -> 3` | the same; the box ended at 1021 short of caret 1 (1082.5), so the move went to the screen's side there too |
+| control: the debug target's `TextView` from `bravo` | as before | `11 -> 12 -> 11`, `11 -> 19`, `⇟ page` `19 -> 30`, `30 -> 29` |
+
+The `stopped at the screen's edge` report has not fired: on these pages the screen's side was always
+past caret 1.
+
+**A settle that never goes quiet on that seam is read for the block's caret it passed over.** On the
+phone (1 run of 3) page 2's drag logged `an END announced 0..0` in `Encoding 1` nine times in 600 ms and
+`settle: never went quiet`. The block's-first-caret move never ran, the lift took the `0..0`, the press
+ended `HandleLost`, and the pad was blind. The paragraph's end and the heading's `0..0` are one caret in
+two frames, so the settle most likely ended on the paragraph's frame. `SelectionObserver` now keeps its
+last 32 announcements (`announcedSince`), and where a page drag's settle ends on the step's own node at
+its last caret, a block's-first-caret announcement since the scroll is taken as the landing
+(`flappedOntoBlocksFirstCaret`). The rig's settles went quiet in every run above, so that branch has not
+fired.
+
 **Below the document's last text a page drag moves the END, but Chrome announces nothing, so the
 pointer is moved back onto the last caret before it lets go.** The gap page ends with a 1500 px empty
 `<div>`. The last page's drag from `Encoding 30`'s offset 3 down into it logged no selection event at
