@@ -944,6 +944,30 @@ there logged `srcLen=3` and went `1 -> 143`, back onto `cost.`, in 2 gestures an
 direction worked 3 runs of 3. On the phone the slide alone was enough. The correction move (`moving the
 pointer`) never fired, so it is still unproven against a real wrong node.
 
+**When the next block's text starts RIGHT of the handle's column, the move down lands on its first
+caret, and the slide onto caret 1 is a grow, so it goes on to the row's far end first and slides back.**
+Measured 2026-10-14 on the rig, Chrome 143, a served page of one-line `<p>`s, each followed by an `<h2>`
+indented with `padding-left` (`margin-top: 160px`, so both are on screen). The tree walk's neighbour is
+the `<h2>`, whose box is its padding box (`21..576`), not its text (`576..720`). From a paragraph's last
+caret, `→ char` went straight down at the handle's column, x 466, and landed on `0..0` of the heading's
+text node. That is the heading's first caret, left of the text. The slide right to x 614 was a grow from
+a word's start, which Chrome holds, so it stayed on `0..0`, and the lift collapsed the selection
+(`HandleLost`, then "the pad cannot see a selection"). `intoTheNextBlock` now hands an empty landing
+whose length is the neighbour's to `pastTheNearCaret`. That moves the held pointer to the landing's own
+row end (a grow, `0..8`), then back onto caret 1 aimed by the landing's own geometry (a shrink), which is
+what `intoTheBlock` does for a page drag. The neighbour is then rebuilt from the landing, so its padding
+box is never used again. Chrome force-stopped before each run:
+
+| press | old build | new build |
+|---|---|---|
+| `→ char` from `charlie.`'s end (36) into `Encoding 1`, 3 runs | `0..0`, then `HandleLost` in 868 ms, 2 gestures | `36 -> 1` in 1.34-1.41 s and 4 gestures (the slide lands on 3 and walks back released) |
+| then `→ char`, `← char`, `← char` | blind | `1 -> 2 -> 1`, 1 gesture each, then `1 -> 36` back into the paragraph, 2 gestures |
+| `⇥ word` from 36 | not measured | the same crossing, then the word walk to `0..7`; `Encoding` ends at the screen's edge, so its last caret cannot be aimed at |
+| START mirror: `Go far now` indented above `Para 1 is short.`, START on its 0, `← char`, `→ char`, `← char` | not measured | `0 -> 15 -> 0 -> 15`, 2 gestures each. The move up lands on `0..16`, not empty, so the new path does not fire |
+| controls: one-line rows `here` `→ char`, `← char`, `⇥ word`; the debug target's `TextView` from `bravo` | as before | `28 -> 1 -> 28`, `28 -> 4`; `11 -> 12 -> 11`, `11 -> 19` |
+
+The phone has not run the fix.
+
 **An END on the caret after a node-ending wrap space has no handle, so a step skips that caret.**
 On the phone (2026-10-14, Wikipedia's `Text_editor`) the lead's `, such as ` (10 characters, one line)
 ends in the space the line wraps at, and the link `Notepad` starts the next line. From `as` (`7..9`),
