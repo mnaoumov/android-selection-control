@@ -1094,6 +1094,25 @@ Measured 2026-10-13 on the rig, Chromium r1709360 force-stopped before each run,
 On Chromium the rows control's first `→ char` ended `HandleLost` at x 706, the cold `<p>` box defect
 above; its `← char` and `⇥ word` were exact.
 
+**The phone confirms the step into the wrapped phrase and back (2026-10-14, OnePlus 15, Chrome 154.0.8037.127).**
+Chrome announced selections the old way (`seeded from a fresh selection`), so the extended-selection
+trial was not active. The page was a served copy with Wikipedia's citation markup:
+`<p>Editors run code and provide a <span>debugging environment</span>.<sup><a><span>[</span>4<span>]</span></a></sup>
+More text after it, which wraps.</p>`, 20px, `padding-top: 300px`. On the phone `[`, `4` and `]` are 1-character
+nodes, and ` More text after it, which wraps.` is 33 characters at `Rect(56, 1607 - 1207, 1775)`. It starts on
+`]`'s row and wraps onto a second line. Chrome was force-stopped before each run. Long-press `debugging`, then `⇥ word`
+to 21, then the presses below:
+
+| press, 3 runs of 3 | result |
+|---|---|
+| `→ char` ×4 | `21 -> 1` (`.`) `-> 1` (`[`) `-> 1` (`4`) `-> 1` (`]`), 1 gesture each |
+| `→ char` from `]`'s end | the held grab at y 1712 on the first line, onto `0..1` of the 33-character phrase (the space after `[4]`), 1 gesture, 1.77 s with the caret wait; the caret came from `at the seam: it wraps on from this node's row` in 2 runs and was measured in 1 |
+| `← char`, `→ char`, `← char`, `← char` | `0..1` of `]`, then the phrase, then `]`, then `4`, 1 gesture each; each `← char` from the phrase logged `the measured caret is on a line above the box's bottom (1691.0 against 1775) — the box wraps` and took 0.58-0.59 s |
+
+No press ended `HandleLost` or went into the next paragraph, and the screenshot after the step showed `[4]` and
+the space selected. With a BARE `<sup>[4]</sup>` on the same page, the phone's Chrome announced every edge at
+that seam from the `<p>` itself (`srcLen=0`), and the pad went blind. That is tracked on its own.
+
 **`word →` from the word before a block's trailing `.` lands on the block's last caret, and that is
 not Chrome's next-word-start hold.** Measured 2026-10-05 on the handset, Wikipedia's `Text_editor`: from
 `cost` (`138..142`) the first grow landed on 143, past the period. `landedOnNextWordStart` read it as the
