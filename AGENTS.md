@@ -15,7 +15,7 @@ does, and the held-pointer fix for everything a continued stroke will and will n
 Open work is split by shape, one item each in that same store, and named there rather than here:
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
 (two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, with the block step that follows it; the toolbar under a paged handle is fixed and confirmed on the phone, which
-found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse; on the phone, page and end now run to the article's real end, but the collapse did not recur, so the fix's own branch is unexercised; with the omnibox already hidden, a short `⇞ page` scroll still read as the edge there, and now the page must also stop listing that scroll direction, fixed on the rig and not yet confirmed on the phone), `start` ending
+found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse; on the phone, page and end now run to the article's real end, but the collapse did not recur, so the fix's own branch is unexercised; with the omnibox already hidden, a short `⇞ page` scroll still read as the edge there, and now the page must also stop listing that scroll direction, fixed on the rig; on the phone the scroll then ran in full, so the short case did not recur), `start` ending
 blind on an image (fixed on the rig; on the phone the move off the image landed on a hidden header button, and the walk now skips controls, which is fixed on the rig and confirmed on the phone; a page step that reaches the top used to land on the image itself, and every page drag now holds and moves off it, fixed on the rig and confirmed on the phone; a `start` from the page's top used to set off Chrome's pull-to-refresh, and now does not swipe at all, which is fixed on the rig and confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins, and such a press now stops at the first swallowed touch-down, fixed on the rig and confirmed on the phone, which also showed that the strip lets through a grab whose first move is vertical), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig and confirmed on the phone, where the pass also found that a press after a hand scroll can grab at a node's pre-scroll position, which now refuses instead, fixed on the rig and confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
 heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
 `✕` is fixed on the rig and confirmed on the phone); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
@@ -2162,8 +2162,27 @@ long-press `long` on row 025, Chrome force-stopped before each run):
 | `⤒ start`, marker on | not measured | 10 ordinary pages, each short, then `up=false` → `the document's edge`, corner drag to row 001's offset 0 |
 | controls, no marker: `⇞ page` ×2, `⇟ page`, `⤓ end` | as before | one band each (`scrolled -676 of -687.0`); `end` 18 pages to row 200's offset 41 via `cannot scroll down`; `← char` / `→ char` after both exact |
 
-The phone has not run this yet. The rig cannot show which of the two causes the phone had, so the
-next handset pass should read the band on that line.
+**The phone ran it, and the scroll did not fall short (2026-10-14, OnePlus 15, Chrome 154.0.8037.127,
+`en.wikipedia.org/wiki/Text_editor` with *Plain text and rich text* expanded).** Chrome announced
+selections the old way (`seeded from a fresh selection`), so the extended-selection trial was not active.
+The omnibox was hidden by a hand scroll, so the band was `Rect(0, 141 - 1272, 2180)`. Hand scrolls did not
+hide it on a page that had been open a while, even with the pad's service off. After the page was reloaded,
+the first hand scroll hid it. Long-press `a` in `Plain text exclusively …` (`94..95` of a 227-character node),
+then `⇞ page`. Every swipe started at (954, 330), and in each run the omnibox came back during the scroll:
+
+| press | result |
+|---|---|
+| `⇞ page` on the START, after `⇄ swap` | `scrolled -487 of -520.0 (band Rect(0, 141 - 1272, 2180) -> Rect(0, 337 - 1272, 2180))`, then the drag to y 484, `Moved(94, 0, crossedNode=true)` in 1.66 s and 2 gestures |
+| `⇞ page` on the END, 2 runs | `scrolled -739 of -772.0` and `-441 of -471.0`, the same band change; `past the anchor`, now the START, `Moved(95, 0)` in 1.70-1.74 s |
+| `→ char`, then `← char`, after the START run | `0..3` of `As ` to `1..11` of `source code`, then `1 -> 0`, 1 gesture each, one character each on screen |
+
+So each step scrolled in full and moved the START about one band, onto the paragraph above, never to the
+article's title. The band after the scroll read 337, not 141, and the `short, but the page can still scroll
+up` branch did not fire. Neither did the old false edge. What made the 2026-10-12 scroll fall short is still
+unknown. The START landed on `As |source code`, the last caret of the 3-character `As ` node, which Chrome
+announced as `0..3`. The pad reads that as offset 0. The `→ char` was right on screen, but a `← char` from there
+took the block step into the previous paragraph and ended `HandleLost` with the START after `cost.`. That is
+tracked on its own.
 
 **The anchor scrolling off screen costs nothing.** The announcing node follows the moving edge, so
 the moving handle is always the one on screen. The pad never needs to locate the other one.
@@ -2356,6 +2375,13 @@ and the answer is empty rather than stale. Measured 2026-09-23: the pad's twelve
 tail after the filter; re-checked the same day by flooding the guest with 3000 foreign lines, after
 which `-t 80` found 0 pad lines and `buttons` still listed all twelve. An ad-hoc adb read by hand
 falls into the same hole, so drop the `-t` there too.
+
+**On the OnePlus 15, OxygenOS's logd can stop passing a long-lived process's `ASC` lines.** It sets
+`persist.logd.flowctrl.on=1`, with a quota of 300 rows and 12 KB. On 2026-10-14 a service process that
+had run for about 12 minutes logged nothing for a long-press, a `⇄ swap` and a press, while `log -t ASC`
+from the shell went through and the same process's other tags still showed. `pad.ps1 off`, then
+`am force-stop dev.mnaoumov.asc`, then `pad.ps1 on` gave a fresh process, and that one logged normally.
+The ring buffer there is 256 KiB, and `logcat -G 16M` raises it.
 
 ### The AVD
 
