@@ -1145,6 +1145,28 @@ at 349.5):
 | `⇞ page` (page at its top) | not measured | no swipe, crossed the anchor onto the heading's offset 0, then `0 -> 1 -> 0` as the START, 2 runs of 2 |
 | control: `editor` in `<h1><span>Text editor</span></h1>` on Chromium 157 (box `32..688`) | `ColumnUnknown` | `ColumnUnknown` on the END and, after `⇄ swap`, on the START, 3 runs of 3 |
 
+**The phone confirms it (2026-10-14, OnePlus 15, Chrome 154.0.8037.127, `en.wikipedia.org/wiki/Text_editor`).**
+Chrome announced selections the old way (`seeded from a fresh selection`), so the extended-selection
+trial was not active. Scroll the page until `debugging environment.[4]` is above the pad, then long-press
+`environment`. That seeded `1..12`, and Chrome then announced `0..1` of the 1-character `.` node,
+`Rect(675, 1887 - 703, 1940)`. The `[4]` beside it is three 1-character nodes. Every per-character ask
+was refused, and `awaitCaretMeasured` waited its whole second each time. No press logged `the box's average
+puts the carets at` or ended `ColumnUnknown`:
+
+| press, END in the `.` node | result |
+|---|---|
+| `⇞ page` | no swipe (`a scroll of -44.0 is under 56.0 px`), the held drag crossed the anchor onto the caption above, now the START, `Moved(1, 0)` in 1.7 s and 1 gesture; `→ char` `0 -> 1`, `← char` `1 -> 0`, 1 gesture each |
+| `→ char`, `← char`, `→ char`, `← char` from a fresh selection | `inline: leaving the node for the next one on its row`, onto `0..1` of `[4]`'s `[` (`Rect(700, 1565 - 721, 1618)`), then back onto the `.`, 2 runs of 2, 1 gesture each, 1.6-1.8 s with the 1 s wait; the screenshot showed `environment.` selected |
+
+**On a cold Chrome the heading's first press no longer reaches the refusal, because the caret wait answers it
+first.** Chrome was force-stopped before each of 3 runs. Long-press `editor` in the `Text editor` heading
+seeded `5..11` from the heading's block-wide box (`average=1218.0`). Each first `→ char` logged `the platform
+will not measure the END's caret yet`, then `warm: measured after 100ms` and `one-line caret measured=549.0`.
+It then took the block step onto `0..1` of the `Article` tab, `Moved(11, 1)` in 1.1 s and 2 gestures, and the
+screenshot showed `editor` and `A` selected. That held in 3 runs of 3. The 2026-10-10 refusal predates the
+wait (*On a cold Chromium 157 the second ask can be refused too*), so on the phone the toolbar bound is now
+only reached where the wait's second runs out. That did not happen here.
+
 **Long-pressing a link opens Chrome's link context menu**, not a selection.
 
 **`screencap` returns pure black on `FLAG_SECURE` apps** — Tor Browser is one. The "only a screenshot is
