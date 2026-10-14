@@ -15,7 +15,7 @@ does, and the held-pointer fix for everything a continued stroke will and will n
 Open work is split by shape, one item each in that same store, and named there rather than here:
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
 (two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, with the block step that follows it; the toolbar under a paged handle is fixed and confirmed on the phone, which
-found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse; on the phone, page and end now run to the article's real end, but the collapse did not recur, so the fix's own branch is unexercised), `start` ending
+found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse; on the phone, page and end now run to the article's real end, but the collapse did not recur, so the fix's own branch is unexercised; with the omnibox already hidden, a short `⇞ page` scroll still read as the edge there, and now the page must also stop listing that scroll direction, fixed on the rig and not yet confirmed on the phone), `start` ending
 blind on an image (fixed on the rig; on the phone the move off the image landed on a hidden header button, and the walk now skips controls, which is fixed on the rig and confirmed on the phone; a page step that reaches the top used to land on the image itself, and every page drag now holds and moves off it, fixed on the rig and not yet confirmed on the phone; a `start` from the page's top used to set off Chrome's pull-to-refresh, and now does not swipe at all, which is fixed on the rig and not yet confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins, and such a press now stops at the first swallowed touch-down, fixed on the rig and not yet confirmed on the phone), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig and confirmed on the phone, where the pass also found that a press after a hand scroll can grab at a node's pre-scroll position, which now refuses instead, fixed on the rig and not yet confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
 heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
 `✕` is fixed on the rig and confirmed on the phone); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
@@ -1288,6 +1288,12 @@ dragged from the handle to y 1460 and held there five seconds, still and then ji
 The selection followed the finger, and the page never scrolled. The spike's old `scrollY=3` was
 the whole of the auto-scroll evidence, and it does not hold up.
 
+**Above the web contents it does.** A held handle dragged to the screen's top corner, (24, 24), which
+is in the status bar and above the omnibox, makes Chrome scroll the page under it to the top. On the
+handset (2026-10-12, Wikipedia) a mistaken corner drag from mid-article carried the START to the
+article's title. On the rig (2026-10-13, Chrome 143) one from row ~020 reached row 001's offset 0. So
+a corner drag is only ever safe at the document's real edge, which is what the next section guards.
+
 **So a page step scrolls with a swipe and then drags the handle across the visible band.**
 Scrolling does not move a selection at all; only the drag does. A handle scrolled off screen
 cannot be grabbed. So the swipe puts the moving handle at the near end of the band, and the drag
@@ -1767,6 +1773,36 @@ the phone, and they are still proven only by the reasoning above.
 
 The system also rebound the service once in the sitting, with no crash (the pad window was destroyed
 and re-added 1.3 s later), and that dropped the pad's view of the selection.
+
+**A short scroll still read as the edge on the phone, with the omnibox already hidden, so a shortfall
+now needs the page's agreement too.** On the handset (2026-10-12, Chrome 154, Wikipedia, the omnibox
+hidden by a hand scroll, band `Rect(0, 141 - 1272, 2180)`), a START `⇞ page` mid-article swiped from
+y 165.5 and logged `scrolled -56 of -230.0 — the document's edge`. The band's move was not forgiven,
+and the corner drag took the START to the article's title (the auto-scroll above). Why the swipe fell
+short is not known: the log did not show the band after the scroll. It does now
+(`scrolled … of … (band <before> -> <after>)`). Whatever the cause, the scroller's scroll actions settle
+it. Chrome stops listing `ACTION_SCROLL_UP` only at the page's top (the pull-to-refresh guard reads
+the same list). So `judgeAndDrag` calls a short scroll the edge only when the scroller has also stopped
+listing the step's direction. Where it lists no actions, the shortfall decides alone, as before. The
+ordinary drag that follows is aimed at the band as re-read after the scroll. That way a returning omnibox
+cannot put the held drag above the web contents.
+
+**`adb shell run-as dev.mnaoumov.asc touch files/force-short-scroll`, then `rig.ps1 rebind`, makes
+every page scroll swipe a quarter of its planned distance** on a debuggable build (it logs
+`debug: every page scroll swipes a quarter of its distance`). That is how the rig reproduces the
+phone's short scroll, since the rig's Chrome never hides its controls. `rm` it and rebind to undo.
+Measured 2026-10-13 on the rig (Chrome 143, a served page of 200 one-line rows, scrolled ~1400 px,
+long-press `long` on row 025, Chrome force-stopped before each run):
+
+| press | old verdict | new |
+|---|---|---|
+| `⇞ page` on the START, marker on | `scrolled -76 of -377.0 — the document's edge`, corner drag, `Moved(23, 0)` on row 001; `← char` then `InEdgeZone` | `short, but the page can still scroll up, so not the edge`, one band (row 025 → 020); `← char` / `→ char` `23 -> 22 -> 23`, 1 gesture each, 2 runs of 2 |
+| `⇞ page` on the END, marker on | not measured | one band, crossed the anchor, now the START; `27 -> 26 -> 27`, 2 runs of 2 |
+| `⤒ start`, marker on | not measured | 10 ordinary pages, each short, then `up=false` → `the document's edge`, corner drag to row 001's offset 0 |
+| controls, no marker: `⇞ page` ×2, `⇟ page`, `⤓ end` | as before | one band each (`scrolled -676 of -687.0`); `end` 18 pages to row 200's offset 41 via `cannot scroll down`; `← char` / `→ char` after both exact |
+
+The phone has not run this yet. The rig cannot show which of the two causes the phone had, so the
+next handset pass should read the band on that line.
 
 **The anchor scrolling off screen costs nothing.** The announcing node follows the moving edge, so
 the moving handle is always the one on screen. The pad never needs to locate the other one.

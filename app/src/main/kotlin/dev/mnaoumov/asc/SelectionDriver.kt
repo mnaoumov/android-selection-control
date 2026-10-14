@@ -2596,6 +2596,13 @@ class SelectionDriver(
   @Volatile
   private var stopRequested = false
 
+  /**
+   * Debug only: every page scroll swipes a quarter of the distance it plans, so a page step falls short
+   * mid-document. That is the handset's shape when Chrome's top controls eat a swipe, which the rig's
+   * Chrome never does. Set from a marker file by `AscAccessibilityService`.
+   */
+  var forceShortScroll = false
+
   fun requestStop() {
     Diag.log("stop requested")
     stopRequested = true
@@ -2798,8 +2805,10 @@ class SelectionDriver(
     // The handle hangs below its line, so the highest a handle can sit with its text still inside the
     // band is a line and a drop below the band's top.
     val line = before.bounds?.takeIf { before.sourceIsOneLine() }?.height()?.toFloat() ?: (2 * locator.handleDrop)
-    val top = band.top + line + locator.handleDrop
-    val bottom = band.bottom - locator.handleDrop * PAGE_CLEARANCE_DROPS
+    fun topOf(b: Rect) = b.top + line + locator.handleDrop
+    fun bottomOf(b: Rect) = b.bottom - locator.handleDrop * PAGE_CLEARANCE_DROPS
+    val top = topOf(band)
+    val bottom = bottomOf(band)
     if (bottom - top < locator.handleDrop * 2) {
       Diag.log("  page: the visible band $band is too short to page in")
       ended(Outcome.HandleLost)
@@ -2812,7 +2821,7 @@ class SelectionDriver(
       "$command page: band=$band handle=(${handle.x}, ${handle.y}) travel ${from}..${to} scroll=$scrollBy"
     )
 
-    fun dragAcross(scrolled: SelectionObserver.Snapshot, atDocumentEdge: Boolean) {
+    fun dragAcross(scrolled: SelectionObserver.Snapshot, atDocumentEdge: Boolean, bandAfter: Rect? = null) {
       // A step toward the anchor's side can carry the edge past it: always at the document's edge, and
       // mid-document whenever the selection is shorter than the page.
       val crossesAnchor = !growsSelection(command)
@@ -2834,7 +2843,14 @@ class SelectionDriver(
           if (forward) (gestures.screenHeight() - EDGE_INSET).toFloat() else EDGE_INSET.toFloat(),
         )
       } else {
-        PointF(grab.x, to)
+        /*
+         * The far end of the band as it is NOW. A scroll can bring Chrome's top controls back and
+         * push the band down by the omnibox's height, and the band from before the scroll then puts
+         * the held drag over the omnibox, above the web contents, where Chrome auto-scrolls a held
+         * handle (the handset log in `judgeAndDrag`).
+         */
+        val now = bandAfter?.takeIf { bottomOf(it) - topOf(it) >= locator.handleDrop * 2 }
+        PointF(grab.x, if (now == null) to else if (forward) bottomOf(now) else topOf(now))
       }
       fun report(landed: SelectionObserver.Snapshot?) {
         val from = before.movingOffset()
@@ -2906,29 +2922,45 @@ class SelectionDriver(
      * 1537`, while the band's top went from 337 to 141. Read as the edge, it ended `page ↓` and `end`
      * with a corner drag mid-article. So the band's own move is forgiven. A real edge hidden behind
      * one shows up on the next page, which then scrolls nothing at all.
+     *
+     * **A short scroll is the edge only when the page agrees.** Measured 2026-10-12 on the handset
+     * (Chrome 154, Wikipedia, the omnibox hidden by a hand scroll, band `Rect(0, 141 - 1272, 2180)`):
+     * `⇞ page` mid-article swiped from y 165.5, logged `scrolled -56 of -230.0 — the document's edge`,
+     * and the corner drag to (24, 24) sat above the web contents, where Chrome DID auto-scroll the held
+     * handle, all the way to the article's title. The band's own move was not forgiven, so the band
+     * re-read after it still read 141, or did not read at all. Whichever it was, the scroller lists
+     * its scroll actions and Chrome keeps them current (the pull-to-refresh guard above reads the same
+     * list), so a shortfall is believed only when the scroller has also stopped listing the way the
+     * step goes. Where it lists none, the shortfall decides alone, as before.
      */
     fun judgeAndDrag(scrolled: SelectionObserver.Snapshot) {
       val travelled = (before.bounds?.top ?: 0) - (scrolled.bounds?.top ?: 0)
-      val bandNow = contentBand(scrolled)?.visible
+      val contentNow = contentBand(scrolled)
+      val bandNow = contentNow?.visible
       val bandMoved = if (bandNow == null) 0 else
         kotlin.math.abs(bandNow.top - band.top) + kotlin.math.abs(bandNow.bottom - band.bottom)
       val shortfall = kotlin.math.abs(scrollBy) - kotlin.math.abs(travelled)
-      val atEdge = shortfall > line + bandMoved
+      val short = shortfall > line + bandMoved
+      val canStillScroll = if (short) contentNow?.scrollability?.let { if (forward) it.second else it.first } else null
+      val atEdge = short && canStillScroll != true
       val note = when {
         atEdge -> " — the document's edge"
-        bandMoved > 0 && shortfall > line -> " — short, but the band moved $bandMoved px ($band -> $bandNow), so not the edge"
+        short -> " — short, but the page can still scroll ${if (forward) "down" else "up"}, so not the edge"
+        bandMoved > 0 && shortfall > line -> " — short, but the band moved $bandMoved px, so not the edge"
         else -> ""
       }
-      Diag.log("  page: scrolled $travelled of $scrollBy$note")
-      dragAcross(scrolled, atEdge)
+      Diag.log("  page: scrolled $travelled of $scrollBy (band $band -> $bandNow)$note")
+      dragAcross(scrolled, atEdge, bandNow)
     }
 
     fun scrollFrom(swipe: PointF) {
       Diag.log("  page: scroll swipe from (${swipe.x}, ${swipe.y})")
       gestureCount++
+      val swipeBy = if (forceShortScroll) scrollBy / 4 else scrollBy
+      if (forceShortScroll) Diag.log("  debug: swiping $swipeBy of $scrollBy")
       gestures.dragAndHold(
         swipe,
-        PointF(swipe.x, swipe.y - scrollBy),
+        PointF(swipe.x, swipe.y - swipeBy),
         PAGE_SCROLL_MS,
         PAGE_SCROLL_HOLD_MS,
       ) { completed ->
