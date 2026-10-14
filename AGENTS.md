@@ -1765,6 +1765,47 @@ No press said `the pad cannot see a selection`, so the blindness this entry fixe
 What remains is that an image-side `0..0` can be either caret, and the pad cannot yet tell which. That
 is tracked on its own.
 
+**The `← char` went past the caption's box, and that is what selected the image.** The step is sized by
+the character it crosses, and on the phone the `E`'s rectangle starts at x 193 while the caption's box
+starts at 196. So the pointer stopped 3 px left of the caption, and Chrome hit-tested the figure beside it,
+which put the START before the image. The rig's rectangles start at the box, so the pad's step stayed on
+the caption there. A hand drag (`input motionevent`) 6 px further left selected the image on the rig too,
+announced exactly as the caret after it: `0..0` from the image's link, `srcLen=-1`, the image's box. Two
+changes:
+
+- **A step onto a node's outer caret aims a quarter character inside the node's box** (`insideTheNode`),
+  on Blink and for a one-line box. It logs `aim: … would put caret 0 on or past the edge of the node's box`.
+  Inside the box the nearest caret is still the outer one.
+- **The toolbar says which caret it is** (`startBeforeAnImage`). Chrome puts its toolbar above a
+  selection's start when it fits. With the START on the caption, it sits over the image's lower part. With
+  the image selected, the rig put it wholly above the image (`273..369` against an image top of 385). The
+  phone put it below the caption (`1212..1366` against a caption top of 1030), because the image's own top
+  left no room. So a re-homed START is the caret before the image when the toolbar is wholly above the
+  image, or below the text's first row with room for it above. `→ char` then carries the START from the
+  image's bottom-left onto the text's first caret (`offTheImage`). Every other press ends `EdgeUnknown`
+  ("can't see the start — nudge its handle once") with nothing touched.
+
+The phone also showed that a START re-homed into the node that holds the ANCHOR was handed back as the
+image's `0..0`, so the pad went blind. `inMovingFrame` now reads it as `0..anchor`.
+
+Measured 2026-10-14 on the rig (Chrome 143, the served thumbnail page) and on the phone (OnePlus 15,
+Chrome 154, `en.wikipedia.org/wiki/Text_editor`, the old announcement in effect). Long-press `like` in the
+caption, then `⇄ swap` and `⇤ word` to `0..12`. On the phone Chrome was force-stopped and the service
+rebound before each run:
+
+| press | rig | phone, 2 runs of 2 |
+|---|---|---|
+| `→ char`, `← char`, `→ char`, `← char` | `0 -> 1 -> 0 -> 1 -> 0`, aimed at 96 instead of 92, 1 gesture each | the same, aimed at 172.25 instead of 161.5, 1 gesture each, 0.56-0.74 s; the screenshots show `Editors like` selected and the image not |
+| START dragged by hand onto the caret before the image, then `← char` | `the toolbar … is wholly above the image`, `EdgeUnknown` in 42 ms, 0 gestures | `the toolbar … is below the text's first row`, `EdgeUnknown` in 11-15 ms, 0 gestures |
+| then `→ char` | `carrying the START from the image's corner (92.0, 653.0)`, onto `0..12`, 1 gesture | from `(164.5, 1051.0)`, onto `0..12`, 1 gesture, 0.57 s; the image no longer selected |
+| then `→ char`, `← char` | `0 -> 1 -> 0`, 1 gesture each | not run; the `← char` from caret 0 took the block step into `Notepad.[1][2][3]` |
+
+The controls are unchanged: `⇞ page` from the paragraph below through the image to the lead row, then
+`0 -> 1 -> 0` and `AtDocumentEdge`, and the debug target's `TextView` (`11 -> 12 -> 11`, `11 -> 19`). In
+one phone run the `→ char` back out of `]` into the caption, which holds the anchor, crossed the anchor
+and left the selection on `Mousepad, shown here, are often in…`. That block step is older than this
+change, and it is tracked on its own.
+
 **The phone confirms the toolbar fallback, and finds four defects the rig did not show** (2026-10-05,
 OnePlus 15, Chrome 154.0.8037.92 with the extended-selection flag Disabled,
 `en.m.wikipedia.org/wiki/Text_editor`). The mobile skin collapses every section after the lead, so
