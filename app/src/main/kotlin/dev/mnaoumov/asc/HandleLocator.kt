@@ -57,6 +57,20 @@ data class NeighbourCaret(
   fun holds(snapshot: SelectionObserver.Snapshot): Boolean =
     snapshot.sourceLength == length &&
       snapshot.bounds?.let { it.left < bounds.right && bounds.left < it.right } == true
+
+  /**
+   * Whether [snapshot] is this block's own text node beside the box the walk found: the same length
+   * and the same rows, but other columns. A heading's text node reports the heading as its parent,
+   * and the walk then has the heading's PADDING box, which an indented heading's text is right of.
+   * Measured 2026-10-14 on the rig, Chrome 145, an `<h2>` with `padding-left: 420px`: the walk read
+   * `Rect(21, 909 - 576, 991)`, and the landing's text node was `Rect(576, 909 - 720, 991)`.
+   */
+  fun isTextBesideBox(snapshot: SelectionObserver.Snapshot): Boolean {
+    val box = snapshot.bounds ?: return false
+    return snapshot.sourceLength == length && !holds(snapshot) &&
+      kotlin.math.abs(box.top - bounds.top) <= HandleLocator.LIE_TOLERANCE &&
+      kotlin.math.abs(box.bottom - bounds.bottom) <= HandleLocator.LIE_TOLERANCE
+  }
 }
 
 /**

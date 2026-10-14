@@ -968,6 +968,29 @@ box is never used again. Chrome force-stopped before each run:
 
 The phone has not run the fix.
 
+**On a cold Chrome the tree walk places that heading's first caret by its PADDING box, so the move
+lands on its second line, and the landing is read as the heading's text by its length and rows.** The
+`<h2>`'s first per-character asks can both be refused, and then `adjacentNodeCaret` falls back to the
+box's average. The box is `Rect(21, 909 - 576, 991)`, the padding box, so the caret came out at its
+LEFT edge and its bottom, `(76.5, 991)`, which is left of `1` on the heading's second line. The move
+there landed on `0..9` of the heading's text node (`Rect(576, 909 - 720, 991)`). `NeighbourCaret.holds`
+compares columns, which do not overlap, so the corrections were aimed by the padding box, off the
+screen (x -405, then -904.5), and the press ended `Moved(36, 9)` with `Encoding ` selected. Now
+`NeighbourCaret.isTextBesideBox` takes a landing with the neighbour's length and the same top and bottom
+as the neighbour, in other columns, as the neighbour, and it goes through `pastTheNearCaret`. The slide
+back onto caret 1 now takes the caret's own row when that differs from the pointer's (`caret 1 is -41.0px
+off the row the pointer is on`). Measured 2026-10-14 on the rig, Chrome 145.0.7632.218 force-stopped
+before each run, long-press `charlie` in `Paragraph 1`:
+
+| presses | before | after |
+|---|---|---|
+| `⇥ word` ×2, 6 runs | padding-box placement in 2 of 6, `Moved(36, 9)`, `Encoding ` selected | padding-box placement in 4 of 6, each `0..9 -> 0..10 -> 0..1`, then the word walk to 7 (the screen's edge), 9 gestures; the other 2 measured, unchanged (10 gestures) |
+| `→ char` ×2, `← char` ×2, 15 runs | not measured | `35 -> 36 -> 1 -> 36 -> 35` in all 15, the crossing in 3-4 gestures; the padding-box placement in 4 of them |
+| controls: one-line rows, `bravo` `⇥ word`, `→ char`, `← char`, `⇥ word`, 2 runs; the debug target's `TextView` from `bravo` | as before | `23 -> 28 -> 1 -> 28 -> 4`; `11 -> 12 -> 11`, `11 -> 19` |
+
+An earlier batch of 4 `→ char` runs, whose logs were not kept, ended two presses `HandleLost` (the
+second `→ char` once, and a `← char` once). 15 logged runs after it did not repeat either.
+
 **An END on the caret after a node-ending wrap space has no handle, so a step skips that caret.**
 On the phone (2026-10-14, Wikipedia's `Text_editor`) the lead's `, such as ` (10 characters, one line)
 ends in the space the line wraps at, and the link `Notepad` starts the next line. From `as` (`7..9`),
