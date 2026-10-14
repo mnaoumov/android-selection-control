@@ -1493,6 +1493,19 @@ class SelectionDriver(
               intoTheNeighbour(BlockStep(to, growing = true, neighbour = inline), before, after, gestures.heldAt() ?: to, start, command, onDone)
               return@awaitChange
             }
+            /*
+             * A landing IN the inline neighbour is judged as [throughTheNeighbour]'s push is, because
+             * the grab itself can snap. Measured 2026-10-13 on the rig, Chromium r1709360, from the
+             * `.`'s end before `<sup>[4]</sup>` after a `← char` back out of ` More`: the grab from
+             * x 480 to 490 landed straight on `[4]`'s end, the held correction lifted for a walk of
+             * two, and the released walk-back returned to the seam: `Moved(1, 1)`, "didn't move".
+             * [backFromTheSnap] takes the snap as the step where the app keeps no caret inside, and
+             * hands a landing one character in to [heldCorrect] as before.
+             */
+            if (inline != null && crossedNodes(before, after)) {
+              backFromTheSnap(before, after, gestures.heldAt() ?: to, start, command, onDone)
+              return@awaitChange
+            }
             // Still re-key: a landing across a node makes the old node's offsets meaningless.
             syncBoundaryContext(after)
             heldCorrect(targetOffset(before, after, command, start), start, command, onDone, frame = after)

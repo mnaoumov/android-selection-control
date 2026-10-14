@@ -969,7 +969,17 @@ Chromium force-stopped before each run, long-press `environment`, then `→ char
 | control: the debug target's `TextView` from `bravo` | `11 -> 12 -> 11`, `11 -> 19` | the same |
 
 A shrink from `[4]`'s end lands on the `.`'s end, which is the same seam, so the two presses mirror each
-other. Three of the five rows runs ended their first press before any of this code ran. On a cold
+other.
+
+**The GRAB can snap there too, and it goes through the same judgement.** After `→ char` ×3 to ` More`
+and `← char` ×2 back to the `.`'s end, the `→ char` grab from x 480 to 490 landed straight on `[4]`'s end.
+The held correction then lifted for a walk of two, and the released walk-back went back to the seam:
+`Moved(1, 1)`, "didn't move". Now a grab that lands in the inline neighbour goes to `backFromTheSnap`.
+Measured 2026-10-13 on the rig, Chromium r1709360, no marker, Chromium force-stopped before each run: that
+press went `1 -> 3` in 3 gestures and 2.2 s, 3 runs of 3 (it logs `the app keeps no caret between the seam
+and 3`). The whole sequence went `21 -> 1 -> 3 -> 1`, `1 -> 3 -> 1`, `1 -> 3 -> 1`. The controls are
+unchanged: Chrome 143 went `21 -> 1 -> 1 -> 2 -> 1 -> 1`, and the debug target's `TextView` went
+`11 -> 12 -> 11`, `11 -> 19`. Three of the five rows runs ended their first press before any of this code ran. On a cold
 Chromium the `<p>`'s text node reported the block's box, so the END was aimed by its average at x 706,
 inside the right edge zone. One run grabbed there and ended `HandleLost`, and two refused with `InEdgeZone`.
 
