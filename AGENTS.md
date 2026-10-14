@@ -2477,6 +2477,60 @@ force-stopped before each run:
 
 The START's mirror, a drag up into empty space above the document's first text, was not measured.
 
+**A page step can leave the END on a block at the screen's bottom, below the gesture-bar floor, so
+the step scrolls the page until the handle is back in reach.** A drag that ends in the margin above a
+block puts the END on that block's first caret, wherever the block is. On the handset (2026-10-14,
+Chrome 154, one-line `<p>`s, each followed by an indented `<h2>` 720 px below it) the second `⇟ page`
+went into `Encoding 1` exactly as designed, `Moved(19, 1)`. But the heading's row was
+`Rect(56, 2668 - 1218, 2772)`, so its handle was at y 2821, below the 2772 px screen, and every press
+after it ended `InGestureBar`. With the heading indented 150 px instead, the first page landed straight
+on `0..10` of the heading, with its handle off the screen in the same way. The rig reproduces it with a
+served page of one-line `<p>`s, each followed by an `<h2>` with `margin-top: 570px` and
+`padding-left: 200px`. Long-press `charlie` at (300, 595), then `⇟ page` ×2. In 2 runs of 3 the old
+build left the END on the heading's row at `1421..1472` with the handle at y 1500. Every press after
+that ended `InGestureBar`, and `⤓ end` stopped after 3 pages.
+
+So `bringIntoReach` runs after every page step that moved and is not at the document's edge. It
+re-locates the moving handle. Where the handle is at or past the screen's bottom, too deep in the
+bottom gesture zone for `clearOfGestureBar`, or above the band's top, it swipes the page by the
+distance back to the band's travel end, starting at `swipeStart`. The scroll does not move the
+selection, so the step's outcome stands. It repeats at most 3 times (`REACH_SCROLLS`), because a box
+that runs off the screen is reported clipped to it.
+
+Three more defects had to be fixed before that held:
+
+- **A `← char` from caret 1 of a block whose previous text has scrolled off the top landed on the
+  block's `0..0`.** The press ended `HandleLost`, and the pad was blind after it. `blockStep` declines
+  there, because no neighbour is on screen. `nothingToShrinkInto` now refuses the press with
+  `BeyondOffScreen` when the page can scroll that way. The status line follows the press's direction now
+  ("the text before it is above — scroll up a little"), where it used to follow the active edge.
+- **A move back onto a row that the band's top has cut off lands nowhere.** `Para 2`'s box was
+  `Rect(32, 271 - 688, 281)`. A move aimed at its handle ended `HandleLost`, and so did one aimed half a
+  line higher. `cutOffAtTheTop` is true when a box starts at the band's top and is under half as tall as
+  the taller of the step's node and the landing. In that case the step goes into the block instead.
+  Where the block cannot be entered either, `backToGrab` moves the pointer back to where it grabbed.
+- **The landing's box can read empty as the drag lands**, as `Rect(432, 1472 - 652, 1472)`, while the
+  screenshot shows the heading drawn under the pad. `intoTheBlock` re-reads an empty box every 100 ms
+  for up to 1 s. In both sweeps where it came up, the first re-read was answered (`Rect(432, 1421 - 678, 1472) after 0ms`).
+
+`intoTheBlockAt` also refuses a row end that is not past caret 1, and a row that is clamped by more
+than its own line. That covers the handset's zoomed-out page, where `growing along the block's row to
+(1040.5, 2822.0), then back onto its caret 1 at 1072.5` moved LEFT, landed `0..0` and left the pad blind.
+The rig cannot zoom a page that way, so that guard is unmeasured.
+
+Measured 2026-10-14 on the rig, Chrome 143 force-stopped before each run:
+
+| page, presses | old build | new build |
+|---|---|---|
+| the 570 px page, `⇟ page` ×2, `← char`, `→ char`, `⇟ page`, `← char`, `→ char`, 8 runs over the last two builds | the handle at y 1500, then `InGestureBar` (2 runs of 3) | in 4 runs the step went into the heading and `reach: ... scrolling 432.0`, then `BeyondOffScreen` in 10-31 ms with 0 gestures, `1 -> 2`, and the next page went into the next heading. In 4 runs it landed reachable: `19 -> 1 -> 19 -> 1 -> 19 -> 18 -> 19` |
+| the same page, `⤓ end` | stopped after 3 pages, on `InGestureBar` | 32 pages to `Encoding 30`'s end (11) in 139 s. A second run stopped on page 24, because a full-screen window from another app (`Rect(0, 0 - 720, 1520)`) left nowhere to start the reach scroll, and the press then refused with `InGestureBar`, the selection intact |
+| control: the 720 px page with headings indented 420 px, `⇟ page` ×3, `← char`, `→ char`, 3 runs | `35 -> 36 -> 3 -> 36` | the same, then `36 -> 35 -> 36` |
+| control: one-line rows, `⇟ page` ×2, `← char`, `→ char` | one band each | the same, `17 -> 16 -> 17` |
+| control: the debug target's `TextView` from `bravo` | as before | `⇥ word` `12 -> 19`, `⇟ page` `19 -> 30`, then `30 -> 29 -> 30` |
+
+`backToGrab` fired twice in the sweeps of a build without the box re-read, and both times Chrome
+announced nothing, so the pad was blind. With the re-read it did not fire again, so it is unproven.
+
 **A page step mid-document can cross the anchor too, and there the landing's node says nothing by
 itself**, because it can be on either side of the anchor, and Chrome announces it as `0..focus` either
 way. That `end` run's FIRST page step already carried the START past the anchor, and the edge kept its

@@ -303,14 +303,14 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       pad?.showStatus(
         if (driver.activeEdge != edgeBefore) {
           // `start` on the END edge (or `end` on the START) carried it past the anchor.
-          "${describe(outcome)}; now moving the ${if (driver.activeEdge == Edge.END) "end" else "start"}"
+          "${describe(outcome, command.toRight)}; now moving the ${if (driver.activeEdge == Edge.END) "end" else "start"}"
         } else if (touchedForeignWindow && isStuck(outcome)) {
           "a notification is in the way"
         } else if (touchedEdgeZone && isStuck(outcome)) {
           Diag.log("  the press touched down in a side gesture zone and went nowhere")
           EDGE_ZONE_STATUS
         } else {
-          describe(outcome)
+          describe(outcome, command.toRight)
         }
       )
       learnEdgeZoneVerdict(outcome)
@@ -746,7 +746,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     pad?.showStatus("moving the ${if (driver.activeEdge == Edge.END) "end" else "start"}")
   }
 
-  private fun describe(outcome: Outcome): String = when (outcome) {
+  private fun describe(outcome: Outcome, toRight: Boolean): String = when (outcome) {
     is Outcome.Moved -> when {
       // Two offsets in two different nodes: neither number says anything next to the other.
       // Stopped one short of where it was going: the next caret's handle would be off the screen.
@@ -790,7 +790,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     // Nothing was touched. Scrolling the selection back into view makes the next press work.
     Outcome.OffScreen -> "the selection is scrolled out of view — scroll it back"
     // Nothing was touched. The text beyond the edge is off screen; the next press works once it is not.
-    Outcome.BeyondOffScreen -> "the text ${if (driver.activeEdge == Edge.END) "after it is below — scroll down" else "before it is above — scroll up"} a little"
+    Outcome.BeyondOffScreen -> "the text ${if (toRight) "after it is below — scroll down" else "before it is above — scroll up"} a little"
     Outcome.NeighbourUnmeasured -> "the text ${if (driver.activeEdge == Edge.END) "after" else "before"} it won't say where it is — try again"
     // Nothing was touched. A handle on that caret would be drawn off the screen, and nothing can grab it there.
     Outcome.PastScreenEdge -> "the next character is at the screen's edge"

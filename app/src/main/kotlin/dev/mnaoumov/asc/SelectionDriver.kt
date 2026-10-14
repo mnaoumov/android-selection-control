@@ -863,6 +863,13 @@ class SelectionDriver(
     }
 
     val growing = growsSelection(command)
+    if (!growing && command.unit == PadCommand.Unit.CHARACTER) {
+      nothingToShrinkInto(snapshot, command)?.let { why ->
+        Diag.log("$command: $why — not touching")
+        report(Outcome.BeyondOffScreen)
+        return
+      }
+    }
     if (growing && (command.unit == PadCommand.Unit.CHARACTER || command.unit == PadCommand.Unit.WORD)) {
       nothingBeyond(snapshot, command)?.let { (outcome, why) ->
         Diag.log("$command: $why — not touching")
@@ -1090,6 +1097,32 @@ class SelectionDriver(
         "but the page can scroll ${if (forward) "down" else "up"} (${canScroll ?: "unknown"}) — the text beyond is off screen"
     }
     return Outcome.AtDocumentEdge to "the $activeEdge edge is on the document's $side: no text node beyond it on screen, and the page cannot scroll that way"
+  }
+
+  /**
+   * Why a character shrink onto its block's outer caret has nowhere to go, or null when it may.
+   *
+   * [blockStep] carries such a shrink on into the neighbouring block, because Chrome announces a
+   * block's first caret as `0..0`, which reads as no selection. With no text leaf on screen that way it
+   * cannot, and the plain step that follows lands on that `0..0`. Measured 2026-10-14 on the rig
+   * (Chrome 143, one-line `<p>`s with an indented `<h2>` 570 px below each): a `⇟ page` went into
+   * `Encoding 1` and scrolled the heading up into reach, which took the paragraph before it off the top.
+   * `← char` from `0..1` then announced `0..0`, ended `HandleLost`, and the pad could not see a
+   * selection after it. Where the page can scroll that way the text is only off screen, so the press
+   * asks for a scroll, as [nothingBeyond] does.
+   */
+  private fun nothingToShrinkInto(snapshot: SelectionObserver.Snapshot, command: PadCommand): String? {
+    val length = snapshot.sourceLength
+    if (length <= 0 || !snapshot.isBlink || anchorNodeKey == nodeKey(snapshot)) return null
+    val forward = command.toRight
+    if (snapshot.movingOffset() != (if (forward) length - 1 else 1)) return null
+    val source = snapshot.source ?: return null
+    if ((if (forward) locator.textLeafAfter(source) else locator.textLeafBefore(source)) != null) return null
+    val content = contentBand(snapshot)?.takeIf { it.scrolls } ?: return null
+    val canScroll = content.scrollability.let { if (forward) it.second else it.first }
+    if (canScroll == false) return null
+    return "the $activeEdge edge is one caret from its block's ${if (forward) "end" else "start"}, which reads as no " +
+      "selection, and no text node beyond it is on screen to step into, but the page can scroll ${if (forward) "down" else "up"}"
   }
 
   /**
@@ -3731,7 +3764,7 @@ class SelectionDriver(
          * first caret, found no text before row 001, went into the block, and ended on offset 27 of row 002.
          */
         if (landed != null && !(atDocumentEdge && !forward) && endOnBlocksFirstCaret(landed)) {
-          backOntoPreviousText(scrolled, landed, ended, report)
+          backOntoPreviousText(scrolled, landed, grab, ended, report)
           return@awaitChange
         }
         if (landed == null && forward && pastTheNodesEnd(scrolled, to)) {
@@ -3859,13 +3892,32 @@ class SelectionDriver(
   private fun backOntoPreviousText(
     scrolled: SelectionObserver.Snapshot,
     landed: SelectionObserver.Snapshot,
+    grab: PointF,
     ended: (Outcome) -> Unit,
     report: (SelectionObserver.Snapshot?) -> Unit,
   ) {
+    /*
+     * Where the block cannot be entered and the text before it cannot be reached, the pointer goes back
+     * where it grabbed, so the END returns to the caret the step started from. Lifting where it is
+     * leaves the END on the block's `0..0`, which reads as no selection: measured 2026-10-14 on the
+     * handset, `HandleLost` and then "the pad cannot see a selection" on every press.
+     */
+    fun backToGrab(from: SelectionObserver.Snapshot) {
+      Diag.log("  page: back to the grab at (${grab.x}, ${grab.y})")
+      gestureCount++
+      if (!gestures.moveHeld(grab)) {
+        gestures.releaseHeld { report(observer.latest) }
+        return
+      }
+      awaitChange(from) { back ->
+        Diag.log("  page: back at the grab -> ${back?.let { "${it.low()}..${it.high()} in ${describeNode(it)}" } ?: "nothing announced"}")
+        gestures.releaseHeld { awaitQuiet(observer.latest ?: return@releaseHeld report(null), 0, report) }
+      }
+    }
     val caret = locator.adjacentNodeCaret(landed, forward = false, oneIn = false)
     if (caret == null) {
       Diag.log("  page: the drag left the END on a block's first caret, and no text before it measures — into the block instead")
-      intoTheBlock(landed, ended, report) { gestures.releaseHeld { report(observer.latest) } }
+      intoTheBlock(landed, ended, report, ::backToGrab)
       return
     }
     fun moveBack(from: SelectionObserver.Snapshot) {
@@ -3887,9 +3939,34 @@ class SelectionDriver(
     if (caret.holds(scrolled) && scrolled.movingOffset() == scrolled.sourceLength) {
       Diag.log("  page: the drag left the END on a block's first caret, and the text before it is where this step started — into the block instead")
       intoTheBlock(landed, ended, report, ::moveBack)
+    } else if (cutOffAtTheTop(caret.bounds, scrolled, landed)) {
+      /*
+       * A move back onto a row the band's top has cut off lands nowhere, aimed at its handle or half a
+       * line higher. Measured 2026-10-14 on the rig (Chrome 143, one-line `<p>`s with an indented `<h2>`
+       * 570 px below each): a `⇟ page` from `Encoding 1` left the END on `Encoding 2`'s first caret, the
+       * move back aimed at `Para 2`, whose box was `Rect(32, 271 - 688, 281)`, the press ended
+       * `HandleLost`, and the pad could not see a selection after it. So the block is entered instead,
+       * and where it cannot be either, the step goes back to its grab.
+       */
+      Diag.log("  page: the drag left the END on a block's first caret, and the text before it is cut off at ${caret.bounds} — into the block instead")
+      intoTheBlock(landed, ended, report, ::backToGrab)
     } else {
       moveBack(landed)
     }
+  }
+
+  /**
+   * Whether [box] is a row cut off by the top of the band [landed] is in: it starts at the band's top,
+   * and it is under half as tall as the taller of the step's own node ([scrolled]) and [landed]. Both,
+   * because either can be squashed: a landing below the screen was announced with the box
+   * `Rect(432, 1472 - 652, 1472)` (2026-10-14, the rig). And only at the band's top, because a whole
+   * line of smaller text is not cut off: on the rig a paragraph's full line was 31 px under a 26 px
+   * heading's taller box, 25 px below the band's top.
+   */
+  private fun cutOffAtTheTop(box: Rect, scrolled: SelectionObserver.Snapshot, landed: SelectionObserver.Snapshot): Boolean {
+    val band = contentBand(landed)?.visible ?: return false
+    val line = maxOf(scrolled.bounds?.height() ?: 0, landed.bounds?.height() ?: 0)
+    return box.top <= band.top + HandleLocator.LIE_TOLERANCE && box.height() * 2 < line
   }
 
   /**
@@ -3928,6 +4005,30 @@ class SelectionDriver(
   ) {
     val bounds = landed.bounds ?: return moveBack(landed)
     /*
+     * A block can be announced with an empty box, `Rect(432, 1472 - 652, 1472)` on the rig, while the
+     * screenshot showed it drawn just above the web contents' bottom, under the pad: the read was taken
+     * as the drag landed. So an empty box is read again every [CARET_WARM_POLL_MS] for up to
+     * [CARET_WARM_MS] before the block is given up on.
+     */
+    if (bounds.isEmpty) {
+      fun reread(waited: Long) {
+        val fresh = observer.latestWithFreshBounds()?.takeIf { it.atMs == landed.atMs }
+        val box = fresh?.bounds
+        if (fresh != null && box != null && !box.isEmpty) {
+          Diag.log("  page: the block's box read $box after ${waited}ms")
+          intoTheBlock(fresh, ended, report, moveBack)
+          return
+        }
+        if (waited < CARET_WARM_MS && !stopRequested) {
+          handler.postDelayed({ reread(waited + CARET_WARM_POLL_MS) }, CARET_WARM_POLL_MS)
+          return
+        }
+        Diag.log("  page: the block has no box on screen ($bounds) after ${waited}ms — moving back")
+        moveBack(landed)
+      }
+      return reread(0)
+    }
+    /*
      * Asked again every [CARET_WARM_POLL_MS] for up to [CARET_WARM_MS], with the pointer held, because a
      * sweep's page lands on a node nobody has asked yet, and the first ask only makes it measure. On the
      * rig the same `⤓ end` met a heading and the paragraph before it both cold on page 32.
@@ -3962,6 +4063,30 @@ class SelectionDriver(
     val row = one.lineBottom + locator.handleDrop
     val rowEnd = PointF(minOf(handleX(bounds.right.toFloat()), (gestures.screenWidth() - EDGE_INSET).toFloat()), row)
     val caretOne = PointF(handleX(one.caretX), row)
+    /*
+     * A move along the row that does not pass caret 1 is not a grow. On a zoomed-out page the
+     * heading's text starts at its box's right edge and runs past the screen's: measured 2026-10-14 on
+     * the handset, `growing along the block's row to (1040.5, 2822.0), then back onto its caret 1 at
+     * 1072.5` went LEFT, landed `0..0`, and the press ended `HandleLost` with the pad blind after it.
+     */
+    if (rowEnd.x <= caretOne.x) {
+      Diag.log("  page: the block's row end (${rowEnd.x}) is not past its caret 1 (${caretOne.x}) — moving back")
+      moveBack(landed)
+      return
+    }
+    /*
+     * A dispatched point is clamped to the screen, and Chrome hit-tests a handle drag about a drop above
+     * the finger. A row whose pointer would be clamped by more than the row's own height would leave
+     * the pointer hit-testing above the row, in the margin. One clamped by less does work: the handset
+     * entered `Encoding 1` along y 2821 on a 2772 px screen (2026-10-14).
+     */
+    val lineHeight = bounds.takeIf { landed.sourceIsOneLine() }?.height()?.toFloat() ?: (2 * locator.handleDrop)
+    val clampedBy = row - (gestures.screenHeight() - 1)
+    if (clampedBy > lineHeight) {
+      Diag.log("  page: the block's row at y $row is ${clampedBy}px past the screen's bottom, more than its ${lineHeight}px line — moving back")
+      moveBack(landed)
+      return
+    }
     Diag.log("  page: growing along the block's row to (${rowEnd.x}, ${rowEnd.y}), then back onto its caret 1 at ${caretOne.x}")
     fun release() = gestures.releaseHeld { awaitQuiet(observer.latest ?: return@releaseHeld report(null), 0, report) }
     gestureCount++
@@ -4207,7 +4332,8 @@ class SelectionDriver(
           }
         }
         Diag.log("  page: drag to (${target.x}, ${target.y}) -> $outcome announced=${after != null}")
-        onResult(PageStep(outcome, atDocumentEdge))
+        val step = PageStep(outcome, atDocumentEdge)
+        if (outcome is Outcome.Moved && !atDocumentEdge) bringIntoReach { onResult(step) } else onResult(step)
       }
       gestureCount++
       holdOntoText(scrolled, grab, target, forward, atDocumentEdge, ended, ::report)
@@ -4365,6 +4491,68 @@ class SelectionDriver(
         ended(swipe.refusal ?: Outcome.HandleCovered)
       } else {
         scrollFrom(swipe.point)
+      }
+    }
+  }
+
+  /**
+   * After a page step: when the moving handle was left where no press can grab it, scroll the page
+   * until it is back at the band's travel end, then call [onDone]. A scroll does not move the
+   * selection, so the step's own result stands.
+   *
+   * A page drag that ends in the margin above a block puts the END on that block's first caret,
+   * wherever the block is, and the block can be at the screen's bottom, below the pad and inside the
+   * gesture zone. Measured 2026-10-14 on the handset (Chrome 154, a served page of one-line `<p>`s with
+   * an indented `<h2>` 720 px below each): the second `⇟ page` went into `Encoding 1` exactly as
+   * designed, `Moved(19, 1)`, but that heading's row was `Rect(56, 2668 - 1218, 2772)`, so its handle
+   * was at y 2821, below the 2772 px screen, and every press after it ended `InGestureBar`. With the
+   * heading 150 px further left, the first page's drag landed straight on `0..10` of the heading, with
+   * the handle at (1074.5, 2821). The refusal is right; the pad's own step put the edge there.
+   *
+   * A box that runs off the screen is reported clipped to it, so the handle can be further away than
+   * it reads, and the check is repeated after each scroll, up to [REACH_SCROLLS] times.
+   */
+  private fun bringIntoReach(scrolls: Int = 0, onDone: () -> Unit) {
+    val now = observer.latestWithFreshBounds()
+    if (now == null || now.isEmpty() || stopRequested || scrolls >= REACH_SCROLLS) return onDone()
+    val content = contentBand(now)?.takeIf { it.scrolls } ?: return onDone()
+    val band = content.visible
+    val handle = locator.locate(now, activeEdge, toolbarCentre()) ?: return onDone()
+    val barTop = gestures.screenHeight() - gestures.systemBottomInset()
+    val below = handle.y >= gestures.screenHeight() || locator.clearOfGestureBar(handle, barTop) == null
+    val line = now.bounds?.takeIf { now.sourceIsOneLine() }?.height()?.toFloat() ?: (2 * locator.handleDrop)
+    val above = handle.y < band.top + locator.handleDrop
+    if (!below && !above) return onDone()
+    val target = if (below) band.bottom - locator.handleDrop * PAGE_CLEARANCE_DROPS else band.top + line + locator.handleDrop
+    val minScroll = maxOf(MIN_PAGE_SCROLL_PX, gestures.touchSlop() * PAGE_SCROLL_SLOP_MULTIPLE)
+    val distance = handle.y - target
+    val scrollBy = if (kotlin.math.abs(distance) < minScroll) kotlin.math.sign(distance) * minScroll else distance
+    val canScroll = content.scrollability.let { if (scrollBy > 0) it.second else it.first }
+    if (canScroll == false) {
+      Diag.log("  reach: the handle at (${handle.x}, ${handle.y}) is out of reach, and the page cannot scroll that way")
+      return onDone()
+    }
+    awaitSelectionOnScreen { _ ->
+      val swipe = swipeStart(band, handle, forward = scrollBy > 0, scrollBy).point ?: run {
+        Diag.log("  reach: the handle at (${handle.x}, ${handle.y}) is out of reach, and nowhere is clear to start a scroll")
+        return@awaitSelectionOnScreen onDone()
+      }
+      Diag.log(
+        "  reach: the step left the handle at (${handle.x}, ${handle.y}), out of reach " +
+          "(${if (below) "below y $barTop" else "above the band's top ${band.top}"}) — scrolling $scrollBy from (${swipe.x}, ${swipe.y})"
+      )
+      gestureCount++
+      gestures.dragAndHold(swipe, PointF(swipe.x, swipe.y - scrollBy), PAGE_SCROLL_MS, PAGE_SCROLL_HOLD_MS) { completed ->
+        if (!completed) return@dragAndHold onDone()
+        awaitBoundsSettled { scrolled ->
+          if (scrolled == null || scrolled.atMs != now.atMs) {
+            Diag.log("  reach: the selection changed during the scroll")
+            return@awaitBoundsSettled onDone()
+          }
+          Diag.log("  reach: the node is now at ${scrolled.bounds}")
+          // Chrome fades its handles back in after a scroll; the next press grabs, so let them return.
+          awaitSelectionOnScreen { _ -> handler.postDelayed({ bringIntoReach(scrolls + 1, onDone) }, HANDLE_FADE_IN_MS) }
+        }
       }
     }
   }
@@ -4938,6 +5126,9 @@ class SelectionDriver(
 
     /** A scroll shorter than this is not worth a gesture: the drag starts where the handle already is. */
     const val MIN_PAGE_SCROLL_PX = 8f
+
+    /** At most this many scrolls bring a page step's handle back into reach. See `bringIntoReach`. */
+    const val REACH_SCROLLS = 3
 
     /** A scroll swipe must travel this many touch slops, or it lifts as a tap. See `pageStep`. */
     const val PAGE_SCROLL_SLOP_MULTIPLE = 2f
