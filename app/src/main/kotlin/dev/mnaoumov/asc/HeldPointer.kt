@@ -128,16 +128,27 @@ class HeldPointer(
      *
      * [shortDetourPx] shortens it instead: the detour goes as far as [towards], or that far when
      * [towards] is nearer, so a miss still crosses the slop while a hit barely overshoots.
+     *
+     * With [shortDetourPx], a grab whose own travel is VERTICAL past the slop takes no sideways detour
+     * at all, since the travel already crosses the slop. A block step's first move goes straight up or
+     * down, and its sideways visit is a move of the edge along its own row. Measured 2026-10-13 on the
+     * rig, Chrome 143, a served page of one-line `<p>` rows, with the START on row 002's first caret at
+     * the left margin and `← char` taking the block step up onto row 001. The 17 px detour went right,
+     * which shrank the START to 1. Chrome kept it there through the move up, and the press reported
+     * `Moved(0, 1)`. A detour to the left was clamped to x 0, and from there Chrome stopped following
+     * the drag, so the press was silent. The same drags by hand (`input motionevent`) showed both. A
+     * straight move up from the handle put the START on row 001, and so did one ending at x 300.
      */
+    val vertical = shortDetourPx != null && kotlin.math.abs(towards.y - from.y) > shortDetourPx
     val distance = shortDetourPx?.let { maxOf(kotlin.math.abs(towards.x - from.x), it) } ?: SLOP_DETOUR_PX
-    val away = (if (towards.x >= from.x) distance else -distance) * (if (detourBack) -1f else 1f)
+    val away = if (vertical) 0f else (if (towards.x >= from.x) distance else -distance) * (if (detourBack) -1f else 1f)
     val start = onScreen(from)
     val detour = onScreen(PointF(from.x + away, from.y))
     val end = onScreen(towards)
     val first = GestureDescription.StrokeDescription(
       Path().apply {
         moveTo(start.x, start.y)
-        lineTo(detour.x, detour.y)
+        if (away != 0f) lineTo(detour.x, detour.y)
         lineTo(end.x, end.y)
       },
       0,

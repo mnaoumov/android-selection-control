@@ -806,6 +806,25 @@ controls are unchanged. `chrome://terms`'s inline seam, which is on ONE row, wen
 in one gesture each, with no block step. And a `TextView` never takes one, because its selection
 cannot leave its view (`blockStep` is Blink-only).
 
+**A grab whose move is straight up or down takes no sideways detour.** The grab's slop detour is
+horizontal, toward the destination's side. A block grow's first move has no horizontal travel, so the
+detour went right. For a START at a row's first caret, that is a shrink. Measured 2026-10-13 on the rig,
+Chrome 143, a served page of one-line `<p>` rows with a 16 px margin. Long-press `row` on row 002, `⇄ swap`,
+`⇤ word` to `0..8`, then `← char`. The grab at x 14 detoured to x 31, and Chrome moved the START to 1 and
+held it there through the move up. The press reported `Moved(0, 1)`, one character the wrong way. A
+detour to the left is no better: it was clamped to x 0, and from there Chrome stopped following the drag.
+Hand drags with `input motionevent` showed both, and a straight move up from the handle put the START on
+row 001. So `HeldPointer.grab` skips the detour when it is short (Blink) and the move's own vertical travel
+is past the slop. The page steps' held drags are vertical too, so they lost their detour as well. After
+the change, Chrome force-stopped before each run:
+
+| presses | result |
+|---|---|
+| `← char`, `→ char`, `← char`, `← char` from `0..8` of row 002, 3 runs | `0 -> 19` (row 001, 2 gestures, ~1.0 s), `19 -> 0`, `0 -> 19`, `19 -> 18` |
+| control: END `→ char`, `← char`, `⇥ word` from `here` on row 002, 2 runs | `20 -> 1 -> 20`, then `20 -> 4`, as before |
+| control: `⇟ page` ×2, `← char`, `→ char`, `⇞ page`, `⤓ end`, `← char`, 2 runs | one band each, `8 -> 7 -> 8`, `end` to row 040's 20, then `20 -> 19` |
+| control: the debug target's `TextView` from `bravo` | `11 -> 12 -> 11`, `11 -> 19`, `⇟ page` `19 -> 30`, `30 -> 29 -> 30` |
+
 **On a real article the next block's first row is several nodes, and the step lands in the wrong one.**
 Measured 2026-10-05 on the handset (Chrome 154, the extended-selection flag Disabled), on Wikipedia's
 `Text_editor`. From `cost.`, the END on 143 of 143, `char →` was announced `Moved(143, 1, crossedNode=true)`
