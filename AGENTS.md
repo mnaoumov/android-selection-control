@@ -2114,6 +2114,28 @@ force-stopped before each run:
 | the debug target's `TextView`: `echo` (`26..30`) `→ char`, `⇥ word`; `alpha` swapped, `← char`, `→ char`, `← char` | `AtDocumentEdge`, 0 gestures; then `0 -> 1 -> 0`, and `30 -> 29` from `echo` |
 | control: the START on row 002's `0`, row 001 above it, `← char` | no refusal; the block step ran as before |
 
+**The phone confirms it at both ends (2026-10-14, OnePlus 15, Chrome 154.0.8037.127,
+`en.wikipedia.org/wiki/Text_editor`).** Chrome announced selections the old way (`seeded from a fresh
+selection`), so the extended-selection trial was not active.
+
+| press | result |
+|---|---|
+| page at its top: long-press `interactive`, `⇄ swap`, `⤒ start` | no swipe (`up=false`), off the wordmark onto the heading's `0..11`, 2 gestures |
+| then `← char`, `⇤ word` | `the START edge is on the document's start: no text node beyond it on screen, and the page cannot scroll that way`, `AtDocumentEdge` in 14 and 17 ms, 0 gestures; the status line read `already at the start of the text` |
+| then `→ char`, `← char` | `0 -> 1 -> 0`, 1 gesture each; the grab at x 24.5 was in the side zone and was answered |
+| long-press `that`, `⤓ end` (twice, see below) | the last page logged `up=true down=false` and `the document's edge`, and the corner drag put the END on `0..12` of the footer's last node |
+| then `→ char`, `⇥ word` | `the END edge is on the document's end`, `AtDocumentEdge` in 4 and 5 ms, 0 gestures |
+| then `← char`, `→ char` | `12 -> 11 -> 12`, 1 gesture each |
+| control: the page scrolled ~700 px, the START on the hatnote's `0` (`For`), the heading above it off screen, `← char` | `up=true`, no refusal; the grab was made (and then went nowhere, below) |
+
+So no press said `already at the start` with the page still able to scroll. Two defects showed up on the way,
+and each is tracked on its own. The first `⤓ end` stopped after one page: it landed in a wrapped 88-character
+node that a cold Chrome had not measured, logged `the moving handle cannot be located`, and ended there. A
+second `⤓ end` ran four more pages to the real end. The control's `← char` has no text before it on screen, so
+there is no block step to take. Its grab at x 45.5 reached sideways to x 14.5 and then x 0, the held link was
+cancelled, and the press ended `Moved(0, 0)`. Chrome's magnifier stayed on screen afterwards until a tap
+cleared it, and the side-zone verdict was learned as answered.
+
 **A heads-up notification is another app's window above the target, and a touch-down on it goes to the
 notification.** An upward page swipe starts a quarter of a drop below the band's top: y 361 on the phone,
 327 on the rig. That is where heads-ups appear. On the rig an SMS (`adb emu sms send 5551234 <text>`)
