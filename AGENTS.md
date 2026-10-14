@@ -1553,7 +1553,28 @@ device*) was not active on the phone that day.
 **With the omnibox hidden, the same `⤒ start` opened the Quick Settings shade.** The band's top was the
 status bar's bottom (141), and the downward swipe started at y 165.5. OxygenOS pulled its shade down over
 the screen, the page scrolled 0, and the grab then refused (`another app's window Rect(0, 0 - 1272, 2772)`),
-`Obstructed` with the selection intact. It is an open defect.
+`Obstructed` with the selection intact.
+
+**So the top guard on a swipe's start is now measured from the status bar, not from the screen's top.**
+Before this, an upward page's swipe started no higher than 42 dp from the screen's top: 147 px on the phone,
+which is 6 px below a 141 px status bar. Now it starts no higher than 42 dp below the deepest of the status bar
+(`statusBars`, visible or not), the top `systemGestures` zone and the `mandatorySystemGestures` zone
+(`GestureDispatcher.systemTopInset`). The rig cannot show the shade itself. On stock Android only a swipe that
+starts INSIDE the status bar opened it: probes from y 60 and 140 did, and ones from 170, 178 and 190 did not.
+The rig's Chrome also never hides its omnibox. So the rig reproduces the band's shape with a served page that
+calls `requestFullscreen()` on a tap. That hides the status bar, the band's top reads 159, and the
+mandatory gesture zone is `[0,0][720,183]`. Click the `Viewing full screen` hint's `Got it` once, or it is
+the foreign window the swipe moves around. Measured 2026-10-13 on the rig, Chrome 143 force-stopped before
+each run, 200 one-line rows, three hand scrolls, long-press `alpha`, `⇞ page`, `← char`, `→ char`:
+
+| build | swipe from | result |
+|---|---|---|
+| old | (540, 173), inside the 183 px gesture zone | scrolled -314 of -331; stock let it through |
+| new, 3 runs | (540, 267), 183 + 84 | scrolled about -356 of -377, then `← char` and `→ char` one character each |
+| new, omnibox shown (band top 271), 2 runs, then `⇟ page` ×2 | (540, 285), unchanged | as before; `⤓ end` ran to row 200's end |
+
+The phone has not run it yet. Whether 42 dp below the status bar is far enough for OxygenOS's pull-down is
+the thing that confirmation measures.
 
 **An ordinary page step can land on the image too, so every page drag is held, not only the corner's.**
 When the page reaches its top inside a step whose scroll is not short, there is no corner drag, and the
