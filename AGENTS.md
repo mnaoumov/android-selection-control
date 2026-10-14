@@ -2521,6 +2521,25 @@ force-stopped before each run:
 
 The START's mirror, a drag up into empty space above the document's first text, was not measured.
 
+**The phone confirms it where the last heading is one line (2026-10-14, OnePlus 15, Chrome 154.0.8037.127).**
+Chrome announced selections the old way (`seeded from a fresh selection`), so the extended-selection
+trial was not active. The rig's own page does not get there on the phone. With `padding-left: 420px`,
+`Encoding 1` starts at x ~1010 and runs past the screen's right edge, and the page is not zoomed out. So
+page 2's step into it logged `the block's row end (1040.5) is not past its caret 1 (1075.5) — moving back`,
+landed back on `Paragraph 1`'s end, and the sweep ended `Moved(35, 36)` after 2 pages, 3 runs of 3. That
+is the row-off-the-screen shape tracked with the zoomed-out page steps. So the page was reshaped: four
+`<p>Para N has charlie.</p>`, each followed by an `<h2>` 530 CSS px below it with `padding-left: 150px`,
+and the 1500 px `<div>`. There `Encoding 30` fits on one line (`Rect(56, 169 - 1218, 277)`). Chrome was
+force-stopped and the service rebound before each run. Long-press `charlie` (`11..18`), then:
+
+| press, 3 runs of 3 | result |
+|---|---|
+| `⤓ end` | 10 page steps, four of them into a heading (`along the row -> 0..10, then onto caret 1 -> 0..1`). The ninth logged `the drag announced nothing past the END's node (in TextView srcLen=11 …) — moving onto its last caret at (1151.5, 326.0)` and landed on `0..11`. The tenth found the edge, and the sweep ended `Moved(18, 11, crossedNode=true)` in 20-21 s and 32 gestures; the screenshot showed all of `Encoding 30` selected |
+| `← char`, `→ char` | `11 -> 10 -> 11`, 1 gesture each, 0.56-0.73 s |
+
+No press ended `HandleLost`. Where the last heading wraps, the move is aimed at the pointer's row and stops
+a line short; that is tracked on its own.
+
 **A page step can leave the END on a block at the screen's bottom, below the gesture-bar floor, so
 the step scrolls the page until the handle is back in reach.** A drag that ends in the margin above a
 block puts the END on that block's first caret, wherever the block is. On the handset (2026-10-14,
