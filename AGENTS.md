@@ -210,6 +210,34 @@ first character is recorded as a boundary only when the character between the ro
 own (`HandleLocator.hasOwnBox`), i.e. the line wraps at a space. No grow that changed row goes through
 `recordBoundary`: the first version did, and 32, 34 and 35 went into the set.
 
+**On Chrome the row change is two moves, never one diagonal line.** A grow goes straight down (or up)
+onto the other row at the handle's column, then along that row onto the caret. A shrink goes along its
+own row first, then onto the other row. A straight line from a line's last caret to the next line's
+first sweeps back along the first line before it leaves it. Once it passes the anchor's column, Chrome
+stops following the drag. Measured 2026-10-13 on the rig, Chrome 143, a served `As source code is text,
+editors have features for it.` that wraps after `features`. Long-press `features` (`37..45`), then
+`→ char`. The grab from (678, 887) to (50, 925) landed on `37..40`, and six held pushes along line 2
+announced nothing: `Moved(45, 40)` in 8 gestures, 2 runs of 2. A hand drag on the same line
+(`input motionevent`) also left `37..40`. A hand drag straight down and then left landed on `37..46`.
+Going down first grows the edge to the other row's end, `37..53`. The slide back along that row is a
+shrink, which is character-granular. `heldCharacterStep` holds the pointer between the two moves on
+Blink, and so does `changeRowThenGrow` (`overTheWrapThenLift`), which then lifts. A `TextView` keeps the
+one line. After the change, Chrome force-stopped before each run:
+
+| presses | result |
+|---|---|
+| `→ char`, `← char`, `→ char`, `← char` from `features`, 2 runs | `45 -> 46 -> 45`, 2 gestures each, 0.85-1.09 s |
+| `⇄ swap` on `for` (`46..49`), then `← char`, `→ char`, `← char`, 2 runs | `46 -> 45 -> 46 -> 45` on the START, 2 gestures each |
+| `⇥ word` from `features` | the row change landed on 46 (before: `40..40`, `HandleLost`); the grow on from there is the margin defect below |
+| `→ char`, `← char`, `→ char` from the caption's `are` (`14..17`), line 2 at x 110 | `17 -> 18 -> 17 -> 18`, 2-3 gestures |
+| `⇥ word` ×2, `← char`, `⇤ word` from `are`, 2 runs | `17 -> 23` (`often`), `23 -> 32` (`included`), `32 -> 31`, `31 -> 24` |
+| controls: one-line rows, `→ char`, `← char`, `⇥ word`; the debug target's `TextView` from `bravo` | `20 -> 1 -> 20`, `20 -> 4`; `11 -> 12 -> 11`, `11 -> 19` |
+
+The grow from line 2's first caret of the `features` paragraph does not work yet. The END handle there
+is at x 50, inside the rig's 60 px left gesture zone. Chrome holds an edge on a word's start, so the
+grab is silent there. The edge-zone logic reads that silence as a swallowed touch-down and refuses
+every margin press after it. That is tracked on its own.
+
 **The grow escalation stops at the screen's edge.** Each reach is clamped to the screen, and the press
 ends once the previous reach was already off it. Measured `word →` from the end of a paragraph's last
 line: six tries, the last clamped to x 719, instead of the escalation running on to a 360 px reach.
