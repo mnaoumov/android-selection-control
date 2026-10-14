@@ -1837,8 +1837,24 @@ each run, 200 one-line rows, three hand scrolls, long-press `alpha`, `⇞ page`,
 | new, 3 runs | (540, 267), 183 + 84 | scrolled about -356 of -377, then `← char` and `→ char` one character each |
 | new, omnibox shown (band top 271), 2 runs, then `⇟ page` ×2 | (540, 285), unchanged | as before; `⤓ end` ran to row 200's end |
 
-The phone has not run it yet. Whether 42 dp below the status bar is far enough for OxygenOS's pull-down is
-the thing that confirmation measures.
+**The phone confirms it (2026-10-14, OnePlus 15, Chrome 154, `en.wikipedia.org/wiki/Text_editor`).** Chrome
+announced selections the old way (`seeded from a fresh selection`), so the extended-selection trial was not
+active. The phone's top `mandatorySystemGestures` zone is `[0,0][1272,183]`, deeper than its 141 px status bar,
+so the guard is 183 + 42 dp (147) = 330. Hand scrolls did not hide the omnibox on a tab that had been open a
+while, even after a pull-to-refresh. After `am force-stop com.android.chrome` and reopening the page, the
+first hand scroll (`input swipe 600 1500 600 1060 600`) hid it, and the band's top read 141. Then long-press
+`interactive` (`4..15`), `⇄ swap`, and the press. The service was rebound before each run, because the active
+edge outlives a fresh selection, so a `⇄ swap` straight after the previous run's swap moves the END instead.
+
+| press | result |
+|---|---|
+| `⤒ start` on the START, 3 runs | `scroll swipe from (954.0, 330.0)`, the shade stayed up and Chrome kept the focus, `scrolled -451..-455 of -1094..-1098` with the band going `141 -> 337` and `up=false`, so the document's edge; the corner drag moved off the wordmark onto the heading, `Moved(4, 0)` in 1.9 s and 3 gestures |
+| `⤒ start` on the END (the previous run's swap carried over), 1 run | the same swipe from (318.0, 330.0), `scrolled -448 of -1091`, crossed the anchor, now the START, `Moved(15, 0)` |
+| `⇞ page` on the START, 3 runs | `scroll swipe from (954.0, 330.0)`, the shade stayed up, `scrolled -448..-455`, the edge by `up=false`, `Moved(4, 0)` in 1.9 s and 3 gestures |
+
+No press ended `Obstructed`. Every scroll fell about 640 px short because the page reached its top, and the
+omnibox came back during it. The scroller had stopped listing `up`, so these were real edges, not the
+2026-10-12 short scroll from y 165.5.
 
 **An ordinary page step can land on the image too, so every page drag is held, not only the corner's.**
 When the page reaches its top inside a step whose scroll is not short, there is no corner drag, and the
