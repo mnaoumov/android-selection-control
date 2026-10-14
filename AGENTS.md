@@ -2049,6 +2049,21 @@ A page step whose scroll falls short but does not reach the edge still advances 
 (`scrolled 370 of 738`). The old build did the same from the usual start (`496 of 814` from
 (180, 1138)), so that shortfall is older than this change.
 
+**The phone confirms it (2026-10-14, OnePlus 15, Chrome 154.0.8037.127).** Chrome announced selections
+the old way (`seeded from a fresh selection`), so the extended-selection trial was not active. Chrome
+was force-stopped and the service rebound before each run. Long-press `alpha` on row 002 of the rig's
+page (served over `adb reverse`), or `that` in the lead of `en.wikipedia.org/wiki/Text_editor` at its
+top, then `⤓ end`:
+
+| page, 3 runs of 3 | result |
+|---|---|
+| the served page | `17 -> 341`, the last paragraph's end, in 20 pages, 34.1-34.4 s and 40 gestures. Pages 3 to 20 each logged `the toolbar Rect(56, 2115..2125 - 1114, 2269..2279) is on the swipe's row; starting the scroll at (954.0, 1887..1901)`, 147 px (42 dp) above the handle (y 2034-2045), and scrolled 1676-1687 of about 1750 px. The last page found the edge by `down=false` |
+| Wikipedia | 4 pages to the footer's last node (`0..12`), 6.9-7.0 s and 8 gestures. Chrome put the toolbar above the selection there, so no page's toolbar was on the swipe's row, and every swipe started at y 2155.5 |
+
+No page logged `no toolbar after the scroll` or `scrolled 0 of`. Control on the served page: `⇟ page` ×3
+went one band each (`17 -> 56`, then the column kept), the third through the toolbar-row start, then
+`← char` `56 -> 55` and `→ char` `55 -> 56`, 1 gesture each.
+
 **`start`'s last drag lands on the first node's offset 0, and Chrome announces that as `0..0`.**
 The node does not hold the anchor, so Chrome announces it as `0..focus`, and the focus is 0. The pad
 read that as an empty selection. The step ended `HandleLost`, and every press after it said "the pad
