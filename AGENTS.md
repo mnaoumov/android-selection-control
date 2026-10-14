@@ -944,6 +944,41 @@ there logged `srcLen=3` and went `1 -> 143`, back onto `cost.`, in 2 gestures an
 direction worked 3 runs of 3. On the phone the slide alone was enough. The correction move (`moving the
 pointer`) never fired, so it is still unproven against a real wrong node.
 
+**An END on the caret after a node-ending wrap space has no handle, so a step skips that caret.**
+On the phone (2026-10-14, Wikipedia's `Text_editor`) the lead's `, such as ` (10 characters, one line)
+ends in the space the line wraps at, and the link `Notepad` starts the next line. From `as` (`7..9`),
+`→ char` found no rung: the node is one line, so `crossRowDelta` declines, and 9 is not its outer caret,
+so `blockStep` and `inlineNeighbour` decline. Six pushes along the row announced nothing. The rig
+reproduces it with a served `<p><a>Simple text editors</a>, such as <a>Notepad</a>, are common on
+desktops.</p>` (20 px, 16 px margins), which wraps after `as `. Hand drags (`input motionevent`) show
+the trap:
+
+- Straight down from the END handle, then left onto `Notepad`'s first caret, landed on `7..10`. That
+  is the caret after the space, and Chrome then drew no END handle. A drag from where it would be, at
+  the line's end or at the next line's start, touched the page (the second collapsed the selection),
+  and every press after it ended `ColumnUnknown`.
+- From `0..1` of `Notepad`, a drag back onto its caret 0 was announced `7..10` again.
+- A START on that caret IS drawn, at the next line's start, and is announced `0..len` in `Notepad`'s frame.
+
+So for the END the caret is skipped. `blockStep` also leaves the node from one short of its end when
+the last character has no box and the one before it has (`HandleLocator.outerIsWrapSpace`, asked twice
+so a cold node does not pass). It goes one character into the next node, past the space. The mirror is
+`← char` from `0..1` of `Notepad`: `adjacentNodeCaret` reads the previous node's last caret from the
+character inside the space and marks it `pastWrapSpace`. The target is then counted one further
+(`blockTarget`), so the step lands on 9, not 10. The START keeps the plain block step. Measured
+2026-10-14 on the rig, Chrome 143 force-stopped before each run:
+
+| press | before | after |
+|---|---|---|
+| `→ char` ×2, `← char` ×2 from `as`, 6 runs | `Moved(9, 9)` in 2.5 s and 8 gestures | `9 -> 1` (`Notepad`'s `N`, 2 gestures, ~1.0 s) `-> 2 -> 1 -> 9` (2 gestures, ~0.9 s) |
+| `← char` from a hand drag onto `0..1` of `Notepad` | `Moved(1, 9)` in 2.8 s and 9 gestures (it wanted 10) | `1 -> 9` in 2 gestures |
+| `⇥ word` from `as`, 4 runs | `HandleLost` | `9 -> 2` of `, are …`, the next word's start, as the word walk ends on Chrome; 9 gestures, ~3.1 s |
+| START: `⇄ swap`, then `→ char` from 9, `← char` ×2 | not measured | `9 -> 0` of `Notepad` (2 gestures), `0 -> 9`, `9 -> 8` |
+| controls: `have` wrapping inside one node; row 002's `here` into the next block; the debug target's `TextView` | as before | `36 -> 37 -> 36`, `⇥ word` `36 -> 45`; `28 -> 1 -> 28`; `11 -> 12 -> 11`, `11 -> 19` |
+
+The row 002 `⇥ word` went `28 -> 5`, inside `Simple`, on the old build too. That is a word walk defect
+of its own and is tracked separately.
+
 **A superscript's box sits above its line, so "another row" means more than half a line away.**
 `blockStep` used to call any neighbour whose bottom differed by more than 1 px another row. A `<sup>`
 node's box ends above the line's: on a served `…<span>debugging environment</span>.<sup>[4]</sup> More

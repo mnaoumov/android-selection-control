@@ -2792,7 +2792,14 @@ class SelectionDriver(
    * A character step that leaves its block, and where its handle goes. [growing] says which way
    * round the two moves are made: see [heldCharacterStep].
    */
-  private class BlockStep(val aim: PointF, val growing: Boolean, val neighbour: NeighbourCaret)
+  private class BlockStep(
+    val aim: PointF,
+    val growing: Boolean,
+    val neighbour: NeighbourCaret,
+    // The step passes over the caret just past a wrap space, which hides its handle, so its target is
+    // one character further on: see [blockStep].
+    val skipsWrapSpace: Boolean = false,
+  )
 
   /**
    * The step out of the edge's block into the neighbouring one, or null when the edge is not on the
@@ -2812,6 +2819,18 @@ class SelectionDriver(
    *   since in its own block that caret is the anchor's floor ([shrinkByWord]).
    *
    * [handle] is where the edge's handle was located, which says which row the edge is on now.
+   *
+   * **An END one short of its node's end, where the last character is the space the line wraps at,
+   * leaves the node too, and skips the caret after that space.** Measured 2026-10-14 on the rig,
+   * Chrome 143, a served `<a>Simple text editors</a>, such as <a>Notepad</a>, are …` that wraps after
+   * `as `: long-press `as` (`7..9` of `, such as `), `→ char`. No rung fired, because the node is one
+   * line and 9 is not its outer caret, and seven pushes along the row announced nothing (`Moved(9, 9)`
+   * in 8 gestures). A hand drag straight down and then left onto `Notepad`'s first caret landed on
+   * `7..10`, but Chrome then drew no END handle at all: a drag from where it would be, at either end
+   * of the wrap, touched the page, and the next press ended `ColumnUnknown`. A drag onto `Notepad`'s
+   * own first caret from inside it went back to `7..10`. So the END goes one character into the next
+   * node, past the space, and `← char` from there goes back to 9, not to 10 ([NeighbourCaret.pastWrapSpace]).
+   * A START on that caret is drawn, at the next row's start, so the START keeps the plain step.
    */
   private fun blockStep(snapshot: SelectionObserver.Snapshot, command: PadCommand, handle: PointF): BlockStep? {
     val length = snapshot.sourceLength
@@ -2821,22 +2840,42 @@ class SelectionDriver(
     val growing = growsSelection(command)
     val forward = command.toRight
     val moving = snapshot.movingOffset()
+    val inner = if (forward) length - 1 else 1
+    // One short of the outer caret, across the space the line wraps at: see the last note above.
+    val acrossWrap = activeEdge == Edge.END && moving == inner && locator.outerIsWrapSpace(snapshot, forward)
     val leaves = when {
-      growing -> moving == if (forward) length else 0
+      growing -> moving == (if (forward) length else 0) || acrossWrap
       anchorNodeKey == nodeKey(snapshot) -> false
-      else -> moving == if (forward) length - 1 else 1
+      else -> moving == inner
     }
     if (!leaves) return null
-    val neighbour = locator.adjacentNodeCaret(snapshot, forward, oneIn = growing) ?: return null
+    val neighbour = locator.adjacentNodeCaret(snapshot, forward, oneIn = growing || acrossWrap) ?: return null
     val caret = neighbour.geometry
     val row = handle.y - locator.handleDrop
     if (onTheSameRow(snapshot, row, neighbour)) return null
     val aim = PointF(handleX(caret.caretX), caret.lineBottom + locator.handleDrop)
     Diag.log(
-      "  next block: the edge is on its block's ${if (forward) "last" else "first"} caret — " +
+      "  next block: the edge is on its block's ${if (forward) "last" else "first"} caret" +
+        (if (acrossWrap) " but for the wrap space" else "") + " — " +
         "${if (growing) "growing" else "shrinking"} into the ${if (forward) "next" else "previous"} one at (${aim.x}, ${aim.y})"
     )
-    return BlockStep(aim, growing, neighbour)
+    return BlockStep(aim, growing, neighbour, skipsWrapSpace = acrossWrap || (activeEdge == Edge.END && neighbour.pastWrapSpace))
+  }
+
+  /**
+   * [crossedTarget] for a [BlockStep], one character further on when the step skips a wrap space's
+   * caret ([BlockStep.skipsWrapSpace]).
+   */
+  private fun blockTarget(
+    step: BlockStep,
+    before: SelectionObserver.Snapshot,
+    after: SelectionObserver.Snapshot,
+    command: PadCommand,
+    start: Int,
+  ): Int? {
+    val target = crossedTarget(before, after, command, start) ?: return null
+    if (!step.skipsWrapSpace) return target
+    return (target + if (command.toRight) 1 else -1).takeIf { it in 0..after.sourceLength }
   }
 
   /**
@@ -2954,7 +2993,7 @@ class SelectionDriver(
         )
       }
       else -> {
-        val target = crossedTarget(before, first, command, start)
+        val target = blockTarget(step, before, first, command, start)
         val caret = target?.let { locator.characterGeometry(first, activeEdge, crossingOf(command), it) }
         caret?.let { PointF(handleX(it.caretX), step.aim.y) } ?: step.aim
       }
@@ -3034,7 +3073,12 @@ class SelectionDriver(
       return
     }
     syncBoundaryContext(landed)
-    heldCorrect(targetOffset(before, landed, command, start), start, command, { outcome ->
+    val target = if (step.skipsWrapSpace) {
+      blockTarget(step, before, landed, command, start) ?: landed.movingOffset()
+    } else {
+      targetOffset(before, landed, command, start)
+    }
+    heldCorrect(target, start, command, { outcome ->
       onDone(if (outcome is Outcome.Moved) outcome.copy(crossedNode = true) else outcome)
     }, frame = landed)
   }
