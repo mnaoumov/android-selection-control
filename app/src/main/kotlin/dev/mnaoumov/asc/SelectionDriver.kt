@@ -3045,8 +3045,7 @@ class SelectionDriver(
       return
     }
     if (!step.neighbour.holds(landed)) {
-      val located = locator.locate(landed, activeEdge, null)
-      if (located == null || attempt >= MAX_NEIGHBOUR_CORRECTIONS) {
+      if (attempt >= MAX_NEIGHBOUR_CORRECTIONS) {
         Diag.log(
           "  next block: in another node (${landed.sourceLength} chars at ${landed.bounds}), " +
             "not the neighbour (${step.neighbour.length} chars at ${step.neighbour.bounds}) — letting go"
@@ -3054,21 +3053,17 @@ class SelectionDriver(
         releaseThenReport(start, landed.movingOffset(), onDone)
         return
       }
-      val next = PointF(pointer.x + step.aim.x - located.x, pointer.y)
-      Diag.log(
-        "  next block: in another node (${landed.sourceLength} chars), handle at ${located.x} against the " +
-          "neighbour's ${step.aim.x} — moving the pointer to ${next.x}"
-      )
-      gestureCount++
-      if (!gestures.moveHeld(next)) {
-        Diag.log("  held: the move onto the neighbour was refused")
-        gestures.releaseHeld { onDone(Outcome.HandleLost) }
-        return
-      }
-      awaitChange(landed) { after ->
-        val now = after ?: landed
-        Diag.log("  next block: correction ${attempt + 1} -> ${now.sourceLength} chars, ${now.low()}..${now.high()}")
-        intoTheNeighbour(step, before, now, next, start, command, onDone, attempt + 1)
+      locateHeld(landed, 0L) { located ->
+        if (located == null) {
+          Diag.log(
+            "  next block: in another node (${landed.sourceLength} chars at ${landed.bounds}), " +
+              "not the neighbour (${step.neighbour.length} chars at ${step.neighbour.bounds}), and its handle " +
+              "cannot be located — letting go"
+          )
+          releaseThenReport(start, landed.movingOffset(), onDone)
+          return@locateHeld
+        }
+        ontoTheNeighbour(step, before, landed, pointer, located, start, command, onDone, attempt)
       }
       return
     }
@@ -3081,6 +3076,78 @@ class SelectionDriver(
     heldCorrect(target, start, command, { outcome ->
       onDone(if (outcome is Outcome.Moved) outcome.copy(crossedNode = true) else outcome)
     }, frame = landed)
+  }
+
+  /**
+   * [HandleLocator.locate] for [landed], re-asked every [CARET_WARM_POLL_MS] for up to [CARET_WARM_MS]
+   * on Blink, with the pointer held, because a block step's landing is often a node nobody has asked
+   * yet, and the first ask only makes it measure ([intoTheBlock] waits the same way).
+   */
+  private fun locateHeld(landed: SelectionObserver.Snapshot, waited: Long, onResult: (PointF?) -> Unit) {
+    val located = locator.locate(landed, activeEdge, null)
+    if (located != null || !landed.isBlink || waited >= CARET_WARM_MS || stopRequested) {
+      if (waited > 0) Diag.log("  next block: the landing ${if (located != null) "located after ${waited}ms" else "still refused after ${waited}ms"}")
+      onResult(located)
+      return
+    }
+    handler.postDelayed({ locateHeld(landed, waited + CARET_WARM_POLL_MS, onResult) }, CARET_WARM_POLL_MS)
+  }
+
+  /**
+   * [intoTheNeighbour]'s held move from a landing in another node, whose handle is at [located], onto
+   * the neighbour's.
+   *
+   * **A shrink's row can be wrong by a whole line, and then the move changes row too.** The row change
+   * is a delta from where the grab touched to where the neighbour's caret is, and Chrome keeps the
+   * finger's offset from ITS handle. A superscript's box sits above its line, while Chrome draws the
+   * handle of a caret in it at the line's bottom, so a delta from the superscript's box is too long by
+   * the gap. Chrome hit-tests at the handle's midline, so a gap past half a line puts the edge on the
+   * next line. Measured 2026-10-14 on the handset (Chrome 154, Wikipedia's `Text_editor`): `→ char`
+   * from `0..1` of `]` in `Notepad.[1][2][3]` back down into the Mousepad caption, whose `Editors like `
+   * holds the anchor, landed on the caption's SECOND line, past the anchor: `Moved(0, 18)`, the selection
+   * on `Mousepad, shown here, are`. The rig reproduces it with a served `<sup>` raised 12 px at 11 px
+   * (its box `303..329` against its line's `315..355`): the same `→ char` landed on `18..63` of the
+   * caption's wrapped tail, and a hand drag showed the line changing between 10 and 18 px
+   * past the aim on a 33 px line. So where a shrink's landing is half a line or more past the
+   * neighbour's row in the direction of travel, the pointer moves back by the rows' difference as well.
+   * A grow keeps its row: its neighbour's row can come from a block's box, and its landings were
+   * measured on the right row.
+   */
+  private fun ontoTheNeighbour(
+    step: BlockStep,
+    before: SelectionObserver.Snapshot,
+    landed: SelectionObserver.Snapshot,
+    pointer: PointF,
+    located: PointF,
+    start: Int,
+    command: PadCommand,
+    onDone: (Outcome) -> Unit,
+    attempt: Int,
+  ) {
+    run {
+      val rowGap = located.y - step.aim.y
+      // Only a one-line box says how tall a line is.
+      val line = step.neighbour.bounds.takeIf { SelectionObserver.boxIsOneLine(it, step.neighbour.length) }?.height()?.toFloat()
+      val past = line != null && if (command.toRight) rowGap >= line / 2f else rowGap <= -line / 2f
+      val dy = if (!step.growing && past) step.aim.y - located.y else 0f
+      val next = PointF(pointer.x + step.aim.x - located.x, pointer.y + dy)
+      Diag.log(
+        "  next block: in another node (${landed.sourceLength} chars), handle at (${located.x}, ${located.y}) " +
+          "against the neighbour's (${step.aim.x}, ${step.aim.y}) — moving the pointer to (${next.x}, ${next.y})" +
+          if (dy != 0f) ", back onto the neighbour's row" else ""
+      )
+      gestureCount++
+      if (!gestures.moveHeld(next)) {
+        Diag.log("  held: the move onto the neighbour was refused")
+        gestures.releaseHeld { onDone(Outcome.HandleLost) }
+        return
+      }
+      awaitChange(landed) { after ->
+        val now = after ?: landed
+        Diag.log("  next block: correction ${attempt + 1} -> ${now.sourceLength} chars, ${now.low()}..${now.high()}")
+        intoTheNeighbour(step, before, now, next, start, command, onDone, attempt + 1)
+      }
+    }
   }
 
   /**
