@@ -1940,6 +1940,14 @@ Each step is also an action of its own — `up`, `down`, `build`, `install`, `re
 first, or `go`. Two measurements on 2026-09-28 ran against the previous APK because of it, and read
 as a fix that had not worked.
 
+**`rebind` waits for the system, not a clock.** It removes the service, waits until
+`dumpsys accessibility` no longer lists it under `Bound services`, re-adds it, and waits until it is listed again.
+Only then does it read the enabled list back. If the device dropped the add, it adds once more after
+3 s, and if that is dropped too it throws and names `pad.ps1 on`. The old fixed 400 ms gap was enough on
+the rig, but on the OnePlus 15 (2026-10-12) the re-add did not stick, and `pad.ps1 on` straight after
+put it back. Measured 2026-10-13 on the rig: a plain rebind took 1.5 s, and a drop forced right after the
+rebind was caught and re-added (15 s). The phone has not run the new rebind yet.
+
 **It exists because a measurement should not wait on a phone being unlocked.** Almost everything
 measured here before it was measured on the owner's handset, which meant every run waited on a
 device being awake, unlocked and parked on the right page; twice a session stalled outright on a
