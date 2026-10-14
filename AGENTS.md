@@ -1765,6 +1765,22 @@ A `TextView`'s rectangles do not overlap, so there the aim is the old one to the
 both, and the grab's coordinates were identical, so that is the grab's sampling (the word-snap entry
 above), not this change.
 
+**The phone confirms it (2026-10-14, OnePlus 15, Chrome 154.0.8037.127).** Chrome announced selections
+the old way (`seeded from a fresh selection`), so the extended-selection trial was not active. The page
+was the rig's, served over `adb reverse`, and Chrome was force-stopped and the service rebound before
+each run. On the phone the link is `Rect(56, 1313 - 626, 1401)` and the grab's offset is 31.5 px. The
+measured carets for offsets 2 to 8 are 108, 168, 210, 224, 262, 276 and 301. Long-press `here` on row
+002 (`24..28`), then:
+
+| press, 3 runs of 3 | result |
+|---|---|
+| `⇥ word` | the move onto the row landed in `, such as ` and slid onto `0..1` of the link. Each of the seven pushes logged `word walk: aiming at the measured caret of <n>` first, and the first six went `0..2` through `0..7`, one character each. The seventh was silent (`held at 7 after a measured push — a word boundary`), and the press ended `Moved(28, 7, crossedNode=true)` in 3.1-3.3 s and 9 gestures; the screenshot showed `here` and `Simple ` selected |
+| `⇥ word` | `7 -> 11` (`text `), grow try 2, 2 gestures, 0.76 s |
+| `← char` | `11 -> 10`, 1 gesture, 0.57-0.62 s; the screenshot showed `Simple tex` selected |
+
+No grab logged a side gesture zone. The block step's slide ended at x 117.5 (run 1) or 129.5, and the
+walk's grab started at x 125.5, all right of OxygenOS's 84 px strip.
+
 **A caret at the screen's side has no handle, so a step stops on the last caret whose handle stays on
 screen.** Chrome draws the END handle right of its caret and the START handle left of it. Measured
 2026-10-14 on the rig, Chrome 145, a served `<h2>Encoding 1</h2>` indented so that `Encoding` ends at
