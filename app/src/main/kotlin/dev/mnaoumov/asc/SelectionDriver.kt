@@ -965,6 +965,59 @@ class SelectionDriver(
   }
 
   /**
+   * A page step's answer to a handle it cannot locate on a node the platform has not measured yet:
+   * [awaitCaretMeasured], then [retry] with a fresh read of the same announcement. Returns false, having
+   * done nothing, when the wait does not apply: not Blink, or a node already re-asked at this box
+   * ([pageWarmedFor], which also stops the retry from waiting again). Where the re-ask is answered at
+   * once, [retry] runs straight away.
+   *
+   * [perform] waits before a press's FIRST page only. Every later page of a sweep lands on a node of its
+   * own, and a cold one used to end the sweep there. Measured 2026-10-14 on the handset (Chrome 154,
+   * Wikipedia's `Text_editor`): `⤓ end` from the lead scrolled one page, the drag landed the END on 68
+   * of a wrapped 88-character node, both asks were refused, and the next page logged `the moving handle
+   * cannot be located`: `Moved(5, 68)` after one page. A second press, on the now-warm node, ran on.
+   */
+  /** The announcement and box [warmThenRetry] last re-asked for, so its retry never asks again. */
+  private var pageWarmedFor: String? = null
+
+  private fun warmThenRetry(
+    snapshot: SelectionObserver.Snapshot,
+    ended: (Outcome) -> Unit,
+    retry: (SelectionObserver.Snapshot) -> Unit,
+  ): Boolean {
+    /*
+     * Keyed by the node's box as well as the announcement, because a page's scroll moves the box without
+     * announcing anything, and Chrome can refuse the same node again after it. Measured 2026-10-14 on the
+     * rig, 2 runs of 5: the page step located the END on the second ask, scrolled 682 px, and the re-locate
+     * after the scroll was refused (`the handle cannot be located after the scroll`), ending the sweep.
+     */
+    val key = "${snapshot.atMs}|${snapshot.bounds}"
+    if (!snapshot.isBlink || key == pageWarmedFor) return false
+    pageWarmedFor = key
+    /*
+     * The locate that failed was the node's first ask, and "ask once to make it measure, ask again to
+     * be answered" usually holds: on the rig (2026-10-14, Chrome 143, cold) the very next ask, this
+     * check's own, answered 3 runs of 3. So locate again at once, and wait only where it is refused too.
+     */
+    if (!locator.caretRefused(snapshot, activeEdge)) {
+      Diag.log("  page: the $activeEdge's caret was measured on the second ask — locating again")
+      retry(snapshot)
+      return true
+    }
+    Diag.log("  page: the platform will not measure the $activeEdge's caret yet — asking again for up to ${CARET_WARM_MS}ms")
+    awaitCaretMeasured(snapshot, 0L) { waited, answered ->
+      if (stopRequested) {
+        Diag.log("  page warm: stopped by a touch after ${waited}ms, nothing touched")
+        ended(Outcome.Moved(snapshot.movingOffset(), snapshot.movingOffset()))
+        return@awaitCaretMeasured
+      }
+      Diag.log("  page warm: ${if (answered) "measured after ${waited}ms" else "still refused after ${waited}ms"}")
+      retry(observer.latestWithFreshBounds()?.takeIf { it.atMs == snapshot.atMs } ?: snapshot)
+    }
+    return true
+  }
+
+  /**
    * Why a grow by [command] has nowhere to go, or null when it may.
    *
    * The edge is on its node's outer caret in the direction of travel, and nothing lies beyond it: a
@@ -3505,6 +3558,7 @@ class SelectionDriver(
     val content = contentBand(before)
     val band = content?.visible ?: Rect(0, 0, gestures.screenWidth(), gestures.screenHeight())
     val located = locator.locate(before, activeEdge, toolbarCentre()) ?: run {
+      if (warmThenRetry(before, ended) { pageStep(command, it, onResult) }) return
       Diag.log("  page: the moving handle cannot be located")
       ended(unlocatedOutcome(before))
       return
@@ -3535,6 +3589,7 @@ class SelectionDriver(
       // mid-document whenever the selection is shorter than the page.
       val crossesAnchor = !growsSelection(command)
       val relocated = locator.locate(scrolled, activeEdge, toolbarCentre()) ?: run {
+        if (warmThenRetry(scrolled, ended) { dragAcross(it, atDocumentEdge, bandAfter) }) return
         Diag.log("  page: the handle cannot be located after the scroll")
         ended(unlocatedOutcome(scrolled))
         return
