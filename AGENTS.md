@@ -2316,9 +2316,31 @@ Long-press `charlie` in `Paragraph 1`, then:
 | controls: the 80 px page above, `⇟ page` ×2, `← char`, `→ char`, 2 runs; the debug target's `TextView` from `bravo` | as before | `35 -> 26 -> 23 -> 22 -> 23`; `11 -> 12 -> 11`, `11 -> 19`, `⇟ page` `19 -> 30`, `30 -> 29 -> 30` |
 
 The `⤓ end` run stopped at `Encoding 29` on a page whose swipe from (180, 1138) scrolled 0 of 1011 px
-mid-document (`short, but the page can still scroll down, so not the edge`). The drag then went
-nowhere, and the `← char` after it grabbed a wrapped heading's handle on its last row and ended
-`HandleLost`. That is tracked on its own.
+mid-document (`short, but the page can still scroll down, so not the edge`). That did not come back
+once the swipe kept off the toolbar's row (the entry above): three later sweeps of the same page ran
+about 60 pages each with no short scroll (2026-10-14, Chrome 143). But each one stopped on `Encoding 30`'s
+offset 3, and that was a defect of its own: the next entry.
+
+**Below the document's last text a page drag moves the END, but Chrome announces nothing, so the
+pointer is moved back onto the last caret before it lets go.** The gap page ends with a 1500 px empty
+`<div>`. The last page's drag from `Encoding 30`'s offset 3 down into it logged no selection event at
+all (a temporary log of every event showed none) and reported `Moved(3, 3)`, which ended the sweep. The
+screenshot showed all of `Encoding 30` selected, wrapped onto two lines, with the handle under `30`. The
+`← char` after it grabbed on the first line, where the pad thought the handle was, and ended
+`HandleLost` in 13 gestures. A hand drag that started on the drawn handle was announced `0..11` at its
+first move. So when a held page drag goes down past the END's node and announces nothing,
+`ontoTheNodesEnd` moves the pointer onto that node's last caret (`characterGeometry` at its length,
+re-asked for up to 1 s), and Chrome announces the move. Measured 2026-10-14 on the rig, Chrome 143
+force-stopped before each run:
+
+| page, presses | before | after |
+|---|---|---|
+| the gap page, `⤓ end`, `← char`, `→ char` | `Moved(35, 3)` on `Encoding 30`, 60 pages, then `HandleLost`, 2 runs | 62 pages to `0..11` (`moving onto its last caret at (634.0, 402.0)`), then `11 -> 10 -> 11`, 1 gesture each |
+| the same page cut to four paragraphs, `⤓ end`, `← char`, `→ char`, `⇤ word`, 3 runs | not measured | `35 -> 11` in 21-24 s, then `11 -> 10 -> 11`; `⇤ word` "no known word boundary yet" |
+| control: 120 one-line rows, `⇟ page` ×2, `← char`, `→ char`, `⤓ end` | as before | one band each, `23 -> 22 -> 23`, `end` to row 120's end with no move onto a caret |
+| control: the debug target's `TextView` from `bravo` | as before | `11 -> 12 -> 11`, `11 -> 19`, `⇟ page` `19 -> 30`, `30 -> 29` |
+
+The START's mirror, a drag up into empty space above the document's first text, was not measured.
 
 **A page step mid-document can cross the anchor too, and there the landing's node says nothing by
 itself**, because it can be on either side of the anchor, and Chrome announces it as `0..focus` either
