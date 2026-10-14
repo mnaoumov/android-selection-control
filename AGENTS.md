@@ -2394,6 +2394,34 @@ once the swipe kept off the toolbar's row (the entry above): three later sweeps 
 about 60 pages each with no short scroll (2026-10-14, Chrome 143). But each one stopped on `Encoding 30`'s
 offset 3, and that was a defect of its own: the next entry.
 
+**The phone confirms it (2026-10-14, OnePlus 15, Chrome 154.0.8037.127), on a page reshaped to the
+phone.** Chrome announced selections the old way (`seeded from a fresh selection`), so the
+extended-selection trial was not active. The rig's page does not keep its shape on the phone. With
+`padding-left: 420px` wider than the 363 CSS px viewport, Chrome zooms the page out to about 2.3 px per
+CSS px, and each heading's text starts at its box's right edge and runs past the screen's right edge. So
+the move along the heading's row stays inside `Encoding` and never passes the word's middle, and Chrome
+holds `0..0`. At 340px the page still zooms and the heading wraps. At 720px of margin and no zoom, the
+heading lands at y 2668..2772, under the gesture bar, and every press after the step is refused
+(`InGestureBar`). The page that keeps the rig's shape has `Para N has charlie.` paragraphs, `<h2>`s with
+`padding-left: 190px` (text at x ~723..1180, right of the END's column, x 641) and `margin-top: 530px`,
+so the heading lands just under the pad's top. Chrome was force-stopped before each run. Long-press
+`charlie` (`11..18`), then:
+
+| press, 3 runs of 3 | result |
+|---|---|
+| `⇟ page` | `moving back onto the last caret of the text before it`, `18 -> 19`, 3 gestures, 1.9 s |
+| `⇟ page` | `the text before it is where this step started — into the block instead`, `along the row -> 0..10, then onto caret 1 -> 0..1`, `Moved(19, 1, crossedNode=true)`, 4 gestures, 2.1-2.3 s |
+| `⇟ page` ×2 | `1 -> 19` (`Para 2`'s end), then `19 -> 1` into `Encoding 2` the same way |
+| `← char`, `→ char` | `1 -> 19` (the step out of a block's first character), 2 gestures; `19 -> 1` (`next block: along the row -> 0..10, then back … -> 0..1`), 3 gestures |
+| `⤓ end` | 62 page steps, 30 of them into a heading, to `Encoding 30` in 130 s and 215 gestures |
+
+The heading's row is under the pad, and the held pointer's moves along it still reach Chrome. The sweep
+ended on 9 of `Encoding 30`, not on its end. On the phone that heading wraps (`Encoding` / `30`), and
+the closing move onto its last caret aimed at (871.5, 2026), the pointer's row, not the caret's.
+The phone also showed a page step leaving the END on a row below the screen, which no later press can
+reach, and on the zoomed page, a margin step whose settle never went quiet (1 run of 3), and a node that
+could not be re-read after page 1 (1 run of 3). Both are tracked on their own.
+
 **Below the document's last text a page drag moves the END, but Chrome announces nothing, so the
 pointer is moved back onto the last caret before it lets go.** The gap page ends with a 1500 px empty
 `<div>`. The last page's drag from `Encoding 30`'s offset 3 down into it logged no selection event at
