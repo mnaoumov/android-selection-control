@@ -3060,6 +3060,10 @@ class SelectionDriver(
       releaseThenReport(start, first.movingOffset(), onDone)
       return
     }
+    if (step.growing && first.isEmpty() && first.sourceLength == step.neighbour.length) {
+      pastTheNearCaret(step, before, first, start, command, onDone)
+      return
+    }
     val aim = when {
       !step.growing -> step.aim
       !step.neighbour.holds(first) -> step.aim.also {
@@ -3087,6 +3091,99 @@ class SelectionDriver(
           "${landed.low()}..${landed.high()}"
       )
       intoTheNeighbour(step, before, landed, aim, start, command, onDone)
+    }
+  }
+
+  /**
+   * [intoTheNextBlock] for a grow whose move onto the new row left the edge on the neighbour's NEAR
+   * caret, the empty range a block's outer caret is announced as. The slide onto the caret one in is
+   * then a grow, not a shrink, and from a word's start Chrome holds the edge there. So the pointer goes
+   * on to the far end of the landing's own row first, and slides back from there, which is a shrink,
+   * aimed by the landing's own geometry ([intoTheBlock] does the same for a page drag).
+   *
+   * Measured 2026-10-14 on the rig, Chrome 143, a served page of one-line `<p>`s each followed by an
+   * `<h2>` indented 420 px by its padding: from a paragraph's last caret `→ char` went straight down at
+   * the handle's column, x 466, which is left of the heading's text (`576..720`), and landed on `0..0`
+   * of the heading's text node. The slide to x 614 stayed on `0..0`, and the lift collapsed the
+   * selection (`HandleLost`). The tree walk's neighbour is the `<h2>`, whose box is its padding box
+   * (`21..576`), so the aim cannot come from it, and [NeighbourCaret.holds] cannot match the landing
+   * to it by column. The landing's length is what says it is the neighbour.
+   */
+  private fun pastTheNearCaret(
+    step: BlockStep,
+    before: SelectionObserver.Snapshot,
+    first: SelectionObserver.Snapshot,
+    start: Int,
+    command: PadCommand,
+    onDone: (Outcome) -> Unit,
+  ) {
+    val bounds = first.bounds
+    val at = gestures.heldAt()
+    if (bounds == null || at == null) {
+      Diag.log("  next block: on the neighbour's near caret, with ${if (bounds == null) "no box" else "nothing held"} — letting go")
+      releaseThenReport(start, first.movingOffset(), onDone)
+      return
+    }
+    val farX = if (command.toRight) {
+      minOf(handleX(bounds.right.toFloat()), (gestures.screenWidth() - EDGE_INSET).toFloat())
+    } else {
+      maxOf(handleX(bounds.left.toFloat()), EDGE_INSET.toFloat())
+    }
+    val far = PointF(farX, at.y)
+    Diag.log(
+      "  next block: the move onto its row left the edge on the neighbour's near caret — on along its row to " +
+        "(${far.x}, ${far.y}) first, then back"
+    )
+    gestureCount++
+    if (!gestures.moveHeld(far)) {
+      Diag.log("  held: the move along the neighbour's row was refused")
+      gestures.releaseHeld { onDone(Outcome.HandleLost) }
+      return
+    }
+    awaitChange(first) { second ->
+      val along = second ?: first
+      if (along.isEmpty() || nodeKey(along) != nodeKey(first)) {
+        Diag.log("  next block: along the row -> ${along.low()}..${along.high()}, not in the neighbour — letting go")
+        releaseThenReport(start, along.movingOffset(), onDone)
+        return@awaitChange
+      }
+      val target = blockTarget(step, before, along, command, start)
+      if (target == null) {
+        Diag.log("  next block: along the row -> ${along.low()}..${along.high()}, and no caret one in to aim at — letting go")
+        releaseThenReport(start, along.movingOffset(), onDone)
+        return@awaitChange
+      }
+      // Asked again with the pointer held, as [locateHeld] does: a block step's landing is often cold.
+      fun measured(waited: Long) {
+        val caret = locator.characterGeometry(along, activeEdge, crossingOf(command), target)
+        if (caret == null && waited < CARET_WARM_MS && !stopRequested) {
+          handler.postDelayed({ measured(waited + CARET_WARM_POLL_MS) }, CARET_WARM_POLL_MS)
+          return
+        }
+        if (caret == null) {
+          Diag.log("  next block: caret $target of the landing will not measure, after ${waited}ms — letting go")
+          releaseThenReport(start, along.movingOffset(), onDone)
+          return
+        }
+        if (waited > 0) Diag.log("  next block: caret $target of the landing measured after ${waited}ms")
+        val back = PointF(handleX(caret.caretX), far.y)
+        val landedStep = BlockStep(back, step.growing, NeighbourCaret(caret, along.sourceLength, bounds), step.skipsWrapSpace)
+        gestureCount++
+        if (!gestures.moveHeld(back)) {
+          Diag.log("  held: the slide back onto the neighbour's caret was refused")
+          gestures.releaseHeld { onDone(Outcome.HandleLost) }
+          return
+        }
+        awaitChange(along) { third ->
+          val landed = third ?: along
+          Diag.log(
+            "  next block: along the row -> ${along.low()}..${along.high()}, then back to (${back.x}, ${back.y}) -> " +
+              "${landed.low()}..${landed.high()}"
+          )
+          intoTheNeighbour(landedStep, before, landed, back, start, command, onDone)
+        }
+      }
+      measured(0)
     }
   }
 
