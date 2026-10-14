@@ -1019,6 +1019,40 @@ running its whole second. Then `← char` three times:
 No press logged `next block: the edge is on its block's first caret`, `HandleLost` or `cannot see a
 selection`, and the screenshots showed one character fewer selected each time.
 
+**Chrome draws a superscript caret's handle at its LINE's bottom, not the superscript box's, so a
+row change out of one can land a line too far.** Chrome keeps the finger's offset from its own handle
+and hit-tests at the handle's midline, so a row change has half a line of slack. The pad's delta comes
+from the superscript's box, which ends above the line. On the handset (2026-10-14, Wikipedia's
+`Text_editor`) `→ char` from `0..1` of `]` in `Notepad.[1][2][3]`, back down into the Mousepad caption
+whose `Editors like ` holds the anchor, landed on the caption's second line, past the anchor:
+`Moved(0, 18)` in 2 gestures, the selection on `Mousepad, shown here, are`, in 1 run of 2. The rig
+reproduces it with `Lead text row is here.<sup><a><span>[</span>1<span>]</span></a></sup>` above the
+served thumbnail page, the `<sup>` styled `vertical-align:12px; font-size:11px`. Its box ended at y 329
+and its line at 355, and Chrome drew the START handle at about 355..395. Hand drags (`input motionevent`)
+onto the caption's row changed line between 10 and 18 px past the aim, on a 33 px line. A plain
+`<sup>` (14 px gap) stayed on line 1. So `intoTheNeighbour` now does two more things when a block step
+lands in a node other than the neighbour:
+
+- **It locates the landing with the pointer held** (`locateHeld`), re-asking every 100 ms for up to
+  1 s. The caption's wrapped tail was cold, and the press used to let go there.
+- **A SHRINK moves back a row as well** (`ontoTheNeighbour`), by the gap between the landed handle and
+  the neighbour's, when that gap is half the neighbour's line or more in the direction of travel. A
+  grow keeps its row, because its neighbour's row can come from a block's box.
+
+Measured 2026-10-14 on the rig, Chrome 143 force-stopped before each run. Long-press `like`, `⇄ swap`,
+`⇤ word` to `0..12`, then the presses below:
+
+| press | old build | new build |
+|---|---|---|
+| `← char` from the caption's caret 0 | onto `]`, 2 gestures | the same, 3 runs of 3 |
+| `→ char` back | `18..63` of `, shown here, …` on line 2, `letting go`, `Moved(0, 18)` in 2 gestures, `Mousepad, shown here, are` selected; 1 run of 1 | landed on line 2, `located after 100ms`, the pointer moved 34 px up, `0..12`, 3 gestures, 2.3 s; `Editors like` selected; 4 runs of 4 |
+| then `→ char`, `← char` | not reached | `0 -> 1 -> 0`, 1 gesture each, 3 runs of 3 |
+| control: the page without the `<sup>`, the same presses, 2 runs | `0 -> 21 -> 0`, `0 -> 1 -> 0` | the same |
+| control: one-line rows, END `→ char`, `← char`, `⇥ word`; START `← char`, `→ char`, `← char`, 2 runs | `29 -> 1 -> 29`, `29 -> 4`; `0 -> 28 -> 0 -> 28` | the same |
+| control: the debug target's `TextView` from `bravo` | `11 -> 12 -> 11`, `11 -> 19` | the same |
+
+The phone has not run the fix.
+
 **A char grow from a node's outer caret into the next node ON THE SAME ROW aims at that node's first
 character, not by the node it leaves.** The `char →` from `environment`'s end used to reach 20 px,
 `environment`'s average, past the 12 px `.` node, and the grab's slop detour (17 px here) went further
