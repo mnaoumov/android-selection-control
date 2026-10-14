@@ -3712,6 +3712,13 @@ class SelectionDriver(
    */
   var forceShortScroll = false
 
+  /**
+   * Set by [intoTheBlockAt] when the block a page step meant to enter has its text beyond the screen's
+   * side, so the step went back to where it began. A page step that made no progress for that reason
+   * reports `stopped at the screen's edge` rather than `didn't move`. Cleared by every page step.
+   */
+  private var blockBeyondScreenEdge = false
+
   fun requestStop() {
     Diag.log("stop requested")
     stopRequested = true
@@ -3755,7 +3762,8 @@ class SelectionDriver(
         gestures.releaseHeld { ended(Outcome.HandleLost) }
         return@grabAndHold
       }
-      awaitChange(scrolled, maxMs = MAX_PAGE_SETTLE_MS) { landed ->
+      awaitChange(scrolled, maxMs = MAX_PAGE_SETTLE_MS) { settled ->
+        val landed = settled?.let { flappedOntoBlocksFirstCaret(scrolled, it) } ?: settled
         /*
          * Not the corner drag to the document's START, because an END that reaches the first text's
          * caret 0 there has crossed the anchor, and that `0..0` is the START, which [crossTheAnchor]
@@ -3859,6 +3867,29 @@ class SelectionDriver(
       awaitChange(scrolled) { _ -> release() }
     }
     measured(0)
+  }
+
+  /**
+   * The block's-first-caret announcement a settle passed over, when the drag left the END on the seam
+   * between the step's own node and the next block, which is ONE caret in two frames.
+   *
+   * Chrome can announce that caret in both, back and forth, for as long as the pointer stays there.
+   * Measured 2026-10-14 on the handset (Chrome 154, a zoomed-out page of one-line `<p>`s, each with an
+   * indented `<h2>` 720 px below): page 2's drag logged `an END announced 0..0` in `Encoding 1` nine
+   * times in 600 ms and `settle: never went quiet`, and the settle ended on the other frame, the
+   * paragraph's own end. So [endOnBlocksFirstCaret] never fired, the lift took the `0..0`, the press
+   * ended `HandleLost`, and the pad was blind after it. Where the settle ends on the step's node at its
+   * last caret, an announcement of the block's first caret since the scroll is taken as the landing.
+   */
+  private fun flappedOntoBlocksFirstCaret(
+    scrolled: SelectionObserver.Snapshot,
+    settled: SelectionObserver.Snapshot,
+  ): SelectionObserver.Snapshot? {
+    if (activeEdge != Edge.END || endOnBlocksFirstCaret(settled)) return null
+    if (!sameNode(scrolled, settled) || settled.movingOffset() != settled.sourceLength) return null
+    val block = observer.announcedSince(scrolled.atMs).lastOrNull { endOnBlocksFirstCaret(it) } ?: return null
+    Diag.log("  page: the settle ended on the node's last caret, and the same caret was announced as a block's first (${describeNode(block)})")
+    return block
   }
 
   /**
@@ -4061,18 +4092,33 @@ class SelectionDriver(
   ) {
     val block = nodeKey(landed)
     val row = one.lineBottom + locator.handleDrop
-    val rowEnd = PointF(minOf(handleX(bounds.right.toFloat()), (gestures.screenWidth() - EDGE_INSET).toFloat()), row)
+    val screenRowEnd = (gestures.screenWidth() - EDGE_INSET).toFloat()
+    val boxRowEnd = PointF(minOf(handleX(bounds.right.toFloat()), screenRowEnd), row)
     val caretOne = PointF(handleX(one.caretX), row)
     /*
      * A move along the row that does not pass caret 1 is not a grow. On a zoomed-out page the
      * heading's text starts at its box's right edge and runs past the screen's: measured 2026-10-14 on
      * the handset, `growing along the block's row to (1040.5, 2822.0), then back onto its caret 1 at
      * 1072.5` went LEFT, landed `0..0`, and the press ended `HandleLost` with the pad blind after it.
+     *
+     * **The box is not where that text ends, so the row end is the screen's.** Chrome reports such a
+     * heading's text box as ending left of its own first glyph: on the `handset` profile (2026-10-14,
+     * Chrome 143, the page zoomed out by a 44 px `<h2>` indented 420 px) the box was
+     * `Rect(32, 1834 - 897, 2048)` with caret 1 measured at 946 and `Encoding` drawn from ~903 past
+     * the screen's right edge. So where the box's end is short of caret 1 the move goes to the screen's
+     * side instead, which is past the first word's middle whenever the word is wider than the space
+     * left on screen. Where even that is not past caret 1, the block's text is beyond the screen, and
+     * the step reports that it stopped at the screen's edge ([blockBeyondScreenEdge]).
      */
+    val rowEnd = if (boxRowEnd.x > caretOne.x) boxRowEnd else PointF(screenRowEnd, row)
     if (rowEnd.x <= caretOne.x) {
-      Diag.log("  page: the block's row end (${rowEnd.x}) is not past its caret 1 (${caretOne.x}) — moving back")
+      Diag.log("  page: the block's row end (${rowEnd.x}) is not past its caret 1 (${caretOne.x}) — its text is beyond the screen's edge, moving back")
+      blockBeyondScreenEdge = true
       moveBack(landed)
       return
+    }
+    if (rowEnd !== boxRowEnd) {
+      Diag.log("  page: the block's box ends at ${bounds.right}, short of its caret 1 (${caretOne.x}) — growing along its row to the screen's edge instead")
     }
     /*
      * A dispatched point is clamped to the screen, and Chrome hit-tests a handle drag about a drop above
@@ -4099,6 +4145,8 @@ class SelectionDriver(
       val along = first ?: landed
       if (along.isEmpty() || nodeKey(along) != block) {
         Diag.log("  page: the move along the block's row -> ${along.low()}..${along.high()}, not into the block — moving back")
+        // The row ran to the screen's side and still did not pass the first word's middle.
+        if (rowEnd !== boxRowEnd || rowEnd.x >= screenRowEnd) blockBeyondScreenEdge = true
         moveBack(along)
         return@awaitChange
       }
@@ -4185,7 +4233,9 @@ class SelectionDriver(
         onDone(fallback)
         return
       }
-      onDone(Outcome.Moved(originOffset, now.movingOffset(), !sameNode(origin, now)))
+      // A sweep that ended on a block whose text is beyond the screen's side says so.
+      val atScreenEdge = (fallback as? Outcome.Moved)?.stoppedAtScreenEdge == true
+      onDone(Outcome.Moved(originOffset, now.movingOffset(), !sameNode(origin, now), stoppedAtScreenEdge = atScreenEdge))
     }
     fun next(pages: Int) {
       if (stopRequested) {
@@ -4240,6 +4290,7 @@ class SelectionDriver(
     onResult: (PageStep) -> Unit,
   ) {
     val ended: (Outcome) -> Unit = { onResult(PageStep(it, atDocumentEdge = false)) }
+    blockBeyondScreenEdge = false
     if (before.isEmpty()) {
       ended(Outcome.NoSelection)
       return
@@ -4328,7 +4379,9 @@ class SelectionDriver(
             // boundary. Forget the set's node and record nothing.
             val crossed = !sameNode(before, after)
             if (crossed) forgetBoundaries(after)
-            Outcome.Moved(from, after.movingOffset(), crossed)
+            Outcome.Moved(from, after.movingOffset(), crossed).let { moved ->
+              if (blockBeyondScreenEdge && !moved.madeProgress()) moved.copy(stoppedAtScreenEdge = true) else moved
+            }
           }
         }
         Diag.log("  page: drag to (${target.x}, ${target.y}) -> $outcome announced=${after != null}")
