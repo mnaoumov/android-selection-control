@@ -1588,6 +1588,19 @@ force-stopped before each run:
 | control: long-press `alpha` on row 001, `→ char`, END dragged by hand down to row 005 | `0..22`, `0..4`, `0..42`, `0..8`, each `not a fresh selection` |
 | control: a tap, then long-press `alpha` on row 005 | `seeded from a fresh selection at 12..17` |
 
+**The phone confirms it (2026-10-14, OnePlus 15, Chrome 154.0.8037.127).** Chrome announced selections
+the old way (`seeded from a fresh selection`), so the extended-selection trial was not active. The same
+served page, over `adb reverse`. The service was rebound and Chrome force-stopped before each run.
+Long-press `alpha` on row 005 (`12..17`), `⇄ swap`, `← char` (`12 -> 11`, 1 gesture), then the START
+dragged by hand (`input motionevent`) from its handle at (431, 1450) up through the `Plain text …`
+paragraph onto the seam after `As `:
+
+| sequence, 3 runs of 3 | result |
+|---|---|
+| the START drag | `a handle dragged into another node at 10..42: not a fresh selection` (the `Plain text …` paragraph), then at `0..11` (re-homed off `As `'s last caret by `startAfterSeam`); nothing seeded |
+| then `← char`, `→ char` ×2, `← char` ×2 | `0 -> 2` (of `As `) `-> 0 -> 1 -> 0 -> 2`, 1 gesture each, 0.58-0.75 s, `boundaries=[]`; the screenshot showed the selection starting at the space after `As` |
+| control: a tap, then long-press `alpha` on row 005 | `seeded from a fresh selection at 12..17` |
+
 **All three of those claims are now measured, not reasoned** (2026-09-23, the rig, against the debug
 target's `alpha bravo charlie delta echo` whose boundaries are 5, 11, 19 and 25, so every expected
 number was known before the press):
