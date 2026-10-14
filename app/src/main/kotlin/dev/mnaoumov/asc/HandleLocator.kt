@@ -992,6 +992,28 @@ class HandleLocator(private val density: () -> Float) {
   }
 
   /**
+   * [aim], moved up out of the bottom system-gesture zone that starts at [zoneTop], or null when no
+   * part of the handle above the zone is within reach.
+   *
+   * A touch-down in that zone belongs to the system, whichever window is drawn there. Moved up, it is
+   * Home or Recents, and sideways it switches apps. Measured 2026-10-13 on the rig (gesture
+   * navigation, the zone `[0,1456][720,1520]`): `⤒ start` from an END on a document's last row
+   * grabbed at y 1465 and dragged up, and the launcher came to the front. The handle hangs below its
+   * line, so its top half is usually above the zone. The aim moves just above the zone, as
+   * [clearOfToolbar] moves it above the toolbar, within [HANDLE_REACH_DP] of the centre and below the
+   * text line.
+   */
+  fun clearOfGestureBar(aim: PointF, zoneTop: Int): PointF? {
+    val margin = TOOLBAR_MARGIN_DP * density()
+    val above = zoneTop - margin
+    if (aim.y < above) return aim
+    val lineBottom = aim.y - handleDrop
+    return if (aim.y - above <= HANDLE_REACH_DP * density() &&
+      above >= lineBottom + TEXT_CLEARANCE_DP * density()
+    ) PointF(aim.x, above) else null
+  }
+
+  /**
    * Did that drag move a handle, or wreck the selection?
    *
    * A grab keeps the anchor: one edge holds while the other moves, and the range stays non-empty. A
