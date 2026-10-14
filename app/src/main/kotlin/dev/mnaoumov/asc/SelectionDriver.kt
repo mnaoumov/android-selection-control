@@ -3416,7 +3416,7 @@ class SelectionDriver(
       }
       awaitChange(scrolled, maxMs = MAX_PAGE_SETTLE_MS) { landed ->
         if (landed != null && endOnBlocksFirstCaret(landed)) {
-          backOntoPreviousText(landed, ended, report)
+          backOntoPreviousText(scrolled, landed, ended, report)
           return@awaitChange
         }
         // The landing as it arrived: the START frame reads a text-less caret in the text after it.
@@ -3472,31 +3472,152 @@ class SelectionDriver(
    * row. Moving the pointer onto the previous block's last caret is a shrink, which is
    * character-granular, so it lands there, and that frame has a range: `0..length`. The page gives
    * up the one character, which a page step does not count.
+   *
+   * Where that caret is the one the step started from, the page goes INTO the block instead
+   * ([intoTheBlock]), because a margin taller than a page brings every later page back to it.
    */
   private fun backOntoPreviousText(
+    scrolled: SelectionObserver.Snapshot,
     landed: SelectionObserver.Snapshot,
     ended: (Outcome) -> Unit,
     report: (SelectionObserver.Snapshot?) -> Unit,
   ) {
     val caret = locator.adjacentNodeCaret(landed, forward = false, oneIn = false)
     if (caret == null) {
-      Diag.log("  page: the drag left the END on a block's first caret, and no text before it measures")
-      gestures.releaseHeld { report(observer.latest) }
+      Diag.log("  page: the drag left the END on a block's first caret, and no text before it measures — into the block instead")
+      intoTheBlock(landed, ended, report) { gestures.releaseHeld { report(observer.latest) } }
       return
     }
-    val aim = PointF(handleX(caret.geometry.caretX), caret.geometry.lineBottom + locator.handleDrop)
-    Diag.log(
-      "  page: the drag left the END on a block's first caret (${describeNode(landed)}) — " +
-        "moving back onto the last caret of the text before it at (${aim.x}, ${aim.y})"
-    )
+    fun moveBack(from: SelectionObserver.Snapshot) {
+      val aim = PointF(handleX(caret.geometry.caretX), caret.geometry.lineBottom + locator.handleDrop)
+      Diag.log(
+        "  page: the drag left the END on a block's first caret (${describeNode(landed)}) — " +
+          "moving back onto the last caret of the text before it at (${aim.x}, ${aim.y})"
+      )
+      gestureCount++
+      if (!gestures.moveHeld(aim)) {
+        Diag.log("  held: the move back onto the text was refused")
+        gestures.releaseHeld { ended(Outcome.HandleLost) }
+        return
+      }
+      awaitChange(from) { _ ->
+        gestures.releaseHeld { awaitQuiet(observer.latest ?: return@releaseHeld report(null), 0, report) }
+      }
+    }
+    if (caret.holds(scrolled) && scrolled.movingOffset() == scrolled.sourceLength) {
+      Diag.log("  page: the drag left the END on a block's first caret, and the text before it is where this step started — into the block instead")
+      intoTheBlock(landed, ended, report, ::moveBack)
+    } else {
+      moveBack(landed)
+    }
+  }
+
+  /**
+   * A page drag that left the END on a block's first caret when the step STARTED on the last caret of
+   * the text before it: move the held pointer onto the block's row end, then slide back onto its caret
+   * 1, and let go. [moveBack] is [backOntoPreviousText]'s move, for where the block cannot be entered.
+   *
+   * Moving back would land on the caret the step began on. Measured 2026-10-14 on the rig, Chrome 143,
+   * a served page of one-line `<p>`s each followed by an `<h2>` 720 px further down (indented by 420 px):
+   * the first `⇟ page` went `27 -> 36` (the paragraph's end) and the second `36 -> 36`, "didn't move",
+   * because the margin was taller than the band and every later page landed in it again. `⤓ end` stopped
+   * there too.
+   *
+   * The two moves are the block step's grow ([blockStep]): a pointer aimed straight at caret 1 is
+   * announced `0..0`, while one that first grows the edge along the block's row and then slides back
+   * onto the caret, a shrink, lands on it. A landing on `0..0` after the slide is put back on the row
+   * end, which is inside the block and has a range.
+   *
+   * It is also the way on where the text before the block will not measure, so the move back cannot be
+   * aimed. Measured on the rig the same day: `⤓ end` on that page ran 47 pages and then ended
+   * `HandleLost` on a cold paragraph that refused both asks (`no text before it measures`).
+   *
+   * The block is read from the landing's own node, which is the block's text: the tree walk finds the
+   * `<h2>`, whose box on the rig was `(21, 1269 - 576, 1351)` against its text's `(576, 1269 - 720, 1351)`,
+   * indented by its padding.
+   *
+   * The slide lands on 3, not 1: the move along the row snaps to the word's end (`0..8`), and Chrome's
+   * shrink keeps the lead that snap built up (the held grab's detour in AGENTS.md). A page does not
+   * count characters, and the edge is inside the block with its handle drawn, so that is left alone.
+   */
+  private fun intoTheBlock(
+    landed: SelectionObserver.Snapshot,
+    ended: (Outcome) -> Unit,
+    report: (SelectionObserver.Snapshot?) -> Unit,
+    moveBack: (SelectionObserver.Snapshot) -> Unit,
+  ) {
+    val bounds = landed.bounds ?: return moveBack(landed)
+    /*
+     * Asked again every [CARET_WARM_POLL_MS] for up to [CARET_WARM_MS], with the pointer held, because a
+     * sweep's page lands on a node nobody has asked yet, and the first ask only makes it measure. On the
+     * rig the same `⤓ end` met a heading and the paragraph before it both cold on page 32.
+     */
+    fun measured(waited: Long) {
+      val one = locator.characterGeometry(landed, activeEdge, Crossing.RIGHTWARD, 1)
+      if (one == null && waited < CARET_WARM_MS && !stopRequested) {
+        handler.postDelayed({ measured(waited + CARET_WARM_POLL_MS) }, CARET_WARM_POLL_MS)
+        return
+      }
+      if (one == null) {
+        Diag.log("  page: the block's caret 1 will not measure either, after ${waited}ms")
+        moveBack(landed)
+        return
+      }
+      if (waited > 0) Diag.log("  page: the block's caret 1 measured after ${waited}ms")
+      intoTheBlockAt(landed, bounds, one, ended, report, moveBack)
+    }
+    measured(0)
+  }
+
+  /** [intoTheBlock]'s two moves, once the block's caret 1 has measured as [one]. */
+  private fun intoTheBlockAt(
+    landed: SelectionObserver.Snapshot,
+    bounds: Rect,
+    one: CharacterGeometry,
+    ended: (Outcome) -> Unit,
+    report: (SelectionObserver.Snapshot?) -> Unit,
+    moveBack: (SelectionObserver.Snapshot) -> Unit,
+  ) {
+    val block = nodeKey(landed)
+    val row = one.lineBottom + locator.handleDrop
+    val rowEnd = PointF(minOf(handleX(bounds.right.toFloat()), (gestures.screenWidth() - EDGE_INSET).toFloat()), row)
+    val caretOne = PointF(handleX(one.caretX), row)
+    Diag.log("  page: growing along the block's row to (${rowEnd.x}, ${rowEnd.y}), then back onto its caret 1 at ${caretOne.x}")
+    fun release() = gestures.releaseHeld { awaitQuiet(observer.latest ?: return@releaseHeld report(null), 0, report) }
     gestureCount++
-    if (!gestures.moveHeld(aim)) {
-      Diag.log("  held: the move back onto the text was refused")
+    if (!gestures.moveHeld(rowEnd)) {
+      Diag.log("  held: the move along the block's row was refused")
       gestures.releaseHeld { ended(Outcome.HandleLost) }
       return
     }
-    awaitChange(landed) { _ ->
-      gestures.releaseHeld { awaitQuiet(observer.latest ?: return@releaseHeld report(null), 0, report) }
+    awaitChange(landed) { first ->
+      val along = first ?: landed
+      if (along.isEmpty() || nodeKey(along) != block) {
+        Diag.log("  page: the move along the block's row -> ${along.low()}..${along.high()}, not into the block — moving back")
+        moveBack(along)
+        return@awaitChange
+      }
+      gestureCount++
+      if (!gestures.moveHeld(caretOne)) {
+        Diag.log("  held: the slide onto the block's caret 1 was refused")
+        release()
+        return@awaitChange
+      }
+      awaitChange(along) { second ->
+        val now = second ?: along
+        Diag.log("  page: along the row -> ${along.low()}..${along.high()}, then onto caret 1 -> ${now.low()}..${now.high()}")
+        if (!now.isEmpty()) {
+          release()
+          return@awaitChange
+        }
+        Diag.log("  page: the slide reached the block's first caret — back to the row end")
+        gestureCount++
+        if (!gestures.moveHeld(rowEnd)) {
+          release()
+          return@awaitChange
+        }
+        awaitChange(now) { _ -> release() }
+      }
     }
   }
 
