@@ -2226,6 +2226,10 @@ class SelectionDriver(
    *    boundary is the stop: with `[10, 21]` seeded by the long-press, three presses of three landed
    *    on 21 in 2 gestures. The debug target's walk is unchanged by either: 21 -> 25 through `delta`.
    *
+   * **Where the carets are measured, each travel goes to the next caret, not one width on from the
+   * pointer** ([caretAim]): Chrome's rectangles overlap, so widths added to the pointer drift ahead of
+   * the carets until a push crosses two characters.
+   *
    * Falls back to [growOneUnit] whenever the chain will not start: slower and less exact, but the
    * old behaviour rather than a regression.
    */
@@ -2243,9 +2247,12 @@ class SelectionDriver(
     val handle = uncovered(located, onDone) ?: return
     val origin = before.movingOffset()
     val reach = (if (command.toRight) 1f else -1f) * pixelsPerCharacter(before, crossingOf(command))
+    val grabOffset = locator.characterGeometry(before, activeEdge, crossingOf(command), origin, quiet = true)
+      ?.let { handle.x - it.caretX }
+    val firstX = caretAim(command, before, grabOffset, handle.x) ?: (handle.x + reach)
 
     gestureCount++
-    gestures.grabAndHold(handle, PointF(handle.x + reach, handle.y), detourBack = true) { grabbed ->
+    gestures.grabAndHold(handle, PointF(firstX, handle.y), detourBack = true) { grabbed ->
       if (!grabbed) {
         Diag.log("  word walk: the grab was refused — falling back to a plain grow")
         growOneUnit(command, onDone = onDone)
@@ -2263,7 +2270,7 @@ class SelectionDriver(
           }
           else -> {
             if (after != null) locator.rememberAnchor(handle.x - reach.coerceAtLeast(0f))
-            walkHeldToWordEnd(command, origin, before, after, onDone)
+            walkHeldToWordEnd(command, origin, before, after, onDone, grabOffset = grabOffset)
           }
         }
       }
@@ -2287,6 +2294,8 @@ class SelectionDriver(
     pushes: Int = 1,
     // Whether the push that produced [after] was sized by a glyph the platform measured.
     pushWasMeasured: Boolean = false,
+    // The pointer's distance from the moving caret at the grab. See [caretAim].
+    grabOffset: Float? = null,
   ) {
     val current = before.movingOffset()
     val crossed = after != null && before.source != null && after.source != null && before.source != after.source
@@ -2323,12 +2332,12 @@ class SelectionDriver(
           }
           return
         }
-        pushHeld(command, origin, before, onDone, silentPushes + 1, stepped, pushes)
+        pushHeld(command, origin, before, onDone, silentPushes + 1, stepped, pushes, grabOffset)
       }
       moved < 0 -> {
         // The grab's first move event takes the platform's shrinking branch and can pull the edge
         // back a character (see [heldSnapThrough]). Keep walking from where it is.
-        pushHeld(command, origin, after, onDone, 0, stepped, pushes)
+        pushHeld(command, origin, after, onDone, 0, stepped, pushes, grabOffset)
       }
       // A boundary the set already knows is the word's end on every surface, and on Chrome it is the
       // only one there is: Chrome does not hold at a word's end, it steps on through the space.
@@ -2336,7 +2345,7 @@ class SelectionDriver(
         Diag.log("  word walk: reached the known boundary ${after.movingOffset()}")
         pullBackThenRelease(origin, after.movingOffset(), onDone)
       }
-      moved == 1 -> pushHeld(command, origin, after, onDone, 0, true, pushes)
+      moved == 1 -> pushHeld(command, origin, after, onDone, 0, true, pushes, grabOffset)
       else -> {
         Diag.log("  word walk: jumped $current -> ${after.movingOffset()} — taking it as the step, recording nothing")
         releaseThenReport(origin, after.movingOffset(), onDone)
@@ -2408,6 +2417,7 @@ class SelectionDriver(
     silentPushes: Int,
     stepped: Boolean,
     pushes: Int,
+    grabOffset: Float?,
   ) {
     val at = gestures.heldAt()
     if (at == null) {
@@ -2424,7 +2434,7 @@ class SelectionDriver(
     // answer reads as unmeasured: the safe side, which keeps the two-push rule.
     val measured = locator.characterGeometry(from, activeEdge, crossingOf(command)) != null
     val reach = (if (command.toRight) 1f else -1f) * pixelsPerCharacter(from, crossingOf(command))
-    val x = (at.x + reach).coerceIn(0f, (gestures.screenWidth() - 1).toFloat())
+    val x = (caretAim(command, from, grabOffset, at.x) ?: (at.x + reach)).coerceIn(0f, (gestures.screenWidth() - 1).toFloat())
     gestureCount++
     if (!gestures.moveHeld(PointF(x, at.y))) {
       Diag.log("  word walk: the move was refused at ${from.movingOffset()}")
@@ -2441,8 +2451,38 @@ class SelectionDriver(
         onDone(Outcome.HandleLost)
         return@awaitChange
       }
-      walkHeldToWordEnd(command, origin, from, after, onDone, silentPushes, stepped, pushes + 1, measured)
+      walkHeldToWordEnd(command, origin, from, after, onDone, silentPushes, stepped, pushes + 1, measured, grabOffset)
     }
+  }
+
+  /**
+   * Where the held pointer goes for the word walk's next push: the MEASURED caret one character on
+   * from [from]'s moving edge, plus [grabOffset], the pointer's distance from the caret at the grab.
+   * Null where either caret is unmeasured, the next caret is on another row, or the aim would not move
+   * the pointer forward; the caller then adds one glyph's width to where the pointer is.
+   *
+   * Adding a width to the pointer drifts, because Chrome's rectangles are rounded out and overlap their
+   * neighbours by about 2 px. Measured 2026-10-14 on the rig, Chrome 143, a word walk from `0..1` of a
+   * link `Simple text editors`: carets 56, 64, 100, 122, 132 for offsets 1 to 5, and widths of 10, 38
+   * and 24 px for the `i`, `m` and `p`. The pointer went 84, 122, 146 against carets 64, 100, 122 plus
+   * the grab's 18 px: 2, 4 and then 6 px ahead. At 146 it was nearer the caret of 5 than of 4, so the
+   * push moved two characters and the walk took that as a snap and ended on 5, inside the word. Chrome
+   * keeps the finger's offset from its handle from the touch-down, so the caret plus that offset puts
+   * the handle on the caret itself, wherever the pointer was before.
+   */
+  private fun caretAim(command: PadCommand, from: SelectionObserver.Snapshot, grabOffset: Float?, pointerX: Float): Float? {
+    if (grabOffset == null) return null
+    val crossing = crossingOf(command)
+    val current = from.movingOffset()
+    val next = current + if (command.toRight) 1 else -1
+    if (next !in 0..from.sourceLength) return null
+    val here = locator.characterGeometry(from, activeEdge, crossing, current, quiet = true) ?: return null
+    val there = locator.characterGeometry(from, activeEdge, crossing, next, quiet = true) ?: return null
+    if (kotlin.math.abs(there.lineBottom - here.lineBottom) > HandleLocator.LIE_TOLERANCE) return null
+    val x = there.caretX + grabOffset
+    if ((x - pointerX) * (if (command.toRight) 1f else -1f) <= 0f) return null
+    Diag.log("  word walk: aiming at the measured caret of $next (${there.caretX}) + $grabOffset, not ${pointerX} + a width")
+    return x
   }
 
   /** The node's width over its length where it is one line, otherwise whatever a step can measure. */

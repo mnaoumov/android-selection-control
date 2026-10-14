@@ -1622,6 +1622,30 @@ the handle into `down`: four grabs of four landed on 23, and Chrome kept it ther
 came back. The walk's grab now detours toward the anchor (`grabAndHold(detourBack = true)`). The
 debug target's walk is unchanged by both: 21 -> 25 through `delta`, on the hold.
 
+**Each push goes to the next MEASURED caret, not one glyph's width on from the pointer, because the
+widths overlap and the pointer drifts ahead.** Measured 2026-10-14 on the rig, Chrome 143, a served
+`<p><a>Simple text editors</a>, such as …</p>` under one-line rows: `⇥ word` from `here` (`24..28`)
+took the block step onto `0..1` of the link, and the walk went `0..2`, `0..3`, then `0..5`, reported
+as a word. The link's carets for offsets 1 to 5 are 56, 64, 100, 122 and 132, and the `i`, `m` and `p`
+it crossed are 10, 38 and 24 px wide, about 2 px more than the gaps between carets. The grab put the
+pointer 18 px right of the caret, and the pushes took it to 84, 122 and 146, which is 2, 4 and then
+6 px further ahead. At 146 it was nearer the caret of 5 than of 4, so the push moved two characters,
+and the walk took that as a snap. Chrome keeps the finger's offset from its handle from the touch-down,
+so `SelectionDriver.caretAim` puts the pointer at the next caret plus the grab's offset. It falls back
+to a width where a caret is unmeasured or on another row. After the change, Chrome force-stopped
+before each run:
+
+| presses | before | after |
+|---|---|---|
+| `⇥ word`, `⇥ word`, `← char` from `here`, 4 runs | `28 -> 5`, inside `Simple`, 5 gestures | `28 -> 7` (`Simple `, the next word's start) in 9 gestures and ~3.5 s, then `7 -> 11` (`text `), `11 -> 10` |
+| control: `→ char` ×2 from `alpha` on row 004, `⇥ word` ×2, `← char`, 2 runs | `19 -> 23 -> 28`, `28 -> 27` | the same |
+| control: the debug target's `TextView`, `→ char` ×2 from `charlie`, `⇥ word` | `21 -> 25` | `21 -> 25` |
+
+A `TextView`'s rectangles do not overlap, so there the aim is the old one to the pixel. Its walk from
+21 landed on 25 at the grab in some sittings and walked 22, 23, 24, 25 in others. The old build did
+both, and the grab's coordinates were identical, so that is the grab's sampling (the word-snap entry
+above), not this change.
+
 **The same hold catches a released `word →` from a word's end: one character on is the next word's
 START, not a step.** Measured 2026-09-24 on the served seven-line paragraph, Chrome force-stopped:
 from 43, the end of `of`, a 1.5-glyph reach landed on 44, the start of `selecting`, and the pad used to
