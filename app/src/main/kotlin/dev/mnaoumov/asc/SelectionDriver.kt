@@ -626,7 +626,16 @@ class SelectionDriver(
         "boundaries=$knownBoundaries"
     )
 
-    val report: (Outcome) -> Unit = { outcome ->
+    val report: (Outcome) -> Unit = { reported ->
+      /*
+       * Offsets in two nodes say nothing next to each other, so a move that ended in another node is
+       * a crossing however its numbers compare. `char ←` out of `[4]` (`0..1`) onto the seam before it
+       * is `0..1` of the `.` node: `Moved(1, 1)`, which read as "didn't move" and would stop a run.
+       */
+      val landing = observer.latest
+      val outcome = if (reported is Outcome.Moved && !reported.crossedNode && landing != null &&
+        !landing.isEmpty() && !sameNode(snapshot, landing)
+      ) reported.copy(crossedNode = true) else reported
       Diag.log(
         "$command -> $outcome in ${android.os.SystemClock.uptimeMillis() - startedAt}ms, " +
           "$gestureCount gesture(s)"
@@ -2309,13 +2318,35 @@ class SelectionDriver(
     val neighbour = locator.adjacentNodeCaret(snapshot, forward, oneIn = growing) ?: return null
     val caret = neighbour.geometry
     val row = handle.y - locator.handleDrop
-    if (kotlin.math.abs(caret.lineBottom - row) <= HandleLocator.LIE_TOLERANCE) return null
+    if (onTheSameRow(snapshot, row, neighbour)) return null
     val aim = PointF(handleX(caret.caretX), caret.lineBottom + locator.handleDrop)
     Diag.log(
       "  next block: the edge is on its block's ${if (forward) "last" else "first"} caret — " +
         "${if (growing) "growing" else "shrinking"} into the ${if (forward) "next" else "previous"} one at (${aim.x}, ${aim.y})"
     )
     return BlockStep(aim, growing, neighbour)
+  }
+
+  /**
+   * Whether [neighbour]'s caret is on the row whose bottom is [row], the edge's own. Bottoms that
+   * match are one row. So are bottoms closer than half a line, where both lines can be measured:
+   * a superscript's box sits above its line, and a real row change moves by a whole line.
+   *
+   * Measured 2026-10-13 on the rig, a served `…<span>debugging environment</span>.<sup>[4]</sup> More
+   * text after.` at 20 px: the `[4]` node's box ended at y 1029 and the `.` before it at 1045, so a
+   * `char ←` out of `[4]` was taken as a step into the previous block. Its second move, down onto the
+   * `.`'s row, landed in ` More text after.`, and the press ended `Moved(1, 21)` in 4 gestures. One-line
+   * rows of 38 px sit 46 px apart, so the half-line test does not merge them.
+   */
+  private fun onTheSameRow(snapshot: SelectionObserver.Snapshot, row: Float, neighbour: NeighbourCaret): Boolean {
+    val gap = kotlin.math.abs(neighbour.geometry.lineBottom - row)
+    if (gap <= HandleLocator.LIE_TOLERANCE) return true
+    // A wrapped box is several lines tall, so only a one-line box says how tall a line is.
+    val own = snapshot.bounds?.takeIf { snapshot.sourceIsOneLine() }?.height() ?: return false
+    val theirs = neighbour.bounds.takeIf { SelectionObserver.boxIsOneLine(it, neighbour.length) }?.height() ?: own
+    val sameRow = gap < minOf(own, theirs) / 2f
+    if (sameRow) Diag.log("  next block: the neighbour's row is ${gap}px off this one's, under half a line — the same row")
+    return sameRow
   }
 
   /** The active handle's x for a caret at [caretX]: Chrome draws the END handle right of it, START left. */
