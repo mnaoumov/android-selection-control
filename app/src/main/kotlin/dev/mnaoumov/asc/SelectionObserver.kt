@@ -132,6 +132,17 @@ class SelectionObserver {
   var forceNoExtendedSelection = false
 
   /**
+   * Debug-only: announce every Blink leaf's selection in its no-text parent's frame, the way the
+   * handset's Chrome 154 announced a seam beside a bare `<sup>`, which the rig's Chrome 143 and
+   * Chromium 157 never do. It runs the announcement through [inTextLeaf] exactly as the phone's would.
+   * The service sets it from a marker file, as for [forceNoExtendedSelection].
+   */
+  var forceContainerFrame = false
+
+  /** The simulated anchor in its container's frame: see [inParentFrame]. */
+  private var simulatedAnchor: Pair<AccessibilityNodeInfo, Int>? = null
+
+  /**
    * Rewrites an announcement into the frame its reader needs, or null to leave it as it arrived.
    * The driver sets it, because only the driver knows which edge is moving and where the anchor is.
    */
@@ -174,21 +185,28 @@ class SelectionObserver {
     if (chromeHidesSelection) {
       Diag.log("selection announced from Chrome's frame root, and below 36.1 nothing carries its range")
     }
-    val source = extended?.node ?: announcer
+    // Either rung can name a node with no text of its own, and both are read through [inTextLeaf].
+    val named = if (fromRoot) extended else NodeRange(announcer, event.fromIndex, event.toIndex)
+    val container = named?.let { if (forceContainerFrame) inParentFrame(it.node, it.from, it.to) ?: it else it }
+    val range = container?.let { inTextLeaf(it.node, it.from, it.to) } ?: extended
+    val source = range?.node ?: announcer
     val bounds = Rect().also { source.getBoundsInScreen(it) }
     announced = Snapshot(
-      from = extended?.from ?: event.fromIndex,
-      to = extended?.to ?: event.toIndex,
+      from = range?.from ?: event.fromIndex,
+      to = range?.to ?: event.toIndex,
       bounds = bounds,
       // A length, not the characters. See the class note.
       sourceLength = source.text?.length ?: -1,
       packageName = event.packageName?.toString(),
       atMs = SystemClock.uptimeMillis(),
       source = source,
-      isBlink = runCatching { source.extras?.containsKey(CHROME_ROLE_KEY) }.getOrNull() == true,
+      isBlink = isBlink(source),
     )
     return true
   }
+
+  private fun isBlink(node: AccessibilityNodeInfo): Boolean =
+    runCatching { node.extras?.containsKey(CHROME_ROLE_KEY) }.getOrNull() == true
 
   /**
    * The node rung, for the surfaces that announce nothing — Google Docs reports a real range on its
@@ -298,6 +316,127 @@ class SelectionObserver {
     return NodeRange(leaf, at, at)
   }
 
+  /**
+   * A range announced from a Blink node with no text of its own, rewritten onto the text leaf that
+   * holds its focus, or null where the announcement is not of that shape.
+   *
+   * On the handset's Chrome 154 a selection edge on the seam beside a bare `<sup>[4]</sup>` was
+   * announced from the `<p>`: an `android.view.View` with `srcLen=0` and the paragraph's box, its
+   * offsets counting the `<p>`'s text leaves end to end. A long-press on `environment` came as
+   * `41..55`, which is 31 + 10 to 31 + 21 + 1 + 2, i.e. `environment.[4` (2026-10-14, OnePlus 15).
+   * Nothing here can aim by a node with no text, so every press after it ended `HandleLost`. The
+   * rig's Chrome 143 and Chromium 157 announce the same steps from the leaves.
+   *
+   * The rewrite is the old event's shape again: the focus's leaf as the source, `anchor..focus` when
+   * the anchor is in it too, and `0..focus` when it is not. A focus on a seam belongs to both leaves.
+   * An END (the focus after the anchor) is put in the leaf before it, because a `0..0` in the leaf
+   * after reads as no selection. A START is put in the leaf after it, at that leaf's offset 0. Only
+   * lengths and child counts are read.
+   *
+   * An extended selection ([extendedRange]) whose focus is a text offset in such a container is read
+   * the same way. That shape has not been seen; it is the same frame from the other rung.
+   */
+  private fun inTextLeaf(node: AccessibilityNodeInfo, from: Int, to: Int): NodeRange? {
+    if (from < 0 || to < 0 || !isBlink(node)) return null
+    if ((runCatching { node.text?.length }.getOrNull() ?: 0) > 0) return null
+    if (runCatching { node.childCount }.getOrDefault(0) == 0) return null
+    val leaves = mutableListOf<Pair<AccessibilityNodeInfo, Int>>()
+    val total = collectTextLeaves(node, 0, leaves)
+    if (total <= 0 || maxOf(from, to) > total) return null
+    val starts = leaves.runningFold(0) { start, (_, length) -> start + length }
+    val inside = leaves.indices.firstOrNull { starts[it] < to && to < starts[it + 1] }
+    val endsHere = leaves.indices.lastOrNull { starts[it + 1] == to }
+    val startsHere = leaves.indices.firstOrNull { starts[it] == to }
+    val index = inside
+      ?: (if (to >= from) endsHere ?: startsHere else startsHere ?: endsHere)
+      ?: return null
+    val (leaf, length) = leaves[index]
+    val start = starts[index]
+    val anchor = if (from in start..start + length) from - start else 0
+    Diag.log(
+      "selection announced from a node with no text of its own ($from..$to over ${leaves.size} text leaves) — " +
+        "re-homed onto leaf ${index + 1} ($length chars at ${Rect().also { leaf.getBoundsInScreen(it) }}) as $anchor..${to - start}",
+    )
+    return NodeRange(leaf, anchor, to - start)
+  }
+
+  /**
+   * The text leaves under [node] in tree order, each with its length, and their total: what a
+   * container's frame counts. A node whose descendants carry no text stands for its own.
+   *
+   * The total is -1 when the walk meets an image or a control ([HandleLocator.NOT_PAGE_TEXT_CLASSES]),
+   * whose text is a file name or a label and which nothing measured says the frame counts. Chrome's
+   * image link is exactly that: a `View` with no text over an `Image` with a file name, announced as
+   * `0..0`, which the driver re-homes by its own rule. So such a container is left as it arrived.
+   */
+  private fun collectTextLeaves(
+    node: AccessibilityNodeInfo,
+    depth: Int,
+    out: MutableList<Pair<AccessibilityNodeInfo, Int>>,
+  ): Int {
+    if (depth > MAX_DEPTH || out.size >= MAX_LEAVES) return -1
+    if (depth > 0 && runCatching { node.className?.toString() }.getOrNull() in HandleLocator.NOT_PAGE_TEXT_CLASSES) return -1
+    val count = runCatching { node.childCount }.getOrDefault(0)
+    var total = 0
+    for (i in 0 until count) {
+      val child = runCatching { node.getChild(i) }.getOrNull() ?: continue
+      val length = collectTextLeaves(child, depth + 1, out)
+      if (length < 0) return -1
+      total += length
+    }
+    if (total > 0) return total
+    val own = runCatching { node.text?.length }.getOrNull() ?: 0
+    if (own > 0) out += node to own
+    return own
+  }
+
+  /**
+   * [forceContainerFrame]'s rewrite: a Blink leaf's `from..to` counted in its no-text parent's frame,
+   * or null where the leaf has no such parent. A one-line `<p>`'s text node is not rewritten, because
+   * the `<p>` lists no children and so holds no leaves.
+   *
+   * The leaf's `0..focus` does not say where the anchor is when it is in another leaf, so the anchor
+   * last simulated in the same parent is kept for it. That is a debug approximation: an anchor on a
+   * leaf's own first caret after a selection elsewhere in the paragraph is read as the old anchor.
+   */
+  private fun inParentFrame(node: AccessibilityNodeInfo, from: Int, to: Int): NodeRange? {
+    if (from < 0 || to < 0 || !isBlink(node)) return null
+    val length = runCatching { node.text?.length }.getOrNull() ?: 0
+    if (length == 0) return null
+    // The nearest ancestor with no text: `[4]`'s own parent is the `<sup>`, which carries `[4]` too.
+    var parent = runCatching { node.parent }.getOrNull() ?: return null
+    var climbed = 0
+    while ((runCatching { parent.text?.length }.getOrNull() ?: 0) > 0 && climbed++ < MAX_CONTAINER_CLIMB) {
+      parent = runCatching { parent.parent }.getOrNull() ?: return null
+    }
+    if ((runCatching { parent.text?.length }.getOrNull() ?: 0) > 0) {
+      Diag.log("debug: no ancestor without text within $MAX_CONTAINER_CLIMB levels — announcing as it arrived")
+      return null
+    }
+    val leaves = mutableListOf<Pair<AccessibilityNodeInfo, Int>>()
+    if (collectTextLeaves(parent, 0, leaves) <= 0) return null
+    // The announcing node can hold its text in a child of its own, which is then the leaf counted.
+    val own = mutableListOf<Pair<AccessibilityNodeInfo, Int>>()
+    val first = own.takeIf { collectTextLeaves(node, 0, it) > 0 }?.first()?.first ?: return null
+    /*
+     * A leaf can also be announced from a node its container does not list: the rig's Chrome announces
+     * `[4]` from a `TextView` while the `<p>` lists a `View` with the same box and text. So the same
+     * length and box inside this container stands for it, which is good enough for a debug rewrite.
+     */
+    val box = Rect().also { first.getBoundsInScreen(it) }
+    val index = leaves.indexOfFirst { it.first == first }.takeIf { it >= 0 }
+      ?: leaves.indexOfFirst { (leaf, leafLength) ->
+        leafLength == own.sumOf { it.second } && Rect().also { leaf.getBoundsInScreen(it) } == box
+      }.takeIf { it >= 0 }
+      ?: return null.also { Diag.log("debug: no leaf of the container stands for the announcing node ($length chars at $box)") }
+    val prefix = leaves.take(index).sumOf { it.second }
+    val remembered = simulatedAnchor?.takeIf { it.first == parent }?.second
+    val anchor = if (from == 0 && remembered != null && remembered !in prefix..prefix + length) remembered else prefix + from
+    simulatedAnchor = parent to anchor
+    Diag.log("debug: announcing $from..$to in its parent's frame as $anchor..${prefix + to}")
+    return NodeRange(parent, anchor, prefix + to)
+  }
+
   private fun firstNodeWithRange(node: AccessibilityNodeInfo, depth: Int): AccessibilityNodeInfo? {
     if (depth > MAX_DEPTH) return null
     if (node.textSelectionStart != -1 && node.textSelectionEnd != -1 &&
@@ -314,6 +453,12 @@ class SelectionObserver {
 
   companion object {
     private const val MAX_DEPTH = 60
+
+    /** A cap on the leaves [collectTextLeaves] gathers, so a container the size of a page cannot stall an event. */
+    private const val MAX_LEAVES = 2000
+
+    /** How far [inParentFrame] climbs from a leaf to an ancestor with no text. */
+    private const val MAX_CONTAINER_CLIMB = 4
 
     /** The extra Chrome and WebView put on every node. See [Snapshot.isBlink]. */
     private const val CHROME_ROLE_KEY = "AccessibilityNodeInfo.chromeRole"
