@@ -875,6 +875,33 @@ which read as `Moved(1, 1)`, "didn't move", and would have stopped a repeat run.
 `environment`'s end skips the `.` and lands on `0..1` of `[4]`, two characters on. That is a separate
 defect and is still open.
 
+**Chromium 157 announces an END on an inline seam from the node AFTER it, as `0..0`.** The END's frame
+in a node without the anchor is `0..focus`, so a focus on that node's first caret is an empty range,
+and the pad read it as no selection. Measured 2026-10-13 on the rig, Chromium r1709360 with the refusal
+marker, the same served page: long-press `environment` (`10..21`), `→ char`. The held grab moved the END
+exactly one character, past the `.`, and Chromium announced it as `0..0` of `[4]` (`srcLen=3`). The press
+ended `HandleLost`, and every press after it said "the pad cannot see a selection". So
+`SelectionDriver.endBeforeSeam` reads such an END as the last caret of the text leaf before it in tree
+order (`HandleLocator.textLeafBefore`): `0..length`, or `anchor..length` when that leaf holds the
+anchor. It does so only when that leaf is on the same row, by bottoms or by tops within half the
+shorter box, so a wrapped node's first line counts. A block's first caret is announced `0..0` too, and
+its handle is on its own row, so that one is left alone. As with the START's `0..0`, `perform` believes
+the reading only while the toolbar is up. Chromium force-stopped before each run:
+
+| press | before | after |
+|---|---|---|
+| `→ char` from `environment`, marker on, 3 runs (one after `⇄ swap` ×2) | `0..0` of `[4]`, `HandleLost`, then blind | `0..0` of `[4]` read as `0..1` of `.`, `Moved(21, 1)`, 1 gesture, 0.73-0.89 s |
+| `← char` back, then `→ char` again | not measured | `1 -> 21` in 2 gestures, then `21 -> 1` again |
+| the same `→ char`, marker off | not measured | identical, 1 gesture |
+| control: Chrome 143, marker off: `→`, `→`, `←`, `←` | not measured | `21 -> 1` (`.`) `-> 1` (`[4]`) `-> 1` (`.`) `-> 21`, 1 gesture each, with no re-homing |
+| control: one-line rows on Chromium 157, `→ char` across rows 003/004 and back | as before | `33 -> 1 -> 33`, 2 gestures each, with no re-homing |
+
+Two defects remain on Chromium 157, past the seam. A `→ char` from the `.`'s end does not stop inside
+`[4]`: the grab reads `0..0` of `[4]` (the same caret), and the correction snaps on to `0..1` of
+` More text after.`, past `[4]` and the space. And a `← char` from there reads that wrapped node's box
+(`(32, 997 - 678, 1093)`) as a block of its own, takes the block step, and grabs on its second line
+(y 1121), where no handle is drawn.
+
 **`word →` from the word before a block's trailing `.` lands on the block's last caret, and that is
 not Chrome's next-word-start hold.** Measured 2026-10-05 on the handset, Wikipedia's `Text_editor`: from
 `cost` (`138..142`) the first grow landed on 143, past the period. `landedOnNextWordStart` read it as the

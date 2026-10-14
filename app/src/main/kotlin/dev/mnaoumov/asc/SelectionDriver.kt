@@ -374,17 +374,17 @@ class SelectionDriver(
    * Chrome showed the selection from there, and the pad read `0..0` as `HandleLost` and every press
    * after it as "the pad cannot see a selection". So `0..0` is read as `0..length` too. A caret the
    * user tapped onto a node's first character looks the same, which is why [perform] believes such a
-   * reading only while the toolbar is up ([caretReadAsStart]).
+   * reading only while the toolbar is up ([caretReadAsEdge]).
    *
    * **That caret can also be announced from the node BEFORE it, when that node has no text**
    * ([rehomedOntoText]).
    */
   private fun inMovingFrame(snapshot: SelectionObserver.Snapshot): SelectionObserver.Snapshot {
-    if (activeEdge != Edge.START) return snapshot
+    if (activeEdge != Edge.START) return endBeforeSeam(snapshot) ?: snapshot
     val inText = if (snapshot.holdsNoText()) rehomedOntoText(snapshot) ?: return snapshot else snapshot
     if (nodeKey(inText) == anchorNodeKey) return snapshot
     if (inText.from != 0 || inText.to < 0 || inText.to >= inText.sourceLength) return snapshot
-    if (inText.to == 0) caretReadAsStart = inText.atMs
+    if (inText.to == 0) caretReadAsEdge = inText.atMs
     return inText.copy(from = inText.to, to = inText.sourceLength)
   }
 
@@ -431,6 +431,73 @@ class SelectionDriver(
 
   /** The last announcement [rehomedOntoText] found no text after, so the refusal is logged once. */
   private var rehomeRefused: SelectionObserver.Snapshot? = null
+
+  /**
+   * [snapshot], an END announced `0..0` from a node without the anchor, read as the last caret of the
+   * text node before it on the same row, or null to leave it as it arrived.
+   *
+   * A caret on an inline seam belongs to both nodes, and Chromium 157 announces an END that reaches it
+   * from the node AFTER it, as that node's first caret: `0..0`, which reads as no selection. Measured
+   * 2026-10-13 on the rig, Chromium r1709360 with the refusal marker, a served `…<span>debugging
+   * environment</span>.<sup>[4]</sup> More text after.`: long-press `environment` (`10..21`), `→ char`.
+   * The held grab moved the END one character, past the `.`, and Chromium announced it as `0..0` of
+   * `[4]` (`srcLen=3`). The press ended `HandleLost` and every press after it said "the pad cannot
+   * see a selection", while Chromium showed the selection up to the `.`. Chrome 143 announces the
+   * same step as `0..1` of `[4]`.
+   *
+   * The caret is the same one at the end of the node before, and that frame has a non-empty range:
+   * `0..length`, or `anchor..length` when that node holds the anchor. Only on the same ROW, though:
+   * a block's first caret is announced `0..0` too, and its handle is drawn on its own row, not at the
+   * end of the row above, where a grab would land on the page. A caret tapped onto a node's first
+   * character looks the same, so [perform] believes this reading only while the toolbar is up.
+   */
+  private fun endBeforeSeam(snapshot: SelectionObserver.Snapshot): SelectionObserver.Snapshot? {
+    if (snapshot.from != 0 || snapshot.to != 0 || nodeKey(snapshot) == anchorNodeKey) return null
+    endSeamMemo?.let { (announced, rehomed) -> if (announced === snapshot) return rehomed }
+    val here = snapshot.bounds?.takeUnless { it.isEmpty } ?: return null
+    val leaf = snapshot.source?.let(locator::textLeafBefore) ?: return null
+    val length = runCatching { leaf.text?.length }.getOrNull()?.takeIf { it > 0 } ?: return null
+    val bounds = Rect().also { leaf.getBoundsInScreen(it) }
+    if (bounds.isEmpty || !onTheSameRowAs(here, bounds)) {
+      if (endSeamRefused !== snapshot) {
+        Diag.log("an END announced 0..0 (${describeNode(snapshot)}), and the text before it is not on its row ($bounds)")
+      }
+      endSeamRefused = snapshot
+      return null
+    }
+    val inPrevious = snapshot.copy(bounds = bounds, sourceLength = length, source = leaf, rehomedFrom = snapshot)
+    val anchor = if (nodeKey(inPrevious) == anchorNodeKey) {
+      lastSeenInNode[anchorNodeKey]?.low()?.takeIf { it in 0 until length } ?: return null
+    } else {
+      0
+    }
+    Diag.log(
+      "an END announced 0..0 (${describeNode(snapshot)}) — reading it as the last caret of the text " +
+        "before it ($length chars at $bounds)"
+    )
+    val rehomed = inPrevious.copy(from = anchor, to = length)
+    caretReadAsEdge = snapshot.atMs
+    endSeamMemo = snapshot to rehomed
+    return rehomed
+  }
+
+  /** The last announcement [endBeforeSeam] re-homed, and where. Only an answer is memoised. */
+  private var endSeamMemo: Pair<SelectionObserver.Snapshot, SelectionObserver.Snapshot>? = null
+
+  /** The last announcement [endBeforeSeam] refused, so the refusal is logged once. */
+  private var endSeamRefused: SelectionObserver.Snapshot? = null
+
+  /**
+   * Whether [before] ends on the row [here] starts on: an inline neighbour. Half the shorter box is
+   * the slack, as in [onTheSameRow], since a superscript's box sits above its line (`[4]` ended at
+   * y 1029 on the rig and the `.` before it at 1045). A wrapped box's first line is at its TOP and its
+   * last at its BOTTOM, so the two are compared both ways: ` More text after.` after `[4]` is two lines,
+   * `(32, 997 - 678, 1093)`, and starts on `[4]`'s row, `(460, 989 - 500, 1029)`.
+   */
+  private fun onTheSameRowAs(here: Rect, before: Rect): Boolean {
+    val half = minOf(here.height(), before.height()) / 2f
+    return kotlin.math.abs(here.bottom - before.bottom) < half || kotlin.math.abs(here.top - before.top) < half
+  }
 
   /**
    * Whether a page landing on the anchor's side is past the anchor.
@@ -506,8 +573,8 @@ class SelectionDriver(
     Diag.log("  page: the edge crossed the anchor — now moving the $activeEdge")
   }
 
-  /** The announcement time of the last `0..0` that [inMovingFrame] read as a START on offset 0. */
-  private var caretReadAsStart: Long? = null
+  /** The announcement time of the last `0..0` that [inMovingFrame] read as an edge on a node's first caret. */
+  private var caretReadAsEdge: Long? = null
 
   /**
    * The node the ANCHOR is known to be in, as [nodeKey] reads it, or null when that is not known.
@@ -608,7 +675,7 @@ class SelectionDriver(
       onDone(Outcome.EdgeUnknown)
       return
     }
-    if (snapshot.atMs == caretReadAsStart && !selectionStillOnScreen()) {
+    if (snapshot.atMs == caretReadAsEdge && !selectionStillOnScreen()) {
       Diag.log("$command: a caret on a node's first character and no toolbar — the pad cannot see a selection")
       onDone(Outcome.NoSelection)
       return
