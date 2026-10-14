@@ -971,6 +971,22 @@ landing in any other node is moved onto it by `intoTheNeighbour`, the block step
 
 The correction move did not fire in these runs: the aimed grab landed in the right node every time.
 
+**The phone confirms it (2026-10-14, OnePlus 15, Chrome 154.0.8037.127, `en.wikipedia.org/wiki/Text_editor`).**
+Chrome announced selections the old way, so the extended-selection trial was not active. There ` environment.`
+keeps its `.`, but the lead's `Notepad.[1][2][3]` does not: `Notepad` (7 characters, a link, `Rect(56, 1457 -
+273, 1527)`), then a 1-character `.` node, then `[`, `1`, `]` as 1-character nodes whose boxes end 21 px higher.
+Long-pressing the link opens its context menu, so long-press `as` on the line above and drag the END by hand
+(`input swipe 1028 1485 285 1580 1200`) onto `0..7` of `Notepad`. Then, 3 runs of 3, the last with Chrome
+force-stopped first:
+
+| press | result |
+|---|---|
+| `→ char` from `0..7` | `inline: leaving the node for the next one on its row (1 chars)`, onto `0..1` of the `.` (`srcLen=1`), `Moved(7, 1, crossedNode=true)` in 1 gesture, 0.71-0.76 s; the screenshot showed `Notepad.` selected and not `[` |
+| `→ char` again | `the same row`, then `inline:` onto `0..1` of `[`, 1 gesture, 1.8 s with the caret wait; no `inline: push`, so the phone keeps a caret inside `[1]`, as Chrome 143 does |
+| `← char`, `← char` | back onto the `.`, then onto `0..7` of `Notepad`, 1 gesture each |
+
+The correction move (`moving the pointer`) did not fire, so it is still unproven against a real wrong node.
+
 **Chromium 157 announces an END on an inline seam from the node AFTER it, as `0..0`.** The END's frame
 in a node without the anchor is `0..focus`, so a focus on that node's first caret is an empty range,
 and the pad read it as no selection. Measured 2026-10-13 on the rig, Chromium r1709360 with the refusal
