@@ -2556,6 +2556,27 @@ says `0..14` for a START on column 14, where the covered range would be `14..27`
 START at column 0, where there is no handle, and the next grab scrolled the page instead.
 `SelectionDriver.inMovingFrame` rewrites such an announcement to `focus..length` for the START edge.
 
+**A START on an inline node's LAST caret is announced `0..length`, and the rewrite above would make
+that empty, so it is read in the node after it.** That caret is the seam: `As |source code` is the
+end of the 3-character `As ` node and the start of the link. On the handset (2026-10-14, Wikipedia's
+`Text_editor`) a `⇞ page` put the START there, Chrome announced it from `As ` as `0..3`, and the pad
+left it as it arrived, so `low()` read it as offset 0, before the `A`. `← char` then took the block
+step into the previous paragraph and ended `HandleLost`, and `→ char` read a one-character step as
+four. `SelectionDriver.startAfterSeam` is the mirror of `endBeforeSeam`: when the next text leaf in
+tree order starts on the same row, the caret is read as that leaf's offset 0 (`0..length`, or
+`0..anchor` when it holds the anchor). A block's last caret is left alone, because the next block's
+first caret is on another row. Measured 2026-10-14 on the rig, Chrome 143 force-stopped before each
+run, a served `<p>As <a>source code</a> is text, …</p>` above two one-line rows: long-press `alpha`
+on the last row, `⇄ swap`, `← char`, then the START handle dragged by hand (`input motionevent`) onto
+the seam after `As `:
+
+| press | old build | new build, 3 runs of 3 |
+|---|---|---|
+| `← char` from the seam | `edge=START at 0..3 moving=0`, the block step grabbed at x 14 inside the left side zone, `HandleLost` in 563 ms; the status line blamed the edge zone | `0..11` of `source code` (`a START announced on its node's last caret — reading it as the first caret of the text after it`), onto `2..3` of `As `, 1 gesture, ~0.74 s; the screenshot showed the selection starting at the space |
+| then `→ char`, `→ char`, `← char`, `← char` | not reached | `2 -> 0` (the seam, re-homed) `-> 1 -> 0 -> 2`, 1 gesture each, 0.57-0.76 s |
+| control: START on the last row's first caret, `← char`, `→ char`, `← char` | as before | `0 -> 41 -> 0 -> 41`, the block step, 2 gestures each |
+| control: the debug target's `TextView` from `bravo` | as before | `11 -> 12 -> 11`, `11 -> 19`; after `⇄ swap`, `6 -> 5 -> 6` |
+
 **After a swap on a selection spanning nodes, the edge to move is in no announced node, so the
 press refuses (`EdgeUnknown`, "nudge its handle once").** The announcement describes the edge that
 last moved. A `page ↑` after `end` + `⇄ swap` located the START at the END row's offset 0,
