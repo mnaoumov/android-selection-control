@@ -2902,6 +2902,23 @@ column away from the handle, and the swipe started in the handle's own column, 4
 scrolled nothing and ended the sweep. That is fixed (*Even once it is back, the window list's toolbar
 can be the previous page's*, above).
 
+**The phone confirms it (2026-10-14, OnePlus 15, Chrome 154.0.8037.127, `en.wikipedia.org/wiki/Text_editor`).**
+Chrome announced selections the old way (`seeded from a fresh selection`), so the extended-selection
+trial was not active. Chrome was force-stopped before each run. Open the article at its top,
+long-press `that` in the lead (`1..5` of a 15-character node), then `⤓ end`. In all 3 runs the first
+page landed the END on 68 of the same wrapped node as the original report, and the sweep went on:
+
+| run | page 1's cold node | result |
+|---|---|---|
+| 1 and 3 | `the END's caret was measured on the second ask — locating again` | 4 pages to the footer, `Moved(5, 12, crossedNode=true)` in 6.8-6.9 s and 8 gestures |
+| 2 | `the platform will not measure the END's caret yet — asking again for up to 1000ms`, then `page warm: measured after 100ms` | the same 4 pages, 7.1 s |
+
+No run logged `the moving handle cannot be located` or `still refused after 1000ms`. Pages 2 and 3
+moved one band each (`scrolled 1701 of 1764`, `1792 of 1820`). The fourth fell short at the page's end
+(`1463 of 1830 — the document's edge`), and the corner drag put the END on `0..12` of the footer's last
+node. The screenshots showed the selection running through `Related articles` to the footer. The
+post-scroll re-ask did not fire on the phone either.
+
 **A stop touch also cuts the swipe short, which reads like the document's edge.** A tap on
 `← char` 8 s into `end` left one scroll 140 px short, and the corner drag took the selection to
 the bottom of the screen. Every press now clears a stop flag at its start. A touch on any direction
