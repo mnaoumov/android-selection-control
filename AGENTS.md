@@ -979,6 +979,21 @@ character inside the space and marks it `pastWrapSpace`. The target is then coun
 The row 002 `⇥ word` went `28 -> 5`, inside `Simple`, on the old build too. That is a word walk defect
 of its own and is tracked separately.
 
+**The phone confirms it (2026-10-14, OnePlus 15, Chrome 154.0.8037.127, `en.wikipedia.org/wiki/Text_editor`
+at its top).** Chrome announced selections the old way (`seeded from a fresh selection`), so the
+extended-selection trial was not active. The lead wraps after `, such as ` (10 characters, `Rect(780, 1366 -
+997, 1436)`), and `Notepad` (7, `Rect(56, 1457 - 273, 1527)`) starts the next line. Chrome was force-stopped
+and the service rebound before each run:
+
+| press, 3 runs of 3 | result |
+|---|---|
+| long-press `as` (`7..9`), `→ char` | `the edge is on its block's last caret but for the wrap space`; the move straight down landed in a 1-character citation node (`Rect(427, 1450 - 448, 1506)`), and the slide moved it onto `0..1` of `Notepad`, `Moved(9, 1, crossedNode=true)` in 2 gestures and 1.0 s; the screenshot showed `as N` selected with the END handle under the `N` |
+| then `→ char`, `← char`, `← char` | `1 -> 2 -> 1`, 1 gesture each; then `adjacent: … one in: its last character is a wrap space`, `1 -> 9`, 2 gestures, 0.8 s |
+| `⇥ word` from `as` | the same crossing, then the word walk `1 -> 7`, `Moved(9, 7, crossedNode=true)` in 7 gestures and 2.4 s; `as Notepad` selected. On the phone the `.` after `Notepad` is a node of its own, so the walk ends on the link's end |
+| START: long-press `such`, `→ char` ×4 (`6 -> 9 -> 1`), `⇥ word`, `⇄ swap`, a hand nudge of the START to 3, `→ char` ×7, `← char` | `3 -> 4 -> … -> 9`, 1 gesture each; then the plain block step, `9 -> 0` of `Notepad` in 2 gestures and 0.8 s (`Notepad` alone selected); `← char` `adjacent: … read from the character inside its wrap space`, `0 -> 9`, 2 gestures, 1.0 s |
+
+No press ended `HandleLost`, said `cannot see a selection` or took six silent pushes.
+
 **A superscript's box sits above its line, so "another row" means more than half a line away.**
 `blockStep` used to call any neighbour whose bottom differed by more than 1 px another row. A `<sup>`
 node's box ends above the line's: on a served `…<span>debugging environment</span>.<sup>[4]</sup> More
