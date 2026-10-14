@@ -2679,6 +2679,20 @@ the seam after `As `:
 | control: START on the last row's first caret, `← char`, `→ char`, `← char` | as before | `0 -> 41 -> 0 -> 41`, the block step, 2 gestures each |
 | control: the debug target's `TextView` from `bravo` | as before | `11 -> 12 -> 11`, `11 -> 19`; after `⇄ swap`, `6 -> 5 -> 6` |
 
+**The same misreading made a `⤒ start` sweep stop on a caption link below an image.** On a served
+page with a lead row, then `<figure><a><img></a><figcaption>Editors like <a>Mousepad</a>, …`, then 40
+rows, a page step put the START on the seam `Editors like |Mousepad`. Chrome announced it `0..13` from
+`Editors like `, which the pad read as that node's offset 0, so the corner drag grabbed at (92, 707),
+142 px left of the handle drawn at `Mousepad`. The grab missed the handle and scrolled the page
+instead. The press reported `Moved(0, 0, crossedNode=false)`, the selection still started on
+`Mousepad`, and the next presses said the node was scrolled out of view. Measured 2026-10-14 on the
+rig, Chrome 143 force-stopped before each run, long-press `row` on row 002, then `⤓ end`, `← char`,
+`⤒ start`: the build before `startAfterSeam` did exactly that, and with it the corner grab is at
+(234, 707), on the handle. The START reaches the lead row's caret 0, 3 runs of 3, and `→ char`,
+`← char` then go `0 -> 1 -> 0`. During that corner drag, the last announcement can be the image
+link's `0..0`, which is re-homed onto the caption, so the press's own report names the caption. The
+announcement from the lead row arrives after the press, and the next press reads `0..22` there.
+
 **After a swap on a selection spanning nodes, the edge to move is in no announced node, so the
 press refuses (`EdgeUnknown`, "nudge its handle once").** The announcement describes the edge that
 last moved. A `page ↑` after `end` + `⇄ swap` located the START at the END row's offset 0,
