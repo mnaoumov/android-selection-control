@@ -2346,7 +2346,20 @@ Only then does it read the enabled list back. If the device dropped the add, it 
 3 s, and if that is dropped too it throws and names `pad.ps1 on`. The old fixed 400 ms gap was enough on
 the rig, but on the OnePlus 15 (2026-10-12) the re-add did not stick, and `pad.ps1 on` straight after
 put it back. Measured 2026-10-13 on the rig: a plain rebind took 1.5 s, and a drop forced right after the
-rebind was caught and re-added (15 s). The phone has not run the new rebind yet.
+rebind was caught and re-added (15 s).
+
+**The phone's "drop" was the script's own bug, not the device.** On the phone the new rebind threw after two
+adds 6 runs of 6, while a hand-written remove and re-add, 0.5 s or 4 s apart and polled every 250 ms for 8-12 s,
+stuck every time. The phone also has Bitwarden enabled, and the rig has nothing else. `Get-EnabledServices`
+returns its list comma-wrapped, so piped straight into `Where-Object` the whole array arrived as one object.
+`$array -ne $ours` was then truthy, the array passed as a single element, and the join wrote the literal
+`System.String[]`. With one service in the list the filter returns nothing, which is why the rig passed.
+`Restore-ServiceBinding` now assigns the list before filtering it, and `Set-EnabledServices` flattens its
+input and refuses to write a stringified array. What the phone did with the bad write is not known. Each
+time, the list read back afterwards held only Bitwarden. After the fix (2026-10-14, OnePlus 15), three
+`rig.ps1 rebind -Serial 3C15BN001Y900000` runs of three printed `Service rebound`, with Bitwarden left
+alone. `pad.ps1 status` read ON after each one, and the pad logged its 12 button rectangles again. One
+`rig.ps1 pad` did the same. The retry never fired.
 
 **It exists because a measurement should not wait on a phone being unlocked.** Almost everything
 measured here before it was measured on the owner's handset, which meant every run waited on a

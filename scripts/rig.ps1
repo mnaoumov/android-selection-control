@@ -641,7 +641,10 @@ function Get-EnabledServices {
 }
 
 function Set-EnabledServices([string[]] $Services) {
-    $value = (@($Services | Where-Object -FilterScript { $_ -ne '' }) -join ':')
+    $value = (@($Services | ForEach-Object -Process { $_ } | Where-Object -FilterScript { $_ -ne '' }) -join ':')
+    if ($value -match 'System\.\w+\[\]') {
+        throw "Refusing to write a stringified array into enabled_accessibility_services: '$value'."
+    }
     if ($value -eq '') {
         Invoke-Adb -Arguments @('shell', 'settings', 'put', 'secure', 'enabled_accessibility_services', '""') | Out-Null
     } else {
@@ -670,7 +673,13 @@ function Set-EnabledServices([string[]] $Services) {
 function Restore-ServiceBinding {
     Assert-RigAttached
 
-    $others = @(Get-EnabledServices | Where-Object -FilterScript { $_ -ne $ServiceComponent })
+    # Assign first, then filter. Piped straight in, the comma-wrapped array arrives as ONE object, the
+    # filter's `-ne` on it is truthy whenever anything else is enabled, and the whole list passes as a
+    # single string[] element, which the write then turns into the literal "System.String[]". The
+    # rig enables only this service, so it never showed; the phone, with a password manager beside
+    # it, failed every rebind that way (2026-10-14).
+    $enabled = Get-EnabledServices
+    $others = [string[]]@($enabled | Where-Object -FilterScript { $_ -ne $ServiceComponent })
     Set-EnabledServices $others
     if (-not (Wait-ServiceBound -Bound $false -TimeoutSeconds 10)) {
         # Either the dump has no readable "Bound services" line here, or the unbind is slow. A gap
