@@ -3,6 +3,7 @@ package dev.mnaoumov.asc
 import android.graphics.PointF
 import android.graphics.Rect
 import android.os.Handler
+import kotlin.math.hypot
 
 /** A press on the pad: move the active edge, by this much, in this direction. */
 enum class PadCommand(val unit: Unit, val toRight: Boolean) {
@@ -4055,7 +4056,7 @@ class SelectionDriver(
    * app's window: the band's far edge in the direction of travel, in whichever half of the band the
    * moving handle is not in. The refusal says which of the two was in the way when nothing is clear.
    *
-   * **When the toolbar covers both columns, the swipe starts on the band's side of it.** After a page
+   * **When the toolbar is on the swipe's row, the swipe starts on the band's side of it.** After a page
    * drag the handle sits [PAGE_CLEARANCE_DROPS] short of the band's far edge, and Chrome puts its
    * toolbar in that strip, beyond the handle. On the handset (1272 px wide) the toolbar is wider than
    * half the screen, so it covers both columns at the band's edge. Measured 2026-10-05 on Wikipedia,
@@ -4092,8 +4093,22 @@ class SelectionDriver(
     val columns = if (handle.x < band.exactCenterX()) listOf(far, near) else listOf(near, far)
     val toolbar = toolbarBounds()
     var foreignSeen: Rect? = null
+    /*
+     * The toolbar is avoided across its whole ROW, not only where the window list puts it, because
+     * Chrome re-places it sideways as it comes back and the window list lags a move. Measured
+     * 2026-10-14 on the rig, cold `end` sweeps on a page of long wrapped paragraphs: the toolbar's left
+     * edge was anywhere from x 32 to 125 from one page to the next, at the same width. A swipe from
+     * the handle's column, (540, 1138), beside a toolbar the list did not put there, scrolled 0,
+     * Chrome took its toolbar down, and the grab that followed moved the END from 164 straight to
+     * 341, the document's end: the mark of a `Select all`. An earlier one from the same pixel, 41 px
+     * below the handle, scrolled 0 too, so the handle is kept clear as well, by the page drag's own
+     * clearance.
+     */
+    val handleReach = locator.handleDrop * PAGE_CLEARANCE_DROPS
+    fun onToolbarRow(row: Float) = toolbar != null && row >= toolbar.top && row <= toolbar.bottom
     fun clear(point: PointF): Boolean {
-      if (toolbar != null && toolbar.contains(point.x.toInt(), point.y.toInt())) return false
+      if (onToolbarRow(point.y)) return false
+      if (hypot(point.x - handle.x, point.y - handle.y) <= handleReach) return false
       val foreign = foreignWindowAt(point) ?: return true
       foreignSeen = foreign
       return false
@@ -4116,11 +4131,19 @@ class SelectionDriver(
       Diag.log("  page: another app's window $foreign covers (${column}, $y); ${if (ok) "starting the scroll at (${moved.x}, $row)" else "nothing clear beside it"}")
       if (ok) return SwipeStart(moved, null)
     }
-    if (toolbar != null && columns.all { toolbar.contains(it.toInt(), y.toInt()) }) {
-      val row = beside(toolbar)
+    if (toolbar != null && onToolbarRow(y)) {
+      /*
+       * Not just beside the toolbar the list reports, but a handle's reach beyond the handle as well.
+       * The list can still hold the previous page's toolbar: its top moved by up to 44 px from page
+       * to page, and a swipe from 14 px above the listed top scrolled 0 of 716 and took the toolbar
+       * down, which ended a sweep 17 pages in (2026-10-14, the rig, 2 runs of 4). Chrome puts the
+       * toolbar just beyond the moving handle, so a start the far side of the handle is clear of it
+       * wherever it really is.
+       */
+      val row = if (forward) minOf(beside(toolbar), handle.y - handleReach) else maxOf(beside(toolbar), handle.y + handleReach)
       val fallback = PointF(columns.first(), row)
       val ok = usable(row) && clear(fallback)
-      Diag.log("  page: the toolbar $toolbar covers both columns; ${if (ok) "starting the scroll at (${fallback.x}, $row)" else "nothing clear beside it either"}")
+      Diag.log("  page: the toolbar $toolbar is on the swipe's row; ${if (ok) "starting the scroll at (${fallback.x}, $row)" else "nothing clear beside it either"}")
       if (ok) return SwipeStart(fallback, null)
     }
     return SwipeStart(null, if (foreignSeen != null) Outcome.Obstructed else Outcome.HandleCovered)

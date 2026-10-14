@@ -1839,6 +1839,32 @@ drag ended the sweep on page 3 with the selection at the screen's corner. Two `p
 same sitting failed the same way. `pageStep` now places the swipe after
 `awaitSelectionOnScreen`. Every measured wait was 25-225 ms.
 
+**Even once it is back, the window list's toolbar can be the previous page's, so the swipe keeps
+off the toolbar's whole ROW and away from the handle.** Measured 2026-10-14 on the rig (Chrome 143,
+cold, a served page of six one-line rows and forty 340-character wrapped paragraphs, `⤓ end` from
+`alpha` on row 002). The listed toolbar kept its width, but its left edge was anywhere from x 32 to 125
+and its top anywhere from y 1085 to 1129 from one page to the next. Where the list put it over the
+column away from the handle only, the swipe used to start in the handle's own column, at (540, 1138).
+That was 41 px below the handle in one run, and 85 px in another. Both scrolled 0, and Chrome took its
+toolbar down. In the second, the grab after it moved the END from 164 straight to 341, the document's
+end, which is what `Select all` does. A first fix that kept the start just beside the listed toolbar
+(14 px above its top) still scrolled 0 twice in 4 sweeps, and one of those ended the sweep 17 pages in.
+So `swipeStart` now refuses any start on the toolbar's row, whatever its listed x, and any start
+within the handle's reach (`PAGE_CLEARANCE_DROPS`, 42 dp). Then, when the toolbar is on the row, the
+swipe starts in the away column, above both the listed toolbar and the handle by that reach
+(`toolbar on the swipe's row; starting the scroll at (180.0, 1009.0)`). Chrome puts the toolbar just
+beyond the moving handle, so that start is clear of it wherever it really is. After the change:
+
+| run | result |
+|---|---|
+| `⤓ end`, cold, 5 runs | every sweep to the last paragraph's end (`17 -> 341`), 25-28 pages, 49-57 s; no `no toolbar after the scroll`, and the only short scrolls were the document's edge |
+| `⇟ page` ×3, `← char`, `→ char`, `⇞ page` ×2, 2 runs | a page each; `268 -> 267 -> 268`, `226 -> 225 -> 226`, 1 gesture each |
+| the debug target's `TextView` from `bravo` | `11 -> 12 -> 11`, `11 -> 19`, `⇟ page` `19 -> 30`, `30 -> 29 -> 30` |
+
+A page step whose scroll falls short but does not reach the edge still advances less than a band
+(`scrolled 370 of 738`). The old build did the same from the usual start (`496 of 814` from
+(180, 1138)), so that shortfall is older than this change.
+
 **`start`'s last drag lands on the first node's offset 0, and Chrome announces that as `0..0`.**
 The node does not hold the anchor, so Chrome announces it as `0..focus`, and the focus is 0. The pad
 read that as an empty selection. The step ended `HandleLost`, and every press after it said "the pad
@@ -2873,7 +2899,8 @@ In two earlier runs, cut short by a tap, the re-locate after page 5's scroll was
 answered before it. That is why the key includes the box. That refusal did not come back after the
 change, so the post-scroll wait has not fired on the rig. On page 25 of one run, the toolbar covered the
 column away from the handle, and the swipe started in the handle's own column, 41 px below it. It
-scrolled nothing and ended the sweep. That is tracked on its own.
+scrolled nothing and ended the sweep. That is fixed (*Even once it is back, the window list's toolbar
+can be the previous page's*, above).
 
 **A stop touch also cuts the swipe short, which reads like the document's edge.** A tap on
 `← char` 8 s into `end` left one scroll 140 px short, and the corner drag took the selection to
