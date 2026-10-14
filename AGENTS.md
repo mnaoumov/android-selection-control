@@ -1251,6 +1251,14 @@ screenshot showed `editor` and `A` selected. That held in 3 runs of 3. The 2026-
 wait (*On a cold Chromium 157 the second ask can be refused too*), so on the phone the toolbar bound is now
 only reached where the wait's second runs out. That did not happen here.
 
+A second sitting the same day (Chrome 154.0.8037.127, the extended-selection trial not active) repeated it
+exactly: 3 cold runs of 3, `measured after 100ms`, then `Moved(11, 1)` in 1.09-1.11 s and 2 gestures. With the
+refusal marker (`force-refuse-character-rects`), 2 cold runs of 2 logged `warm: still refused after 1000ms`, and
+the toolbar bound then ended the press `ColumnUnknown` in 1.06 s with 0 gestures and the selection intact. After
+an answered cold press, a margin grab is still made: `⇄ swap` on `allows` (`6..12`), then `→ char`, grabbed at
+x 24.5 in the side zone, was swallowed by OxygenOS, and only then refused (`InEdgeZone` in 495 ms, 1 gesture).
+Neither press logged `not learning from this press`, because neither aim was an average.
+
 **Long-pressing a link opens Chrome's link context menu**, not a selection.
 
 **`screencap` returns pure black on `FLAG_SECURE` apps** — Tor Browser is one. The "only a screenshot is
