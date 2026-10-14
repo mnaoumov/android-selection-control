@@ -1633,9 +1633,28 @@ before each run:
 | control: the debug target's `TextView`, `char →`, `char ←`, `word →` from `bravo` | `11 -> 12 -> 11`, then `11 -> 19` |
 
 On the rig the `1 -> 0` press itself was announced from the caption, so only the hand drag and the
-`→ char` from the row above produced the image-side `0..0` there. The handset's `← char` is the
-case still to confirm. The re-homing is for the START only, because the START is the only edge that
-has been seen announced this way.
+`→ char` from the row above produced the image-side `0..0` there. The re-homing is for the START only,
+because the START is the only edge that has been seen announced this way.
+
+**On the phone the re-homing fires, but there the `0..0` is the caret BEFORE the image** (2026-10-14,
+OnePlus 15, Chrome 154, `en.wikipedia.org/wiki/Text_editor`). Chrome announced selections the old way,
+so the extended-selection trial was not active. Long-press `features`, then `⇞ page`. The drag landed on
+the image (`0..0, srcLen=-1`) and moved on to the caption's first caret, `Moved(…, 0, crossedNode=true)`
+in 1.9 s and 3 gestures, with the image not selected. `→ char` then went `0 -> 1` in 1 gesture. `← char`
+grabbed at x 192.5 and held the pointer at x 161.5, left of the caption's left edge (196). It logged `a caret
+announced from a node with no text (in View srcLen=-1 Rect(196, 337 - 1074, 1030)) — reading it as the
+first caret of the text after it` and `Moved(1, 0)` in 1 gesture and 0.7 s, and the pad stayed sighted.
+But the screenshot showed the whole image selected, with the START handle at the image's bottom-left,
+about (160, 1070). So every press after it grabbed at the caption's row (y 1163), where no handle was:
+
+| press, after the re-homed `← char` | result, 2 runs of 2 |
+|---|---|
+| `→ char` | held grab and 12 grow tries silent, `HandleLost` in 6.3-7.3 s, the selection intact |
+| `← char` | held grab and 6 snap-throughs to x 0 silent, `Moved(0, 0)`, "didn't move" |
+
+No press said `the pad cannot see a selection`, so the blindness this entry fixes is gone on the phone.
+What remains is that an image-side `0..0` can be either caret, and the pad cannot yet tell which. That
+is tracked on its own.
 
 **The phone confirms the toolbar fallback, and finds four defects the rig did not show** (2026-10-05,
 OnePlus 15, Chrome 154.0.8037.92 with the extended-selection flag Disabled,
