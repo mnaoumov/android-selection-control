@@ -2588,6 +2588,31 @@ nothing.** The eighth page of a `start` sweep grabbed where the handle belonged,
 and scrolled the page back. The grab now waits for the toolbar to return, which took 150–250 ms,
 and 150 ms more. After that, 36 pages and 30 pages ran without a miss.
 
+**Every page of a sweep lands on a node of its own, and a cold one is asked again before the sweep
+gives up on it.** `perform`'s caret wait (*On a cold Chromium 157 the second ask can be refused too*)
+covers only a press's FIRST page. On the handset (2026-10-14, Chrome 154, Wikipedia) `⤓ end` from the
+lead landed the END on 68 of a wrapped 88-character node that Chrome had not measured. The next page
+logged `the moving handle cannot be located` and the sweep ended after one page. Where a page step's
+locate fails on a Blink node, `warmThenRetry` now asks once more and locates again. When that ask is
+refused too, it re-asks every 100 ms for up to 1 s first. It does this once per announcement and node
+box, so the re-locate after a page's scroll gets its own try. Measured 2026-10-14 on the rig (Chrome 143
+force-stopped before each run), a served page of six one-line rows and forty 340-character wrapped
+paragraphs, long-press `alpha` on row 002, then `⤓ end`:
+
+| run | before | after |
+|---|---|---|
+| `⤓ end`, cold | `Moved(17, 299)` after 2 pages (`the moving handle cannot be located`), 1 run on the old build and 3 on a first version that waited only when its own probe was refused | 24 and 28 pages to the last paragraph's end (`341`), 47-55 s; a third run stopped on page 25, on the swipe defect below |
+| what answered | — | the second ask on 19 of 24, 20 of 28 and 14 of 25 pages; the wait on 0, 2 and 6, each answered after 100-200 ms |
+| `⤓ end` with `force-refuse-character-rects` | not measured | `still refused after 1000ms`, then the old ending after 2 pages, the selection intact |
+| a tap on `← char` mid-sweep, 2 runs | — | `stopped by a touch`, then `← char` `339 -> 338` in 1 gesture |
+| controls: `⇟ page` ×3, `← char`, `→ char`, 2 runs; the debug target's `TextView` | as before | one band each, then one character each way; `19 -> 20 -> 19`, `19 -> 25`, `⇟ page` `25 -> 30` |
+
+In two earlier runs, cut short by a tap, the re-locate after page 5's scroll was refused on a node
+answered before it. That is why the key includes the box. That refusal did not come back after the
+change, so the post-scroll wait has not fired on the rig. On page 25 of one run, the toolbar covered the
+column away from the handle, and the swipe started in the handle's own column, 41 px below it. It
+scrolled nothing and ended the sweep. That is tracked on its own.
+
 **A stop touch also cuts the swipe short, which reads like the document's edge.** A tap on
 `← char` 8 s into `end` left one scroll 140 px short, and the corner drag took the selection to
 the bottom of the screen. Every press now clears a stop flag at its start. A touch on any direction
