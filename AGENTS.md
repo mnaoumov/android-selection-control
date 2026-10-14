@@ -1274,7 +1274,32 @@ The controls, without the marker, are unchanged and log no re-homing. The same p
 press in 4 gestures with or without the marker. `⤒ start` on a page that opens with `<a><img></a>`
 moved off the image's `0..0` onto the heading, and `0 -> 1 -> 0` followed. The one-line rows went
 `28 -> 1 -> 28` and `⇥ word` `28 -> 4`. The debug target's `TextView` went `11 -> 12 -> 11` and `11 -> 19`.
-The phone itself has not run the fix.
+
+**The phone confirms it (2026-10-14, OnePlus 15, Chrome 154).** Chrome announced selections the old way
+(`seeded from a fresh selection`), so the extended-selection trial was not active. The page was the
+served `<p>` above (20px sans-serif, `padding-top: 300px`, `margin: 16px`), there was no marker, and Chrome
+was force-stopped before each run. The phone announces only some landings from the `<p>`. A selection
+whose focus is inside `[4]`, or on one of `[4]`'s seams, comes from the `<p>` (`srcLen=0`, 5 text leaves).
+Every other landing comes from its own leaf, as before:
+
+| sequence, 3 runs of 3 | result |
+|---|---|
+| long-press `environment`, then `→ char` ×2, `← char` ×2 | `41..55` re-homed onto leaf 4 (`[4]`, a `View` of 3) as `0..2`, i.e. `environment.[4`; then `2 -> 3`, `3 -> 1` of ` More …` (`inline:`), `1 -> 3`, `3 -> 2`, 1 gesture each, 0.56-1.08 s |
+| long-press `debugging`, `⇥ word` ×2, `→ char` ×3, `← char` ×3 | `9 -> 10 -> 21`, then `21 -> 1` of the 1-character `.` leaf, `1 -> 1` of `[4]` (`31..54` re-homed as `0..1`), `1 -> 2`, then back `2 -> 1 -> 1` (`.`) `-> 21`, 1 gesture each |
+| a rebind, long-press `More` (`1..5`), `⇄ swap`, `← char` ×5 | the START `1 -> 0` (the seam), `0 -> 2` of `[4]`, `2 -> 1 -> 0`, then onto `0..1` of `.`, 1 gesture each, 0.70-0.87 s; the last screenshot showed `.[4] More` selected |
+
+No press ended `HandleLost` or said `cannot see a selection`. Three announcements fell on a seam, and each was
+re-homed by the edge's rule. `41..56`, the END after `]`, went into the leaf before it, as `0..3` of `[4]`.
+`61..56`, the START on that same caret, went into the leaf after it, as `5..0` of ` More …`. `61..53`, the START
+between `.` and `[`, went into `[4]` as `0..0`. The next step left, onto the seam between `environment` and `.`,
+was announced from `debugging environment` itself on its last caret, so it was `startAfterSeam` that read it
+as the `.`'s first caret.
+
+The task's single `⇥ word` from `debugging` did not reach 21. On the phone that long-press was announced from
+its own leaf as `0..9`. That reads as a drag into a node not seen before (`not a fresh selection`), so nothing
+was seeded, and the word walk stopped on 10, the next word's start, as it does wherever no end is known. A
+second `⇥ word` went on to 21. The active edge also outlives a fresh selection: a run that did not rebind
+first had its `⇄ swap` move the END instead.
 
 **`word →` from the word before a block's trailing `.` lands on the block's last caret, and that is
 not Chrome's next-word-start hold.** Measured 2026-10-05 on the handset, Wikipedia's `Text_editor`: from
