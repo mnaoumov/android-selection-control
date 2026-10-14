@@ -99,6 +99,12 @@ sealed interface Outcome {
   data object AtFloor : Outcome
 
   /**
+   * A grow was asked for with the moving edge already on the document's first or last caret (a
+   * `TextView`'s, on one), so nothing was touched. See `SelectionDriver.nothingBeyond`.
+   */
+  data object AtDocumentEdge : Outcome
+
+  /**
    * The edge being moved is in a node nothing has announced since the swap, so nothing was touched.
    * See `SelectionDriver.activeEdgeAnnounced`.
    */
@@ -711,6 +717,13 @@ class SelectionDriver(
     }
 
     val growing = growsSelection(command)
+    if (growing && (command.unit == PadCommand.Unit.CHARACTER || command.unit == PadCommand.Unit.WORD)) {
+      nothingBeyond(snapshot, command)?.let { why ->
+        Diag.log("$command: $why — nothing to grow into, not touching")
+        report(Outcome.AtDocumentEdge)
+        return
+      }
+    }
     when (command.unit) {
       PadCommand.Unit.WORD -> when {
         !growing -> shrinkByWord(command, report)
@@ -729,6 +742,35 @@ class SelectionDriver(
       PadCommand.Unit.PAGE -> sweepPage(command, report)
       PadCommand.Unit.DOCUMENT -> sweepToDocumentEdge(command, report)
     }
+  }
+
+  /**
+   * Why a grow by [command] has nowhere to go, or null when it may.
+   *
+   * The edge is on its node's outer caret in the direction of travel, and nothing lies beyond it: a
+   * `TextView`'s selection cannot leave its view, and on Blink no text leaf is on screen that way while
+   * the page cannot scroll that way either. A grab there moves nothing and announces nothing, and at the
+   * left or right margin that silence used to be read as a side zone swallowing the touch-down.
+   * Measured 2026-10-13 on the rig (stock Android, which takes such a grab): the START on `0..22` of the
+   * first row, `← char` grabbed at x 14, travelled to x -4, announced nothing and ended `InEdgeZone`.
+   * The service then took the ROM for one that swallows, and refused every margin grab after it.
+   *
+   * Where the page could still scroll, the text beyond is only off screen, so the press goes ahead.
+   */
+  private fun nothingBeyond(snapshot: SelectionObserver.Snapshot, command: PadCommand): String? {
+    val length = snapshot.sourceLength
+    if (length <= 0) return null
+    val forward = command.toRight
+    if (snapshot.movingOffset() != (if (forward) length else 0)) return null
+    val side = if (forward) "end" else "start"
+    if (!snapshot.isBlink) return "the $activeEdge edge is on its view's $side"
+    val source = snapshot.source ?: return null
+    val beyond = if (forward) locator.textLeafAfter(source) else locator.textLeafBefore(source)
+    if (beyond != null) return null
+    val content = contentBand(snapshot) ?: return null
+    val canScroll = if (!content.scrolls) false else content.scrollability.let { if (forward) it.second else it.first }
+    if (canScroll != false) return null
+    return "the $activeEdge edge is on the document's $side: no text node beyond it on screen, and the page cannot scroll that way"
   }
 
   /**
