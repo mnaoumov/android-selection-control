@@ -16,7 +16,7 @@ Open work is split by shape, one item each in that same store, and named there r
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
 (two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, with the block step that follows it; the toolbar under a paged handle is fixed and confirmed on the phone, which
 found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse; on the phone, page and end now run to the article's real end, but the collapse did not recur, so the fix's own branch is unexercised; with the omnibox already hidden, a short `⇞ page` scroll still read as the edge there, and now the page must also stop listing that scroll direction, fixed on the rig and not yet confirmed on the phone), `start` ending
-blind on an image (fixed on the rig; on the phone the move off the image landed on a hidden header button, and the walk now skips controls, which is fixed on the rig and confirmed on the phone; a page step that reaches the top used to land on the image itself, and every page drag now holds and moves off it, fixed on the rig and not yet confirmed on the phone; a `start` from the page's top used to set off Chrome's pull-to-refresh, and now does not swipe at all, which is fixed on the rig and confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins, and such a press now stops at the first swallowed touch-down, fixed on the rig and confirmed on the phone, which also showed that the strip lets through a grab whose first move is vertical), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig and confirmed on the phone, where the pass also found that a press after a hand scroll can grab at a node's pre-scroll position, which now refuses instead, fixed on the rig and not yet confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
+blind on an image (fixed on the rig; on the phone the move off the image landed on a hidden header button, and the walk now skips controls, which is fixed on the rig and confirmed on the phone; a page step that reaches the top used to land on the image itself, and every page drag now holds and moves off it, fixed on the rig and not yet confirmed on the phone; a `start` from the page's top used to set off Chrome's pull-to-refresh, and now does not swipe at all, which is fixed on the rig and confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins, and such a press now stops at the first swallowed touch-down, fixed on the rig and confirmed on the phone, which also showed that the strip lets through a grab whose first move is vertical), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig and confirmed on the phone, where the pass also found that a press after a hand scroll can grab at a node's pre-scroll position, which now refuses instead, fixed on the rig and confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
 heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
 `✕` is fixed on the rig and confirmed on the phone); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
@@ -2116,9 +2116,26 @@ scroll it back". Measured after the change, Chrome force-stopped before each run
 | controls: `⇟ page` ×2, `⤓ end` (12 pages to row 120), `← char` ×2 and `→ char` after it, `⤒ start` | as before |
 | control: the debug target's `TextView`, `char →`, `char ←`, `word →` from `bravo` | `11 -> 12 -> 11`, then `11 -> 19` |
 
-The phone may take the other branch, a failed `refresh()`, which the gotcha above records for an
-off-screen anchor. Both branches refuse. The check runs once, when a press starts. Inside a press
-the pad's own drags keep the moving handle on screen, so the re-reads there are unchanged.
+Both branches refuse: the squashed box and a failed `refresh()`, which the gotcha above records for
+an off-screen anchor. The check runs once, when a press starts. Inside a press the pad's own drags
+keep the moving handle on screen, so the re-reads there are unchanged.
+
+**The phone confirms it, and takes the same branch as the rig (2026-10-14, OnePlus 15, Chrome 154,
+`en.wikipedia.org/wiki/Text_editor`).** Chrome announced selections the old way (`seeded from a fresh
+selection`), so the extended-selection trial was not active. Long-press `interactive` in the lead
+(`4..15`, node `Rect(378, 1271 - 721, 1341)`), then `input swipe 900 1700 900 700 1200`, which carried
+the line under the omnibox. The omnibox stayed shown. `refresh()` succeeded, as on the rig, and returned
+the box squashed onto the web contents' top, `Rect(378, 337 - 721, 337)`:
+
+| press | result |
+|---|---|
+| `→ char` after the scroll, 3 runs | `the moving edge's node has no box on screen (Rect(378, 337 - 721, 337)) — refusing to touch`, nothing dispatched, the toolbar still up; the status line read `the selection is scrolled out of view — scroll it back` |
+| `⇥ word` and `⇟ page` after it, 2 runs | the same refusal |
+| scrolled back (`input swipe 900 1100 900 2100 1200`), then `→ char`, `← char`, 3 runs | `15 -> 16 -> 15`, 1 gesture each, 0.58-0.74 s |
+| control: a 300 px hand scroll that keeps the line on screen, then `→ char`, `← char` | grabbed at the new row (y 1114, the node now at `995..1065`), `15 -> 16 -> 15`, 1 gesture each |
+
+The item's scroll-back swipe started at y 600, and that is where Chrome put the floating toolbar after the
+scroll, so it scrolled nothing. Start such a swipe clear of the toolbar.
 
 **A scroll that falls short means the document's edge, and the last drag then goes to the SCREEN's
 corner.** The band's corner is not enough, because a document's last rows scroll no higher than the
