@@ -991,6 +991,24 @@ before each run, long-press `charlie` in `Paragraph 1`:
 An earlier batch of 4 `→ char` runs, whose logs were not kept, ended two presses `HandleLost` (the
 second `→ char` once, and a `← char` once). 15 logged runs after it did not repeat either.
 
+**The phone has no regression, but the padding-box placement never happened there, so the fix's branch
+did not fire (2026-10-14, OnePlus 15, Chrome 154.0.8037.127).** Chrome announced selections the old way
+(`seeded from a fresh selection`), so the extended-selection trial was not active. The rig's page zooms
+out on the phone, so it was reshaped: `<p>Para N has charlie.</p>` and `<h2>Encoding N</h2>` with
+`padding-left: 210px` and `padding-top: 120px`. `Encoding` starts at about x 795, right of the END's
+column (x 609), and `1` wraps. On the phone the heading's text node reports the `<h2>`'s block-wide box
+(`Rect(56, 1397 - 1218, 1614)`), and the tree walk finds that same box. So the walk and the landing
+cannot disagree about which box is the text's. Chrome was force-stopped and the service rebound before
+each run. Long-press `charlie` (`11..18`), then:
+
+| presses | result |
+|---|---|
+| `→ char` ×2, `← char` ×2, 4 runs of 4 | `18 -> 19 -> 1 -> 19 -> 18`; the crossing landed on `0..0` and went `along the row -> 0..8, then back … -> 0..1` in 3 gestures and 1.2 s; the step back out took 2 gestures |
+| `⇥ word` ×2, 3 runs of 3 | `18 -> 19` (the block's last caret) in 1 gesture, then `19 -> 8` in 11 gestures and 3.6 s; the screenshot showed `charlie.` and `Encoding` selected |
+
+In every run the walk read the heading's first caret as measured (`puts the caret at (847.0, 1506.0)`,
+the first line's bottom), never by its average, so `isTextBesideBox` is still shown only on the rig.
+
 **An END on the caret after a node-ending wrap space has no handle, so a step skips that caret.**
 On the phone (2026-10-14, Wikipedia's `Text_editor`) the lead's `, such as ` (10 characters, one line)
 ends in the space the line wraps at, and the link `Notepad` starts the next line. From `as` (`7..9`),
