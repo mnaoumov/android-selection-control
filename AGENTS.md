@@ -867,6 +867,22 @@ the change, Chrome force-stopped before each run:
 | control: `⇟ page` ×2, `← char`, `→ char`, `⇞ page`, `⤓ end`, `← char`, 2 runs | one band each, `8 -> 7 -> 8`, `end` to row 040's 20, then `20 -> 19` |
 | control: the debug target's `TextView` from `bravo` | `11 -> 12 -> 11`, `11 -> 19`, `⇟ page` `19 -> 30`, `30 -> 29 -> 30` |
 
+**The phone confirms it (2026-10-14, OnePlus 15, Chrome 154).** Chrome announced selections the old way
+(`seeded from a fresh selection`), so the extended-selection trial was not active. The page was a served
+page of one-line `<p>Row 0NN has alpha bravo here</p>` rows, 20 px, `padding-top: 300px`, so each row's
+text node has the `<p>`'s block-wide box (`56..1218`). Long-press `has` on row 003 (`8..11`), then `⇄ swap`
+and `⇤ word` ×2 to `0..11`. A long-press on `Row` itself seeds nothing, because a first word looks like a
+drag into the node, and the swap after it then refuses (`EdgeUnknown`). Chrome was force-stopped before
+runs 2 and 3:
+
+| press, 3 runs of 3 | result |
+|---|---|
+| `← char` from row 003's first caret | grab at (24.5, 1866) `via 24.5 to 24.5`, no detour, inside the left side zone and answered; first move `-> 0..28` of row 002, then `27..28`, `Moved(0, 27, crossedNode=true)` in 2 gestures and 0.98-1.00 s; the screenshot showed the `e` of row 002's `here` and row 003's `Row 003 h` selected |
+| `→ char` back | `27 -> 0` of row 003, 2 gestures, 0.81-0.84 s |
+| `← char` again | `0 -> 27` of row 002, 2 gestures, 0.97-0.98 s |
+| control: END on `here` (`24..28`) `→ char`, `← char`, then `⇟ page` ×2, `← char`, `→ char` | `28 -> 1` of row 004 in 2 gestures and 1.09 s, `1 -> 28`; each page one band (`scrolled 1362 of 1393`, `1799 of 1823`), its drag straight down (`via 1028.5 to 1028.5`), the column kept (`28 -> 28`); `28 -> 27 -> 28`, 1 gesture each |
+| control: the same from the START on `here` (the swap carried over) | `24 -> 25 -> 24`; the first `⇟ page` crossed the anchor and moved the END from then on, and the second landed one column short (`24 -> 23`); `23 -> 22 -> 23` |
+
 **On a real article the next block's first row is several nodes, and the step lands in the wrong one.**
 Measured 2026-10-05 on the handset (Chrome 154, the extended-selection flag Disabled), on Wikipedia's
 `Text_editor`. From `cost.`, the END on 143 of 143, `char →` was announced `Moved(143, 1, crossedNode=true)`
