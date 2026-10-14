@@ -4346,7 +4346,7 @@ class SelectionDriver(
   fun noteSelectionEvent(before: SelectionObserver.Snapshot?) {
     val now = observer.latest ?: return
     if (now.isEmpty()) return
-    if (before != null && !isFreshSelection(before, now)) {
+    if (before != null && !isFreshSelection(before, now, observer.announced ?: now)) {
       lastSeenInNode[nodeKey(now)] = now
       // The user dragged one handle inside one node, and whichever it was, that node holds both
       // edges. So a moving edge nothing had announced since a swap is announced now.
@@ -4382,10 +4382,21 @@ class SelectionDriver(
    * frame, `0..focus` (see [inMovingFrame]), so an announcement there that starts at 0 is a drag.
    * A long-press on a node's FIRST word looks the same and seeds nothing, which is the fail-safe
    * direction: it is the behaviour from before any seeding existed.
+   *
+   * **That test reads [arrived], the announcement before [inMovingFrame] rewrote it.** With the START
+   * moving, the frame turns `0..focus` into `focus..length`, so `from` is the focus and a drag reads
+   * as a long-press. Measured 2026-10-14 on the rig, Chrome 143: a hand drag of the START from row
+   * 005 up through the `Plain text …` paragraph logged `seeded from a fresh selection at 31..32`
+   * there, every run, and the anchor's node, the floor and the crossing test then all reasoned from
+   * a node that held no anchor.
    */
-  private fun isFreshSelection(before: SelectionObserver.Snapshot, now: SelectionObserver.Snapshot): Boolean {
+  private fun isFreshSelection(
+    before: SelectionObserver.Snapshot,
+    now: SelectionObserver.Snapshot,
+    arrived: SelectionObserver.Snapshot,
+  ): Boolean {
     val previous = if (sameNode(before, now)) before else lastSeenInNode[nodeKey(now)]
-    if (previous == null) return now.from != 0
+    if (previous == null) return arrived.from != 0
     return now.low() != previous.low() && now.high() != previous.high()
   }
 

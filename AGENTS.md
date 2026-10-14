@@ -1449,6 +1449,24 @@ Measured 2026-09-28 on the rig, Chrome, a served page of one-line rows:
 The last row is the price. A long-press on a node's first word looks exactly like a drag into it,
 so it seeds nothing, which is the fail-safe direction.
 
+**The "starts at 0" test reads the announcement as it ARRIVED, not as the moving edge's frame
+rewrote it.** With the START moving, `inMovingFrame` turns `0..focus` into `focus..length`, so a
+START dragged into an unseen node read as a long-press there. Measured 2026-10-14 on the rig, Chrome
+143, a served page of `Row 001 …`, `Earlier text ends with cost.`, `As <a>source code</a> is text, …`,
+`Plain text exclusively alpha bravo charlie` and `Row 005 has alpha bravo here`. Long-press `alpha` on
+row 005, `⇄ swap`, `← char`, then the START dragged by hand up onto the seam after `As `. Partway the
+service logged `seeded from a fresh selection at 31..32` in the `Plain text …` paragraph, every run, so
+the anchor's node and the boundary set moved onto a node that held neither edge's anchor.
+`isFreshSelection` now takes `observer.announced` for that test. After the change, Chrome
+force-stopped before each run:
+
+| sequence | result |
+|---|---|
+| the START drag above, 3 runs of 3 | `a handle dragged into another node at 31..32: not a fresh selection`, and at `0..42` and `0..11`; nothing seeded |
+| then `← char`, `→ char` ×2, `← char` ×2, 2 runs of 2 | `0 -> 2` (of `As `) `-> 0 -> 1 -> 0 -> 2`, 1 gesture each, `boundaries=[]` |
+| control: long-press `alpha` on row 001, `→ char`, END dragged by hand down to row 005 | `0..22`, `0..4`, `0..42`, `0..8`, each `not a fresh selection` |
+| control: a tap, then long-press `alpha` on row 005 | `seeded from a fresh selection at 12..17` |
+
 **All three of those claims are now measured, not reasoned** (2026-09-23, the rig, against the debug
 target's `alpha bravo charlie delta echo` whose boundaries are 5, 11, 19 and 25, so every expected
 number was known before the press):
