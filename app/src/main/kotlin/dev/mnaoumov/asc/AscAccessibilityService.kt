@@ -357,7 +357,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     is Outcome.Degraded -> true
     Outcome.NoSelection, Outcome.HandleLost, Outcome.RowUnknown, Outcome.ColumnUnknown, Outcome.HandleCovered,
     Outcome.AtFloor, Outcome.AtDocumentEdge, Outcome.EdgeUnknown, Outcome.Obstructed, Outcome.InEdgeZone, Outcome.InGestureBar,
-    Outcome.OffScreen, Outcome.BeyondOffScreen -> false
+    Outcome.OffScreen, Outcome.BeyondOffScreen, Outcome.NeighbourUnmeasured -> false
   }
 
   /**
@@ -789,6 +789,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     Outcome.OffScreen -> "the selection is scrolled out of view — scroll it back"
     // Nothing was touched. The text beyond the edge is off screen; the next press works once it is not.
     Outcome.BeyondOffScreen -> "the text ${if (driver.activeEdge == Edge.END) "after it is below — scroll down" else "before it is above — scroll up"} a little"
+    Outcome.NeighbourUnmeasured -> "the text ${if (driver.activeEdge == Edge.END) "after" else "before"} it won't say where it is — try again"
     is Outcome.Degraded -> "one character (${outcome.reason})"
   }
 

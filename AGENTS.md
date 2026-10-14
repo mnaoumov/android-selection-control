@@ -2674,7 +2674,33 @@ The service was rebound and Chrome force-stopped before each run.
 On Wikipedia the scroll back does not give the block step. The previous text leaf the walk finds is a
 clipped 12-character label at the right end of the page-tools row, which `will not measure`. The press then
 reaches sideways into the left side zone and ends `Moved(0, 0)` with the edge-zone message, 2 presses of
-2, and the first one left the magnifier on screen. That is tracked on its own.
+2, and the first one left the magnifier on screen. That is fixed on the rig (the entry below).
+
+**The walk passes over text the screen's edge cuts off, and an unmeasurable neighbour on another row
+refuses instead of a reach along the row.** The rig reproduces the phone's label with a served
+`<h1>Text editor</h1>`, then a right-aligned row of two empty icon links and `<a style="width:40px;
+overflow:hidden; white-space:nowrap; margin-right:-30px">Download PDF</a>` (`html{overflow-x:hidden}`),
+then the hatnote `<p><i>For the use of editors, see <a>Help</a>.</i></p>`. Chrome clips the label's box to
+`(642, 831 - 720, 877)`. Its rectangles run `642..668`, `668..691`, `689..720`, `718..720`, and then eight
+of zero width at x 720, the screen's edge. Chrome's `unclipped*` extras cannot say this, because they are
+not in the box's coordinates (`unclippedLeft=847`, `unclippedWidth=27`). So `HandleLocator.runsOffScreen`
+passes over a text leaf whose box touches the screen's left or right edge when its first or last character
+there comes back zero-width at that edge. It asks twice, because a cold node answers the first ask with its
+whole box. Both ends are checked whichever way the walk goes. With only the near end checked, the `→ char`
+back down from the heading found the label's first character on screen and shrank into it. Where a text leaf
+beyond the edge lies wholly on another row and `adjacentNodeCaret` still cannot place its caret,
+`nothingBeyond` ends the press `NeighbourUnmeasured` ("the text before it won't say where it is — try
+again") with nothing touched. Measured 2026-10-14 on the rig, Chrome 143 force-stopped before each run.
+Long-press `use`, `⇄ swap`, `⇤ word` ×2 to `0..11`, then:
+
+| presses | old build | new build |
+|---|---|---|
+| `← char` | `the previous node (12 chars …) is wrapped and will not measure`, grab at x 12, to x -9, then x 0, `Moved(0, 0)` in 1.8 s and 2 gestures | `passing over a node (12 chars …) whose last character is beyond the screen's edge`, the block step into the heading, `Moved(0, 10)` in 1.1 s and 2 gestures, 2 runs of 2 |
+| then `→ char`, `← char`, `→ char`, `→ char` | not reached | `10 -> 0` (the hatnote), `0 -> 10`, `10 -> 0`, `0 -> 1`, 2 gestures each across the block, 1 within it |
+| `← char` ×2, `→ char` with `force-refuse-character-rects` | not measured | `NeighbourUnmeasured` in ~1 s (the caret wait) and then 2 ms, 0 gestures; then `0 -> 1`, 2 runs of 2 |
+| controls: one-line rows, the START `0 -> 27 -> 0` across rows 002/001, the END `28 -> 1 -> 28` across rows 004/005; the debug target's `TextView` from `bravo` | as before | the same; `11 -> 12 -> 11`, `11 -> 19`, and after `⇄ swap` `6 -> 5 -> 0`, then `AtDocumentEdge` |
+
+The phone has not run the fix.
 
 **A heads-up notification is another app's window above the target, and a touch-down on it goes to the
 notification.** An upward page swipe starts a quarter of a drop below the band's top: y 361 on the phone,
