@@ -2330,8 +2330,11 @@ class SelectionDriver(
      * a round trip there and changes nothing, and it corrects the step wherever the platform is
      * honest.
      */
-    val average = (bounds.width().toFloat() / snapshot.sourceLength).coerceIn(MIN_CHAR_PX, MAX_CHAR_PX)
-    val measured = locator.characterGeometry(snapshot, activeEdge, crossing)?.characterWidth ?: return average
+    val measured = locator.characterGeometry(snapshot, activeEdge, crossing)?.characterWidth
+      // A box that wraps on from the node before it is not divided by its wrap, so its average is
+      // several characters wide: the row it continues gives the pitch instead (the locator's note).
+      ?: locator.seamAverage(snapshot)
+      ?: (bounds.width().toFloat() / snapshot.sourceLength)
     return measured.coerceIn(MIN_CHAR_PX, MAX_CHAR_PX)
   }
 

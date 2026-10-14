@@ -305,12 +305,14 @@ class HandleLocator(private val density: () -> Float) {
     val bounds = Rect().also { node.getBoundsInScreen(it) }
     val index = if (forward) 0 else length - 1
     val rect = characterRect(node, bounds, index) ?: characterRect(node, bounds, index)
+    val seam = if (rect == null) seamCaret(snapshot, bounds, forward, oneIn) else null
     val geometry = when {
       rect != null -> CharacterGeometry(
         caretX = if (forward == oneIn) rect.right else rect.left,
         lineBottom = rect.bottom,
         characterWidth = rect.width(),
       )
+      seam != null -> seam
       snapshot.copy(bounds = bounds, sourceLength = length, source = node).sourceIsOneLine() -> {
         val average = bounds.width().toFloat() / length
         CharacterGeometry(
@@ -321,10 +323,14 @@ class HandleLocator(private val density: () -> Float) {
       }
       else -> null
     }
+    val how = when {
+      rect != null -> ""
+      seam != null -> ", at the seam: it wraps on from this node's row"
+      else -> ", by its average"
+    }
     Diag.log(
       "  adjacent: the ${if (forward) "next" else "previous"} node ($length chars at $bounds) " +
-        (geometry?.let { "puts the caret at (${it.caretX}, ${it.lineBottom})" + if (rect == null) ", by its average" else "" }
-          ?: "is wrapped and will not measure")
+        (geometry?.let { "puts the caret at (${it.caretX}, ${it.lineBottom})$how" } ?: "is wrapped and will not measure")
     )
     val neighbour = geometry?.let { NeighbourCaret(it, length, bounds) }
     if (neighbour != null) {
@@ -333,6 +339,76 @@ class HandleLocator(private val density: () -> Float) {
     }
     return neighbour
   }
+
+  /**
+   * The caret of a neighbour that WRAPS on from the source's row, or null where it does not: the
+   * next node's first caret ([forward]) is where the source ends, and the previous node's last caret
+   * is where it starts. Read from the source's one-line box, whose row is known, and sized by the
+   * source's own average.
+   *
+   * The neighbour's box cannot say this itself. Measured 2026-10-13 on the rig, Chromium r1709360, a
+   * served `…environment</span>.<sup>[4]</sup> More text after.`: ` More text after.` starts on
+   * `[4]`'s row, after it, and wraps, so its box is `(32, 997 - 678, 1093)`, both lines across the
+   * whole width. Its 17 characters average 38 px over a 96 px box, which passes the one-line shape
+   * test, so its first caret was placed by that average at x 70 on its SECOND line. `→ char` from
+   * `[4]`'s end took that for another row, grabbed into the next paragraph and grew to `0..27` of it.
+   *
+   * A neighbour wraps on from the row when its box is taller than the source's by half again, its
+   * near line is on the source's row (tops forward, bottoms backward, within half the source's
+   * height, as [SelectionDriver]'s row tests take it), and it reaches back past the seam, which no
+   * node that stays on the row does.
+   */
+  private fun seamCaret(snapshot: SelectionObserver.Snapshot, neighbour: Rect, forward: Boolean, oneIn: Boolean): CharacterGeometry? {
+    val box = snapshot.bounds?.takeIf { snapshot.sourceIsOneLine() } ?: return null
+    if (!wrapsOnFrom(box, neighbour, forward)) return null
+    val average = box.width().toFloat() / snapshot.sourceLength
+    val seam = if (forward) box.right.toFloat() else box.left.toFloat()
+    return CharacterGeometry(
+      caretX = seam + (if (oneIn) average else 0f) * (if (forward) 1 else -1),
+      lineBottom = box.bottom.toFloat(),
+      characterWidth = average,
+    )
+  }
+
+  /** Whether [neighbour], after the one-line [box] ([forward]) or before it, wraps on from its row: see [seamCaret]. */
+  private fun wrapsOnFrom(box: Rect, neighbour: Rect, forward: Boolean): Boolean {
+    if (neighbour.height() <= box.height() * 3 / 2) return false
+    val half = box.height() / 2f
+    return if (forward) {
+      kotlin.math.abs(neighbour.top - box.top) < half && neighbour.left < box.right
+    } else {
+      kotlin.math.abs(neighbour.bottom - box.bottom) < half && neighbour.right > box.left
+    }
+  }
+
+  /**
+   * The one-line box of the text node before [snapshot]'s source when the source wraps on from its
+   * row, or null. An unmeasured caret near the source's start is then on THAT row, after that box.
+   *
+   * The mirror of [seamCaret], for the edge already inside such a node. Measured 2026-10-13 on the
+   * rig, Chromium r1709360 with the refusal marker: the END on `0..1` of ` More text after.`, whose
+   * box `(32, 997 - 678, 1093)` passes the one-line test, was placed by its 38 px average at x 88 and
+   * at the box's bottom, y 1121, on the second line. The handle was drawn on the first, just after
+   * `<sup>[4]</sup>` at `(460, 989 - 500, 1029)`; the grab announced nothing and the press ended
+   * `HandleLost`.
+   */
+  private fun rowContinuedFrom(snapshot: SelectionObserver.Snapshot): Pair<Rect, Int>? {
+    if (!snapshot.isBlink) return null
+    val bounds = snapshot.bounds ?: return null
+    val before = snapshot.source?.let(::textLeafBefore) ?: return null
+    val length = runCatching { before.text?.length }.getOrNull()?.takeIf { it > 0 } ?: return null
+    val box = Rect().also { before.getBoundsInScreen(it) }
+    if (!SelectionObserver.boxIsOneLine(box, length) || !wrapsOnFrom(box, bounds, forward = true)) return null
+    return box to length
+  }
+
+  /**
+   * The average character of the row [snapshot]'s source wraps on from ([rowContinuedFrom]), or null.
+   * The source's own average is not divided by its wrap and was 38 px against glyphs of about 12, so a
+   * `char ←` from `0..1` of ` More text after.` sized by it reached past `[4]` onto the `.` before it.
+   */
+  fun seamAverage(snapshot: SelectionObserver.Snapshot): Float? =
+    rowContinuedFrom(snapshot)?.let { (box, length) -> box.width().toFloat() / length }
 
   /** The first text leaf after [source] in tree order, as [adjacentNodeCaret] walks it. */
   fun textLeafAfter(source: AccessibilityNodeInfo): AccessibilityNodeInfo? = adjacentTextLeaf(source, forward = true)
@@ -710,6 +786,25 @@ class HandleLocator(private val density: () -> Float) {
   }
 
   /**
+   * The handle's row from a measured caret whose line is ABOVE the box's bottom, or null where the
+   * box's bottom is the caret's line, as it is on one line.
+   *
+   * A short phrase that starts late on a line and wraps passes the one-line shape test: its box runs
+   * the whole width on both lines, so its average character is not divided by the wrap. Measured
+   * 2026-10-13 on the rig, Chromium r1709360: ` More text after.` after a `<sup>[4]</sup>` is
+   * `(32, 997 - 678, 1093)`, 17 characters at 38 px over 96, while its first caret is on the upper
+   * line. The END on `0..1` was grabbed at the box's bottom, y 1121, on the second line, with the
+   * handle drawn near y 1073; the grab announced nothing and the press ended `HandleLost`. The
+   * measured caret said x 508 there, which was right, and its row says the upper line.
+   */
+  private fun measuredRowAbove(geometry: CharacterGeometry?, bounds: Rect): Float? {
+    val line = geometry?.lineBottom ?: return null
+    if (bounds.bottom - line <= bounds.height() / 4f) return null
+    Diag.log("  locate: the measured caret is on a line above the box's bottom (${line} against ${bounds.bottom}) — the box wraps")
+    return line + handleDrop
+  }
+
+  /**
    * The moving handle's pixel, or null when nothing trustworthy is available and the caller should
    * acquire instead.
    *
@@ -727,18 +822,32 @@ class HandleLocator(private val density: () -> Float) {
        * `Chrome is made by Google`: the grabs sat exactly 16 px apart per offset across glyphs of
        * 8 to 30 px, and a one-glyph reach from there landed two characters on, from 10 across the
        * `m` and from 6 across the space. The row stays `bounds.bottom`: on one line that is already
-       * the caret's own, and it is the row every one-line grab has been measured at.
+       * the caret's own, and it is the row every one-line grab has been measured at. Only a measured
+       * caret a line above it overrides it, because then the box wraps ([measuredRowAbove]).
        *
        * The primer has usually asked already, so on Chrome this is the memo rather than an IPC.
        */
       val offset = if (edge == Edge.START) snapshot.low() else snapshot.high()
       val average = bounds.left + (offset.toFloat() / snapshot.sourceLength) * bounds.width()
-      val measured = characterGeometry(snapshot, edge)?.caretX
+      val geometry = characterGeometry(snapshot, edge)
+      val measured = geometry?.caretX
       if (measured != null) Diag.log("  locate: one-line caret measured=$measured average=$average")
+      // A box that wraps on from the node before it puts its first carets on that node's row.
+      val continued = if (measured == null) rowContinuedFrom(snapshot) else null
+      if (continued != null) {
+        val (box, length) = continued
+        val seamX = box.right + offset * box.width().toFloat() / length
+        if (seamX > bounds.right) {
+          Diag.log("  locate: the box wraps on from the row of the node before it, and offset $offset runs off that row — not guessing")
+          return null
+        }
+        Diag.log("  locate: the box wraps on from the row of the node before it ($box) — offset $offset placed along that row")
+        return PointF(if (edge == Edge.START) seamX - handleInset else seamX + handleInset, box.bottom + handleDrop)
+      }
       if (measured == null && averageOutrunsToolbar(snapshot, edge, toolbarCentreX)) return null
       val anchorX = measured ?: average
       val x = if (edge == Edge.START) anchorX - handleInset else anchorX + handleInset
-      return PointF(x, bounds.bottom + handleDrop)
+      return PointF(x, measuredRowAbove(geometry, bounds) ?: (bounds.bottom + handleDrop))
     }
 
     /*
