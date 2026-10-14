@@ -68,6 +68,11 @@ class HeldPointer(
   private val onScreen: (PointF) -> PointF,
   /** Dispatches a gesture; the callback fires when the framework has finished playing it. */
   private val dispatch: (GestureDescription, (Boolean) -> kotlin.Unit) -> Boolean,
+  /**
+   * The signed vertical move a stroke touching down at the first point must make before it heads for
+   * the second, or 0: `AscAccessibilityService.edgeLead`.
+   */
+  private val edgeLeadPx: (PointF, PointF) -> Float = { _, _ -> 0f },
 ) {
 
   private var stroke: GestureDescription.StrokeDescription? = null
@@ -143,11 +148,16 @@ class HeldPointer(
     val distance = shortDetourPx?.let { maxOf(kotlin.math.abs(towards.x - from.x), it) } ?: SLOP_DETOUR_PX
     val away = if (vertical) 0f else (if (towards.x >= from.x) distance else -distance) * (if (detourBack) -1f else 1f)
     val start = onScreen(from)
-    val detour = onScreen(PointF(from.x + away, from.y))
+    // In a side gesture zone the stroke rises first (see [edgeLead]), and the detour runs along the
+    // raised row.
+    val lead = edgeLeadPx(start, if (away != 0f) PointF(from.x + away, from.y) else towards)
+    val raised = onScreen(PointF(start.x, start.y + lead))
+    val detour = onScreen(PointF(from.x + away, from.y + lead))
     val end = onScreen(towards)
     val first = GestureDescription.StrokeDescription(
       Path().apply {
         moveTo(start.x, start.y)
+        if (lead != 0f) lineTo(raised.x, raised.y)
         if (away != 0f) lineTo(detour.x, detour.y)
         lineTo(end.x, end.y)
       },
@@ -164,7 +174,11 @@ class HeldPointer(
       if (played) link() else lost("grab not played")
       onGrabbed(played)
     }
-    Diag.log("held: grab at ${from.x} accepted=$accepted via ${detour.x} to ${end.x}")
+    Diag.log(
+      "held: grab at ${from.x} accepted=$accepted " +
+        (if (lead != 0f) "rising ${-lead} px first, " else "") +
+        "via ${detour.x} to ${end.x}"
+    )
     // A refused dispatch never calls back, so this is the one path that has to report for itself —
     // and it must report exactly once, like the other.
     if (!accepted) {
