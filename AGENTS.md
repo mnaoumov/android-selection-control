@@ -16,7 +16,7 @@ Open work is split by shape, one item each in that same store, and named there r
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
 (two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, with the block step that follows it; the toolbar under a paged handle is fixed and confirmed on the phone, which
 found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse; on the phone, page and end now run to the article's real end, but the collapse did not recur, so the fix's own branch is unexercised; with the omnibox already hidden, a short `⇞ page` scroll still read as the edge there, and now the page must also stop listing that scroll direction, fixed on the rig and not yet confirmed on the phone), `start` ending
-blind on an image (fixed on the rig; on the phone the move off the image landed on a hidden header button, and the walk now skips controls, which is fixed on the rig and confirmed on the phone; a page step that reaches the top used to land on the image itself, and every page drag now holds and moves off it, fixed on the rig and not yet confirmed on the phone; a `start` from the page's top used to set off Chrome's pull-to-refresh, and now does not swipe at all, which is fixed on the rig and confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins, and such a press now stops at the first swallowed touch-down, fixed on the rig and confirmed on the phone, which also showed that the strip lets through a grab whose first move is vertical), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig and confirmed on the phone, where the pass also found that a press after a hand scroll can grab at a node's pre-scroll position, which now refuses instead, fixed on the rig and confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
+blind on an image (fixed on the rig; on the phone the move off the image landed on a hidden header button, and the walk now skips controls, which is fixed on the rig and confirmed on the phone; a page step that reaches the top used to land on the image itself, and every page drag now holds and moves off it, fixed on the rig and confirmed on the phone; a `start` from the page's top used to set off Chrome's pull-to-refresh, and now does not swipe at all, which is fixed on the rig and confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins, and such a press now stops at the first swallowed touch-down, fixed on the rig and confirmed on the phone, which also showed that the strip lets through a grab whose first move is vertical), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig and confirmed on the phone, where the pass also found that a press after a hand scroll can grab at a node's pre-scroll position, which now refuses instead, fixed on the rig and confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
 heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
 `✕` is fixed on the rig and confirmed on the phone); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
@@ -1799,6 +1799,28 @@ force-stopped before each run, the header page above scrolled ~150 px, long-pres
 | `⇞ page` on the END (the same scroll) | not measured | off the image (`0..1`), crossed the anchor onto `0..11`, now the START; `0 -> 1 -> 0` |
 | controls: `⇟ page` ×3, `⇞ page`, `⤓ end` mid-document | as before | one band each, the column kept (`14 -> 14` a row-shape on); `end` 7 pages to row 120's 33, then `33 -> 32 -> 31 -> 32` |
 | control: the debug target's `TextView`, `⇟ page`, `← char`, `→ char` | as before | `11 -> 30`, then `30 -> 29 -> 30` |
+
+**The phone confirms it (2026-10-14, OnePlus 15, Chrome 154.0.8037.127, Wikipedia's desktop skin).**
+Chrome announced selections the old way (`seeded from a fresh selection`), so the extended-selection
+trial was not active. The case is narrow to set up. The step's scroll must reach the page's top, and
+it must fall short by no more than a line (`judgeAndDrag`). Otherwise the scroller stops listing `up`,
+and the short scroll sends the step to the corner drag. So the handle, measured with the page at its
+top, has to sit within a line above the band's near end (y 2033 here). `Text_editor` has its image
+there and nothing selectable. On it, `⤒ start` from `interactive` with the page scrolled ~330 px
+logged `scrolled -325 of -968.0 — the document's edge` and took the corner drag, which was already
+confirmed. `Plain_text` does have text there. Scroll it ~375 px by hand and long-press `encoding` in the
+lead (`41..49` of a wrapped 77-character node). The step then logged `scrolled -374 of -461.0`, and the
+ordinary drag to (255.5, 484) logged `the drag left the edge in a node with no text (0..0, srcLen=-1)`.
+It moved on to the `Plain text` heading's first caret, `Moved(41, 0, crossedNode=true)`:
+
+| press | result |
+|---|---|
+| `⤒ start` on the START, 2 runs | the ordinary drag moved off the wordmark onto `0..10`, then the corner page (`cannot scroll up`) also moved off it; 2.8 s, 5 gestures; `→ char` `0 -> 1`, `← char` `1 -> 0`, 1 gesture each |
+| `⇞ page` on the START, 2 runs | the ordinary drag only, off the wordmark onto `0..10`, 1.9-2.0 s, 3 gestures; `0 -> 1 -> 0`, 1 gesture each |
+| control: `⇟ page` ×3 on `Text_editor` from `often` | one band each (`scrolled 1466 of 1494`, `1480 of 1508`, `1613 of 1648`), each drag straight down at its grab's column; `→ char` / `← char` `6 -> 7 -> 6` |
+
+On `Plain_text` the third `⇟ page` landed the END on a collapsed section heading's first caret. That
+was announced `0..0` and ended `HandleLost`, and the pad was blind after it. That is tracked on its own.
 
 **A page step mid-document can cross the anchor too, and there the landing's node says nothing by
 itself**, because it can be on either side of the anchor, and Chrome announces it as `0..focus` either
