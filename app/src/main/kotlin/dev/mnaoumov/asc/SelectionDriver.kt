@@ -112,6 +112,13 @@ sealed interface Outcome {
   data object AtDocumentEdge : Outcome
 
   /**
+   * A grow was asked for with the moving edge on its node's outer caret, no text beyond it on screen,
+   * and the page still able to scroll that way, so nothing was touched. The text beyond is only off
+   * screen; scrolling it into view makes the next press work. See `SelectionDriver.nothingBeyond`.
+   */
+  data object BeyondOffScreen : Outcome
+
+  /**
    * The edge being moved is in a node nothing has announced since the swap, so nothing was touched.
    * See `SelectionDriver.activeEdgeAnnounced`.
    */
@@ -835,9 +842,9 @@ class SelectionDriver(
 
     val growing = growsSelection(command)
     if (growing && (command.unit == PadCommand.Unit.CHARACTER || command.unit == PadCommand.Unit.WORD)) {
-      nothingBeyond(snapshot, command)?.let { why ->
-        Diag.log("$command: $why — nothing to grow into, not touching")
-        report(Outcome.AtDocumentEdge)
+      nothingBeyond(snapshot, command)?.let { (outcome, why) ->
+        Diag.log("$command: $why — not touching")
+        report(outcome)
         return
       }
     }
@@ -1028,22 +1035,34 @@ class SelectionDriver(
    * first row, `← char` grabbed at x 14, travelled to x -4, announced nothing and ended `InEdgeZone`.
    * The service then took the ROM for one that swallows, and refused every margin grab after it.
    *
-   * Where the page could still scroll, the text beyond is only off screen, so the press goes ahead.
+   * **Where the page could still scroll, the text beyond is only off screen, and the press refuses
+   * too, with [Outcome.BeyondOffScreen].** With no neighbour to step into, the grab could only reach
+   * sideways along its own row, which has nothing to enter. Measured 2026-10-14 on the handset
+   * (Chrome 154, Wikipedia's `Text_editor` scrolled ~700 px so the hatnote was the top line): the
+   * START on its `0..3`, `← char` grabbed at x 45.5 in the side zone, reached to x 14.5 and then x 0,
+   * the held link was cancelled after 18 links, and the press ended `Moved(0, 0)`. It also taught the
+   * side-zone verdict from a grab that had nothing to answer it, and left Chrome's magnifier up.
+   * Scrolling the neighbour into view first was considered and not done: it chains a swipe and a
+   * block step, and either one missing costs the selection, where the user's own scroll costs one
+   * gesture and the next press then takes the block step.
    */
-  private fun nothingBeyond(snapshot: SelectionObserver.Snapshot, command: PadCommand): String? {
+  private fun nothingBeyond(snapshot: SelectionObserver.Snapshot, command: PadCommand): Pair<Outcome, String>? {
     val length = snapshot.sourceLength
     if (length <= 0) return null
     val forward = command.toRight
     if (snapshot.movingOffset() != (if (forward) length else 0)) return null
     val side = if (forward) "end" else "start"
-    if (!snapshot.isBlink) return "the $activeEdge edge is on its view's $side"
+    if (!snapshot.isBlink) return Outcome.AtDocumentEdge to "the $activeEdge edge is on its view's $side"
     val source = snapshot.source ?: return null
     val beyond = if (forward) locator.textLeafAfter(source) else locator.textLeafBefore(source)
     if (beyond != null) return null
     val content = contentBand(snapshot) ?: return null
     val canScroll = if (!content.scrolls) false else content.scrollability.let { if (forward) it.second else it.first }
-    if (canScroll != false) return null
-    return "the $activeEdge edge is on the document's $side: no text node beyond it on screen, and the page cannot scroll that way"
+    if (canScroll != false) {
+      return Outcome.BeyondOffScreen to "the $activeEdge edge is on its node's $side and no text node beyond it is on screen, " +
+        "but the page can scroll ${if (forward) "down" else "up"} (${canScroll ?: "unknown"}) — the text beyond is off screen"
+    }
+    return Outcome.AtDocumentEdge to "the $activeEdge edge is on the document's $side: no text node beyond it on screen, and the page cannot scroll that way"
   }
 
   /**
