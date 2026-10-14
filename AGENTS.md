@@ -1113,7 +1113,23 @@ Measured 2026-10-14 on the rig, Chrome 143 force-stopped before each run. Long-p
 | control: one-line rows, END `→ char`, `← char`, `⇥ word`; START `← char`, `→ char`, `← char`, 2 runs | `29 -> 1 -> 29`, `29 -> 4`; `0 -> 28 -> 0 -> 28` | the same |
 | control: the debug target's `TextView` from `bravo` | `11 -> 12 -> 11`, `11 -> 19` | the same |
 
-The phone has not run the fix.
+**The phone runs the fix with no regression, but its step back did not land on the second line, so the
+correction did not fire there (2026-10-14, OnePlus 15, Chrome 154.0.8037.127,
+`en.wikipedia.org/wiki/Text_editor`).** Chrome announced selections the old way (`seeded from a fresh
+selection`), so the extended-selection trial was not active. Chrome was force-stopped and the service
+rebound before each run. The page was scrolled about 700 px by hand, which hid the omnibox and put the
+caption at y 1590..1646, above the pad. Long-press `like` seeded `8..12`, then `⇄ swap` and `⇤ word`
+went `8 -> 0` in 4 gestures:
+
+| press, 3 runs of 3 | result |
+|---|---|
+| `← char` from the caption's caret 0 | `first move -> 0..1`, which landed in `Notepad.`'s `.` node and slid on along the row, ending on the last `]` of `[3]`. That was `Moved(0, 0, crossedNode=true)` in 2 gestures and 1.06 s. The screenshot showed `]` and the image selected through `Editors like` |
+| `→ char` back | `first move -> 0..1, then to (164.5, 1691.0) -> 0..12`, landing on the caption's first line, `Moved(0, 0, crossedNode=true)` in 2 gestures and 1.87-1.90 s. `Editors like` was selected and the image was not |
+| then `→ char`, `← char` | `0 -> 1 -> 0`, 1 gesture each, 0.58-0.76 s |
+
+None of the runs logged `in another node ... back onto the neighbour's row`, `located after` or `letting go`.
+On the phone the move down lands on the caption's first row, unlike the rig's line 2, so
+`ontoTheNeighbour` is still proven only on the rig.
 
 **A char grow from a node's outer caret into the next node ON THE SAME ROW aims at that node's first
 character, not by the node it leaves.** The `char →` from `environment`'s end used to reach 20 px,
