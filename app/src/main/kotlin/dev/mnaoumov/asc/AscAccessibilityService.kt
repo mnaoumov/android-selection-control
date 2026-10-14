@@ -354,7 +354,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     is Outcome.Degraded -> true
     Outcome.NoSelection, Outcome.HandleLost, Outcome.RowUnknown, Outcome.ColumnUnknown, Outcome.HandleCovered,
     Outcome.AtFloor, Outcome.AtDocumentEdge, Outcome.EdgeUnknown, Outcome.Obstructed, Outcome.InEdgeZone, Outcome.InGestureBar,
-    Outcome.OffScreen -> false
+    Outcome.OffScreen, Outcome.BeyondOffScreen -> false
   }
 
   /**
@@ -784,6 +784,8 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     Outcome.EdgeUnknown -> "can't see the ${if (driver.activeEdge == Edge.END) "end" else "start"} — nudge its handle once"
     // Nothing was touched. Scrolling the selection back into view makes the next press work.
     Outcome.OffScreen -> "the selection is scrolled out of view — scroll it back"
+    // Nothing was touched. The text beyond the edge is off screen; the next press works once it is not.
+    Outcome.BeyondOffScreen -> "the text ${if (driver.activeEdge == Edge.END) "after it is below — scroll down" else "before it is above — scroll up"} a little"
     is Outcome.Degraded -> "one character (${outcome.reason})"
   }
 
