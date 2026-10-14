@@ -861,6 +861,16 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
   override fun screenHeight(): Int = resources.displayMetrics.heightPixels
 
+  override fun systemTopInset(): Int =
+    getSystemService(WindowManager::class.java).currentWindowMetrics.windowInsets.let { insets ->
+      // The rig reports a 159 px status bar and a 183 px mandatory gesture zone below it.
+      maxOf(
+        insets.getInsetsIgnoringVisibility(android.view.WindowInsets.Type.statusBars()).top,
+        insets.getInsets(android.view.WindowInsets.Type.systemGestures()).top,
+        insets.getInsets(android.view.WindowInsets.Type.mandatorySystemGestures()).top,
+      )
+    }
+
   override fun touchSlop(): Int = ViewConfiguration.get(this).scaledTouchSlop
 
   /**

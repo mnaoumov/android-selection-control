@@ -152,6 +152,12 @@ interface GestureDispatcher {
   fun screenWidth(): Int
   fun screenHeight(): Int
 
+  /**
+   * How far down from the screen's top the system takes a downward swipe for itself, in screen
+   * pixels: the status bar, or the top system-gesture zones where they are deeper.
+   */
+  fun systemTopInset(): Int
+
   /** The platform's touch slop in screen pixels: a stroke shorter than it that lifts is a tap. */
   fun touchSlop(): Int
 
@@ -3062,10 +3068,15 @@ class SelectionDriver(
     // Never within reach of the screen's own edges, where a swipe opens the notification shade from
     // the top and goes home from the bottom. A floating pad leaves the band running to either edge.
     val guard = locator.handleDrop * SCREEN_EDGE_GUARD_DROPS
+    // The top's guard is measured from the status bar's bottom, not the screen's top. With Chrome's
+    // omnibox hidden the band starts at the status bar, and on the handset (2026-10-12, OxygenOS) a
+    // downward swipe from y 165.5, 24.5 px below a 141 px status bar and inside a 147 px guard taken
+    // from the screen's top, pulled the Quick Settings shade over the page.
+    val topGuard = gestures.systemTopInset() + guard
     val y = if (forward) {
       minOf(band.bottom - margin, gestures.screenHeight() - guard)
     } else {
-      maxOf(band.top + margin, guard)
+      maxOf(band.top + margin, topGuard)
     }
     val near = band.left + band.width() * SWIPE_COLUMN_FRACTION
     val far = band.right - band.width() * SWIPE_COLUMN_FRACTION
@@ -3082,7 +3093,7 @@ class SelectionDriver(
     // the swipe's end still on the screen.
     fun usable(row: Float): Boolean {
       val end = row - scrollBy
-      return row > maxOf(band.top.toFloat(), guard) &&
+      return row > maxOf(band.top.toFloat(), topGuard) &&
         row < minOf(band.bottom.toFloat(), gestures.screenHeight() - guard) &&
         end >= 0 && end <= gestures.screenHeight()
     }
@@ -3582,7 +3593,10 @@ class SelectionDriver(
      */
     const val SWIPE_COLUMN_FRACTION = 0.25f
 
-    /** How far from the screen's top and bottom a scroll swipe starts at the nearest, in handle drops (42 dp). */
+    /**
+     * How far a scroll swipe starts at the nearest from the screen's bottom, and from the status bar's
+     * bottom at the top, in handle drops (42 dp).
+     */
     const val SCREEN_EDGE_GUARD_DROPS = 3f
 
     /** A document sweep's own end, if the scroll never runs out. */
