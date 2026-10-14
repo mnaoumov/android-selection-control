@@ -49,17 +49,21 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
    * gesture-level `Boolean` — "accepted for dispatch" — to tell a refusal apart from a cancellation,
    * and [dispatch] folds both into its callback.
    */
-  private val heldPointer = HeldPointer(::onScreen) { gesture, onFinished ->
-    val callback = object : GestureResultCallback() {
-      override fun onCompleted(gestureDescription: GestureDescription?) = finish(true)
-      override fun onCancelled(gestureDescription: GestureDescription?) = finish(false)
-      private fun finish(completed: Boolean) {
-        runCatching { onFinished(completed) }
-          .onFailure { Diag.log("held: a link's follow-up threw ${it::class.java.simpleName}: ${it.message}") }
+  private val heldPointer = HeldPointer(
+    onScreen = ::onScreen,
+    dispatch = { gesture, onFinished ->
+      val callback = object : GestureResultCallback() {
+        override fun onCompleted(gestureDescription: GestureDescription?) = finish(true)
+        override fun onCancelled(gestureDescription: GestureDescription?) = finish(false)
+        private fun finish(completed: Boolean) {
+          runCatching { onFinished(completed) }
+            .onFailure { Diag.log("held: a link's follow-up threw ${it::class.java.simpleName}: ${it.message}") }
+        }
       }
-    }
-    dispatchGesture(gesture, callback, null)
-  }
+      dispatchGesture(gesture, callback, null)
+    },
+    edgeLeadPx = ::edgeLead,
+  )
 
   /**
    * The command a run is repeating, or null when nothing is running.
@@ -437,6 +441,32 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   }
 
   /**
+   * How far a stroke that touches down at [down] and heads for [next] first rises straight up: past
+   * the touch slop when [down] is in a side gesture zone, and 0 otherwise or when the first move is
+   * already mostly vertical and past it. Negative, because it is up.
+   *
+   * OxygenOS's edge strip judges a stroke by its first move. Measured 2026-10-14 on the OnePlus 15
+   * (Chrome 154, a served page of one-line rows, the strip `[1188,548]-[1272,2772]` on the right and
+   * `[0,141]-[84,2772]` on the left, a touch slop of 28 px) with hand drags (`input motionevent`),
+   * judged by screenshot. From an END handle at (1249, 1879), a drag 44 px inward along the row was
+   * swallowed 2 times of 2: the selection stayed and the toolbar stayed up. The same drag after a
+   * straight rise of 30, 40 or 95 px moved the END exactly one character each time. After a rise of
+   * 20 px, inside the slop, it was swallowed. A START at the left margin did the same: inward
+   * swallowed 2 of 2, a 40 px rise first moved it one character, and a 20 px rise was swallowed.
+   *
+   * It rises rather than drops because the handle hangs below its line. A 40 px drop carried the
+   * END onto the next row, while a rise stays on the handle's own line. Stock Android lets the touch
+   * through either way, so there the rise costs only its own few milliseconds.
+   */
+  private fun edgeLead(down: PointF, next: PointF): Float {
+    if (!inSideZone(down)) return 0f
+    val lead = ViewConfiguration.get(this).scaledTouchSlop + EDGE_LEAD_PAST_SLOP_DP * resources.displayMetrics.density
+    val dx = kotlin.math.abs(next.x - down.x)
+    val dy = kotlin.math.abs(next.y - down.y)
+    return if (dy >= lead && dy >= dx) 0f else -lead
+  }
+
+  /**
    * Whether this press made a touch-down in a side zone and nothing has answered it since: no
    * announcement, and the target app has not been seen taking its toolbar down.
    */
@@ -804,10 +834,16 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     }
     val away = if (forward) distance else -distance
     val start = onScreen(from)
-    val detour = onScreen(PointF(from.x + away, from.y))
+    val lead = edgeLead(start, PointF(from.x + away, from.y))
+    val detour = onScreen(PointF(from.x + away, from.y + lead))
     val end = onScreen(to)
     val path = Path().apply {
       moveTo(start.x, start.y)
+      if (lead != 0f) {
+        val raised = onScreen(PointF(start.x, start.y + lead))
+        lineTo(raised.x, raised.y)
+        Diag.log("  drag: rising ${-lead} px before it leaves the side gesture zone")
+      }
       lineTo(detour.x, detour.y)
       if (end.x != detour.x || end.y != detour.y) lineTo(end.x, end.y)
     }
@@ -1088,5 +1124,8 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     const val EDGE_DOWN_TOOLBAR_WAIT_MS = 900L
 
     const val EDGE_DOWN_TOOLBAR_POLL_MS = 25L
+
+    /** How far past the touch slop [edgeLead]'s rise goes, so the strip has seen a vertical move. */
+    const val EDGE_LEAD_PAST_SLOP_DP = 4f
   }
 }

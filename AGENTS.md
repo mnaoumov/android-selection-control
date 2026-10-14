@@ -16,7 +16,7 @@ Open work is split by shape, one item each in that same store, and named there r
 locating a handle that the aimed-at drop misses; the defects the handset pass of 2026-10-05 found
 (two block-step cases, under *Gotchas*, both fixed on the rig: the step into a row of several nodes is confirmed on the phone, and `word →` onto a block's trailing `.` is confirmed there too, with the block step that follows it; the toolbar under a paged handle is fixed and confirmed on the phone, which
 found four more under *Page, start and end*: a collapsing top bar read as the document's edge (fixed on the rig, which cannot show the collapse; on the phone, page and end now run to the article's real end, but the collapse did not recur, so the fix's own branch is unexercised; with the omnibox already hidden, a short `⇞ page` scroll still read as the edge there, and now the page must also stop listing that scroll direction, fixed on the rig; on the phone the scroll then ran in full, so the short case did not recur), `start` ending
-blind on an image (fixed on the rig; on the phone the move off the image landed on a hidden header button, and the walk now skips controls, which is fixed on the rig and confirmed on the phone; a page step that reaches the top used to land on the image itself, and every page drag now holds and moves off it, fixed on the rig and confirmed on the phone; a `start` from the page's top used to set off Chrome's pull-to-refresh, and now does not swipe at all, which is fixed on the rig and confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins, and such a press now stops at the first swallowed touch-down, fixed on the rig and confirmed on the phone, which also showed that the strip lets through a grab whose first move is vertical), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig and confirmed on the phone, where the pass also found that a press after a hand scroll can grab at a node's pre-scroll position, which now refuses instead, fixed on the rig and confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
+blind on an image (fixed on the rig; on the phone the move off the image landed on a hidden header button, and the walk now skips controls, which is fixed on the rig and confirmed on the phone; a page step that reaches the top used to land on the image itself, and every page drag now holds and moves off it, fixed on the rig and confirmed on the phone; a `start` from the page's top used to set off Chrome's pull-to-refresh, and now does not swipe at all, which is fixed on the rig and confirmed on the phone), a START handle at the left margin (inside OxygenOS's own edge-gesture strip; the pad now names that instead of failing silently, confirmed on the phone at both margins, and such a press now stops at the first swallowed touch-down, fixed on the rig and confirmed on the phone, which also showed that the strip lets through a grab whose first move is vertical; every zone touch-down now rises past the slop first, and margin steps work on the phone at both margins), and a swipe that can open a heads-up notification (no touch-down lands in another app's window now; fixed on the rig and confirmed on the phone, where the pass also found that a press after a hand scroll can grab at a node's pre-scroll position, which now refuses instead, fixed on the rig and confirmed on the phone); the blind pad on Android 36.0 now names the Chrome flag that fixes it, confirmed on the phone; a
 heading's block-wide box taken for its text now refuses instead of aiming, fixed on the rig and confirmed on the phone, under *Gotchas*; the grab that closed the pad through its own
 `✕` is fixed on the rig and confirmed on the phone); and Play distribution, which ECM makes mandatory rather than optional. The test rig is now a repo asset — see *The test rig* below.
 
@@ -2067,7 +2067,9 @@ of its own. `dumpsys input` lists an `edge-swipe` spy monitor and `gesture_displ
 `[0,141]-[84,2772]` on the left, and `[1188,141]-[1272,278]` plus `[1188,548]-[1272,2772]` on the right.
 `gesture_mistouch_prevention_side_enable=1` is set too. A handle drawn at x 0..56 has no pixel
 outside 84, and Chrome's touch target ends at the drawn circle, so no aim inside the handle can avoid
-the strip. A press there cannot be made to work. The pad now does three things:
+the strip. No aim can, but the stroke's first move can: one that rises past the slop gets through
+(*So every stroke that touches down in a side zone rises straight up first*, below). The pad also does
+three things:
 
 - **Every handle touch-down in a side zone is logged** (`the touch-down at (24.5, 2061.0) is in a
   side gesture zone (left 105 px, right 105 px)`). The zone is read from the service's
@@ -2157,8 +2159,40 @@ through.** With a fresh verdict, `→ char` from the same `for` crosses the wrap
 (1249.5, 2111) went straight down first. The press logged `a touch-down there was answered` and
 `Moved(52, 53)` in 1.1 s and 2 gestures, and the service learned `false`. The `← char` above, from the
 same pixel but moving inward along the row, was swallowed. So the strip judges the stroke, not only the
-touch-down, and a verdict learned from a vertical grab says nothing about a horizontal one. That is
-tracked on its own, along with whether a grab can be made to start vertically on purpose.
+touch-down, and a verdict learned from a vertical grab says nothing about a horizontal one.
+
+**So every stroke that touches down in a side zone rises straight up first, past the touch slop, and
+OxygenOS then hands it to Chrome.** Measured 2026-10-14 on the phone with hand drags
+(`input motionevent`) on a served page of one-line rows (`body{margin:0 16px; padding-top:300px;
+font:20px sans-serif}`, odd rows `text-align:right`), judged by screenshot, from the same handle pixel
+each time:
+
+| first move, then 44-50 px inward | END at the right margin, (1249, 1879) | START at the left margin, (25, 1695) |
+|---|---|---|
+| none | swallowed, 2 of 2 | swallowed, 2 of 2 |
+| up 20 px (inside the 28 px slop) | swallowed | swallowed |
+| up 30, 40 or 95 px | one character, each | one character (40 px) |
+| down 40 px | answered, but onto the next row | not tried |
+
+`AscAccessibilityService.edgeLead` puts the rise into the held grab (`HeldPointer.grab`) and the
+released drag: the touch slop plus 4 dp (42 px on the phone, 24 on the rig), up, because the handle
+hangs below its line and a drop changes row. A first move that is already mostly vertical and past it,
+a row change, gets none. The log says `rising 42.0 px first`. So every zone touch-down now has the
+same first move, and the per-connection verdict is learned from the one stroke shape the pad makes.
+Pad presses, same sitting, service rebound before each run:
+
+| press | old build | new build |
+|---|---|---|
+| served page, END at the right margin (`here`, `23..27`): `← char` ×2 | `InEdgeZone` in 510 ms, then 12 ms with 0 gestures | `27 -> 26 -> 27 -> 26`, 1 gesture each, 0.58-0.74 s; `⇤ word` `27 -> 24` (the floor), `⇥ word` `24 -> 27`; 3 runs |
+| served page, START at the left margin (`has`, `⇄ swap`, `⇤ word` ×2 to `0..10`): `→ char`, `← char`, `→ char`, `⇤ word` | `0 -> 1 -> 0 -> 1`, 3 runs of 3 | `0 -> 1 -> 0 -> 1`, then `1 -> 0`, 1 gesture each, 2 runs of 2 |
+| Wikipedia `Text_editor`, START at the left margin (`allows`, `6..12`, `⇄ swap`): `→ char` ×2 | `InEdgeZone` in 500-528 ms, then 6-18 ms with 0 gestures, 2 runs of 2 | `6 -> 7 -> 6 -> 7`, 1 gesture each, 0.58-0.70 s, 2 runs of 2 |
+
+So the left strip is not consistent. On the served page it let the old build's 45 px grab through (and
+swallowed the faster hand drag), and on Wikipedia it swallowed the old 31 px grab. With the rise, both
+pages answer. The rig's stock Android takes either shape, and nothing there changed: the same served
+page at both margins (`27 -> 26 -> 27 -> 26`, `0 -> 1 -> 0 -> 1`, `rising 24.0 px first`), 2 runs of 2,
+and the debug target's `TextView` (`11 -> 12 -> 11`, `11 -> 19`, a START swapped onto `alpha` at x 14
+`0 -> 1 -> 0 -> 1`).
 
 **The `lifting rather than pushing on` branch fired once on the phone, and on an ambiguous press.** After
 that crossing the END sat on 53, the first caret of `editing` at the left margin, under the pad. The next
