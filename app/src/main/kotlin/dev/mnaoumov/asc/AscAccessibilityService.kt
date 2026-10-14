@@ -348,7 +348,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     is Outcome.Moved -> outcome.madeProgress()
     is Outcome.Degraded -> true
     Outcome.NoSelection, Outcome.HandleLost, Outcome.RowUnknown, Outcome.ColumnUnknown, Outcome.HandleCovered,
-    Outcome.AtFloor, Outcome.EdgeUnknown, Outcome.Obstructed, Outcome.InEdgeZone, Outcome.OffScreen -> false
+    Outcome.AtFloor, Outcome.AtDocumentEdge, Outcome.EdgeUnknown, Outcome.Obstructed, Outcome.InEdgeZone, Outcome.OffScreen -> false
   }
 
   /**
@@ -668,6 +668,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     // Also not "reselect": the selection is untouched. Lower on screen, the toolbar goes above it.
     Outcome.HandleCovered -> "the menu covers the handle — scroll the text lower"
     Outcome.AtFloor -> "one character left — the app keeps it"
+    Outcome.AtDocumentEdge -> "already at the ${if (driver.activeEdge == Edge.END) "end" else "start"} of the text"
     // Nothing was touched; a heads-up goes by itself, and swiping it away works too.
     Outcome.Obstructed -> "a notification is in the way"
     // Nothing more was touched. The selection is intact, and the other edge can still be moved.

@@ -1777,6 +1777,27 @@ that IS dispatched and that Chrome never sees. There the held pointer's next pus
 (`the grab in a side gesture zone went unanswered — lifting rather than pushing on`), and that branch is
 unproven until the phone runs it.
 
+**A grow from the document's first or last caret has nowhere to go. Unless it touches nothing, its
+silence teaches the verdict wrong.** Measured 2026-10-13 on the rig (Chrome 143, no marker, so the zone
+takes the grab): with the START on `0..22` of a served page's first row, `← char` grabbed at x 14,
+travelled to x -4 and announced nothing, because nothing comes before the document's start. The press
+ended `InEdgeZone`, the service learned that this ROM swallows, and the next `→ char` from the same
+caret was refused in 25 ms. So `SelectionDriver.nothingBeyond` now runs before any char or word grow.
+It refuses when the moving edge is on its node's outer caret in the direction of travel and nothing lies
+beyond it. On a `TextView` that is always the case, because the selection cannot leave the view. On Blink
+it is the case when no text leaf is on screen that way (`textLeafBefore/After`) and the page cannot
+scroll that way (the band does not scroll, or its scroller no longer lists that direction). The press
+ends `AtDocumentEdge` ("already at the start of the text") with 0 gestures. Where the page could still
+scroll, the text beyond is only off screen, and the press goes ahead. Measured after the change, Chrome
+force-stopped before each run:
+
+| press | result |
+|---|---|
+| the repro: scrolled 150 px, `⇞ page` onto row 001's `0`, then `← char`, `⇤ word`, `→ char`, `← char`, 3 runs | `AtDocumentEdge` in 9-23 ms, 0 gestures; then `0 -> 1 -> 0`, 1 gesture each, and the zone grab logged `answered` |
+| `⤓ end` onto row 120's `20`, then `→ char`, `⇥ word`, `← char`, `→ char` | `AtDocumentEdge` twice (`down=false`), then `20 -> 19 -> 20` |
+| the debug target's `TextView`: `echo` (`26..30`) `→ char`, `⇥ word`; `alpha` swapped, `← char`, `→ char`, `← char` | `AtDocumentEdge`, 0 gestures; then `0 -> 1 -> 0`, and `30 -> 29` from `echo` |
+| control: the START on row 002's `0`, row 001 above it, `← char` | no refusal; the block step ran as before |
+
 **A heads-up notification is another app's window above the target, and a touch-down on it goes to the
 notification.** An upward page swipe starts a quarter of a drop below the band's top: y 361 on the phone,
 327 on the rig. That is where heads-ups appear. On the rig an SMS (`adb emu sms send 5551234 <text>`)
