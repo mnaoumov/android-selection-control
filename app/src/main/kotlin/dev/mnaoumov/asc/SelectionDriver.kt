@@ -3,6 +3,7 @@ package dev.mnaoumov.asc
 import android.graphics.PointF
 import android.graphics.Rect
 import android.os.Handler
+import android.view.accessibility.AccessibilityNodeInfo
 import kotlin.math.hypot
 
 /** A press on the pad: move the active edge, by this much, in this direction. */
@@ -118,6 +119,13 @@ sealed interface Outcome {
    * screen; scrolling it into view makes the next press work. See `SelectionDriver.nothingBeyond`.
    */
   data object BeyondOffScreen : Outcome
+
+  /**
+   * A grow was asked for with the moving edge on its node's outer caret, and the text beyond it is on
+   * another row but will not say where its caret is, so nothing was touched. A reach along the edge's
+   * own row has nothing to enter there. See `SelectionDriver.nothingBeyond`.
+   */
+  data object NeighbourUnmeasured : Outcome
 
   /**
    * The edge being moved is in a node nothing has announced since the swap, so nothing was touched.
@@ -1056,7 +1064,7 @@ class SelectionDriver(
     if (!snapshot.isBlink) return Outcome.AtDocumentEdge to "the $activeEdge edge is on its view's $side"
     val source = snapshot.source ?: return null
     val beyond = if (forward) locator.textLeafAfter(source) else locator.textLeafBefore(source)
-    if (beyond != null) return null
+    if (beyond != null) return unmeasuredOnAnotherRow(snapshot, beyond, forward)
     val content = contentBand(snapshot) ?: return null
     val canScroll = if (!content.scrolls) false else content.scrollability.let { if (forward) it.second else it.first }
     if (canScroll != false) {
@@ -1064,6 +1072,33 @@ class SelectionDriver(
         "but the page can scroll ${if (forward) "down" else "up"} (${canScroll ?: "unknown"}) — the text beyond is off screen"
     }
     return Outcome.AtDocumentEdge to "the $activeEdge edge is on the document's $side: no text node beyond it on screen, and the page cannot scroll that way"
+  }
+
+  /**
+   * [nothingBeyond]'s answer where a text leaf IS beyond the edge: a refusal when that leaf lies
+   * wholly on another row and its caret cannot be read, else null.
+   *
+   * [blockStep] needs that caret, and without it the press used to fall through to a reach along the
+   * edge's own row, which has nothing to enter. Measured 2026-10-14 on the rig, Chrome 143, before the
+   * walk passed over clipped nodes ([HandleLocator.adjacentNodeCaret]): the START on `0..11` of a served
+   * hatnote under a clipped `Download PDF` label, `← char` logged that the previous node "is wrapped and
+   * will not measure", grabbed at x 12 in the left side zone, travelled to x -9 and pushed on to x 0, and
+   * ended `Moved(0, 0)` in 1.8 s and 2 gestures. The handset did the same from Wikipedia's hatnote the
+   * same day. A node on the edge's own row is left alone, because there the reach does cross into it.
+   * Its caret was asked for twice, so a cold node is usually warm by the next press.
+   */
+  private fun unmeasuredOnAnotherRow(
+    snapshot: SelectionObserver.Snapshot,
+    beyond: AccessibilityNodeInfo,
+    forward: Boolean,
+  ): Pair<Outcome, String>? {
+    val own = snapshot.bounds ?: return null
+    val theirs = Rect().also { beyond.getBoundsInScreen(it) }
+    val anotherRow = if (forward) theirs.top >= own.bottom else theirs.bottom <= own.top
+    if (!anotherRow) return null
+    if (locator.adjacentNodeCaret(snapshot, forward, oneIn = true) != null) return null
+    return Outcome.NeighbourUnmeasured to "the $activeEdge edge is on its node's ${if (forward) "end" else "start"}, and the " +
+      "${if (forward) "next" else "previous"} text node ($theirs) is on another row but will not say where its caret is"
   }
 
   /**

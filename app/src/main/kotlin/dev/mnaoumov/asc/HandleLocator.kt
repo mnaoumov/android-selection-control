@@ -480,7 +480,8 @@ class HandleLocator(private val density: () -> Float) {
    * The first text leaf after [source] in tree order ([forward]), or the last one before it: the
    * next sibling's first leaf, else the parent's next sibling's, and so on up. Visible nodes with
    * text only, since a node off screen has no handle to drag onto it, and never an image or a control,
-   * whatever text Chrome gives it ([NOT_PAGE_TEXT_CLASSES]).
+   * whatever text Chrome gives it ([NOT_PAGE_TEXT_CLASSES]), nor a node whose text the screen's
+   * edge cuts off ([runsOffScreen]).
    */
   private fun adjacentTextLeaf(source: AccessibilityNodeInfo, forward: Boolean): AccessibilityNodeInfo? {
     var node = source
@@ -519,13 +520,53 @@ class HandleLocator(private val density: () -> Float) {
         textLeaf(child, forward, depth - 1)?.let { return it }
       }
     }
-    val hasText = (runCatching { node.text?.length }.getOrNull() ?: 0) > 0
+    val length = runCatching { node.text?.length }.getOrNull() ?: 0
     val bounds = Rect().also { node.getBoundsInScreen(it) }
-    return node.takeIf { hasText && !bounds.isEmpty }
+    if (length <= 0 || bounds.isEmpty) return null
+    return node.takeUnless { runsOffScreen(node, bounds, length) }
   }
 
-  /** One character's rectangle as the platform measures it, or null where it declines or lies. */
-  private fun characterRect(source: AccessibilityNodeInfo, bounds: Rect, index: Int): RectF? {
+  /**
+   * Whether the screen's edge cuts [node]'s text off: its first character is beyond the left edge or
+   * its last beyond the right. Such text is not text a step can be going into, from either side, so
+   * the walk passes over it.
+   *
+   * Measured 2026-10-14 on the handset, Wikipedia's `Text_editor`: `← char` from the hatnote's first
+   * caret found a 12-character node at `Rect(1176, 445 - 1272, 515)`, the right end of the page-tools
+   * icon row, most likely the download button's hidden label. It "will not measure", so no block step
+   * was taken, and the press reached sideways into the left side zone and ended `Moved(0, 0)`. The rig
+   * reproduces it with a served `<a style="width:40px; overflow:hidden; margin-right:-30px">Download
+   * PDF</a>` past the right edge, whose box Chrome clips to `(642, 831 - 720, 877)`. Its rectangles
+   * run `642..668`, `668..691`, `689..720`, `718..720`, then eight of zero width at x 720: the screen
+   * edge, not the glyphs. Chrome's `unclipped*` extras do not say this, because they are not in the
+   * box's coordinates (`unclippedLeft=847`, `unclippedWidth=27`). A cold node answers the first ask
+   * with its whole box, which is not empty, so it is asked twice. A node the screen does not clip is
+   * never asked.
+   *
+   * Both ends are checked whichever way the walk goes, because the step back is the mirror. With only
+   * the near end checked, `→ char` from the heading's last caret, back toward the hatnote, found the
+   * label's FIRST character on screen (`642..668`) and shrank into it, `Moved(10, 0)` in the label.
+   */
+  private fun runsOffScreen(node: AccessibilityNodeInfo, bounds: Rect, length: Int): Boolean {
+    val width = screenWidthNow()
+    val sides = listOfNotNull(true.takeIf { bounds.left <= 0 }, false.takeIf { bounds.right >= width })
+    for (left in sides) {
+      val index = if (left) 0 else length - 1
+      repeat(2) {
+        val rect = rawCharacterRect(node, index) ?: return@repeat
+        if (rect.width() > LIE_TOLERANCE) return@repeat
+        val atEdge = if (left) rect.right <= LIE_TOLERANCE else rect.left >= width - LIE_TOLERANCE
+        if (atEdge) {
+          Diag.log("  adjacent: passing over a node ($length chars at $bounds) whose ${if (left) "first" else "last"} character is beyond the screen's edge")
+          return true
+        }
+      }
+    }
+    return false
+  }
+
+  /** One character's rectangle as the platform answers, unchecked: [characterRect] refuses an empty one. */
+  private fun rawCharacterRect(source: AccessibilityNodeInfo, index: Int): RectF? {
     if (forceRefuseCharacterRects) return null
     val args = Bundle().apply {
       putInt(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_ARG_START_INDEX, index)
@@ -535,15 +576,15 @@ class HandleLocator(private val density: () -> Float) {
       source.refreshWithExtraData(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY, args)
     }.getOrDefault(false)
     if (!refreshed) return null
+    return runCatching {
+      source.extras?.getParcelableArray(AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY, RectF::class.java)
+    }.getOrNull()?.firstOrNull()
+  }
 
-    val rects = runCatching {
-      source.extras?.getParcelableArray(
-        AccessibilityNodeInfo.EXTRA_DATA_TEXT_CHARACTER_LOCATION_KEY,
-        RectF::class.java,
-      )
-    }.getOrNull()
+  /** One character's rectangle as the platform measures it, or null where it declines or lies. */
+  private fun characterRect(source: AccessibilityNodeInfo, bounds: Rect, index: Int): RectF? {
     // Entries are null for characters the app has not laid out — off-screen, or scrolled away.
-    val rect: RectF? = rects?.firstOrNull()
+    val rect = rawCharacterRect(source, index)
     if (rect == null || rect.isEmpty) return null
 
     // The lie. A single character is never the width AND the height of the box that holds it; a
