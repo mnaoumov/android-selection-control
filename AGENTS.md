@@ -2575,6 +2575,21 @@ scrolled so row 002 is the top line and row 001 is under the omnibox). Long-pres
 The END's mirror, a next row below the screen's bottom, was not measured: a handle there is inside the
 bottom gesture zone, where `InGestureBar` refuses first.
 
+**The phone confirms the refusal (2026-10-14, OnePlus 15, Chrome 154.0.8037.127).** Chrome announced
+selections the old way (`seeded from a fresh selection`), so the extended-selection trial was not active.
+The service was rebound and Chrome force-stopped before each run.
+
+| case, 3 runs of 3 each | result |
+|---|---|
+| `en.wikipedia.org/wiki/Text_editor` scrolled by hand so the hatnote `For the use of …` is the top line (omnibox hidden). Long-press `For` (`0..3`), `⇄ swap`, `← char`, `⇤ word` | `the START edge is on its node's start and no text node beyond it is on screen, but the page can scroll up (true)`, `BeyondOffScreen` in 2-6 ms, 0 gestures, both presses; the status line read `the text before it is above — scroll up a little`, no magnifier, nothing learned about the side zones |
+| the rig's served page of one-line rows (16 px margin), scrolled so row 002 is the top line under the status bar. Long-press `has`, `⇄ swap`, `⇤ word` to `0..11`, then `← char`, `⇤ word` | `BeyondOffScreen` in 2-17 ms, 0 gestures, both presses |
+| then a hand scroll that brings row 001 in, `← char`, `→ char` | the block step, `0 -> 27` of row 001 in 2 gestures and 1.1 s, then back `27 -> 0`, 2 gestures, 0.8 s; the zone grab was answered |
+
+On Wikipedia the scroll back does not give the block step. The previous text leaf the walk finds is a
+clipped 12-character label at the right end of the page-tools row, which `will not measure`. The press then
+reaches sideways into the left side zone and ends `Moved(0, 0)` with the edge-zone message, 2 presses of
+2, and the first one left the magnifier on screen. That is tracked on its own.
+
 **A heads-up notification is another app's window above the target, and a touch-down on it goes to the
 notification.** An upward page swipe starts a quarter of a drop below the band's top: y 361 on the phone,
 327 on the rig. That is where heads-ups appear. On the rig an SMS (`adb emu sms send 5551234 <text>`)
