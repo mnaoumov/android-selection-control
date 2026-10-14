@@ -3535,6 +3535,10 @@ class SelectionDriver(
           backOntoPreviousText(scrolled, landed, ended, report)
           return@awaitChange
         }
+        if (landed == null && forward && pastTheNodesEnd(scrolled, to)) {
+          ontoTheNodesEnd(scrolled, report)
+          return@awaitChange
+        }
         // The landing as it arrived: the START frame reads a text-less caret in the text after it.
         val textless = landed?.let { it.rehomedFrom ?: it }?.takeIf { it.holdsNoText() } ?: run {
           gestures.releaseHeld { awaitQuiet(observer.latest ?: return@releaseHeld report(landed), 0, report) }
@@ -3562,6 +3566,67 @@ class SelectionDriver(
         }
       }
     }
+  }
+
+  /**
+   * Whether a silent page drag went down past the END's node into space with no text after it: the
+   * END is short of its node's last caret, and the drag ended below the node's box.
+   */
+  private fun pastTheNodesEnd(scrolled: SelectionObserver.Snapshot, to: PointF): Boolean {
+    val bounds = scrolled.bounds ?: return false
+    return activeEdge == Edge.END && scrolled.isBlink && !scrolled.isEmpty() &&
+      scrolled.high() < scrolled.sourceLength && to.y > bounds.bottom + locator.handleDrop
+  }
+
+  /**
+   * A page drag that announced nothing after going down past the END's node: move the held pointer
+   * onto that node's last caret, then let go.
+   *
+   * Below the document's last text there is nothing to announce from. Chrome does move the END, onto
+   * the end of the last text, and draws its handle there, but it sends no selection event, so the pad
+   * kept the offset from before the drag. Measured 2026-10-14 on the rig (Chrome 143), a served page of
+   * one-line `<p>`s, each followed by an `<h2>` 720 px further down, and a 1500 px empty `<div>` at the
+   * end: `⤓ end` ran 60 pages to `Encoding 30`, where the page before had left the END on 3, and the last
+   * page's drag into the `<div>` logged no event at all and reported `Moved(3, 3)`. The screenshot showed
+   * all of `Encoding 30` selected, wrapped onto two lines, with the handle under `30`. The `← char` after
+   * it grabbed on the first line, where the pad thought the handle was, and ended `HandleLost` in 13
+   * gestures. A hand drag that started on the drawn handle was announced `0..11` at its first move.
+   *
+   * So the pointer, still down, is moved onto the node's last caret. That is where Chrome already has
+   * the END, but it moves the selection's focus from the empty block into the text, and Chrome
+   * announces that. The caret is asked again every [CARET_WARM_POLL_MS] for up to [CARET_WARM_MS], as
+   * [intoTheBlock] does, because the drag may have made the node wrap.
+   */
+  private fun ontoTheNodesEnd(
+    scrolled: SelectionObserver.Snapshot,
+    report: (SelectionObserver.Snapshot?) -> Unit,
+  ) {
+    fun release() = gestures.releaseHeld { awaitQuiet(observer.latest ?: return@releaseHeld report(null), 0, report) }
+    fun measured(waited: Long) {
+      val end = locator.characterGeometry(scrolled, Edge.END, Crossing.RIGHTWARD, at = scrolled.sourceLength, quiet = true)
+      if (end == null && waited < CARET_WARM_MS && !stopRequested) {
+        handler.postDelayed({ measured(waited + CARET_WARM_POLL_MS) }, CARET_WARM_POLL_MS)
+        return
+      }
+      if (end == null) {
+        Diag.log("  page: the drag announced nothing past the END's node, and its last caret will not measure after ${waited}ms")
+        release()
+        return
+      }
+      val aim = PointF(handleX(end.caretX), end.lineBottom + locator.handleDrop)
+      Diag.log(
+        "  page: the drag announced nothing past the END's node (${describeNode(scrolled)}) — " +
+          "moving onto its last caret at (${aim.x}, ${aim.y})"
+      )
+      gestureCount++
+      if (!gestures.moveHeld(aim)) {
+        Diag.log("  held: the move onto the node's last caret was refused")
+        release()
+        return
+      }
+      awaitChange(scrolled) { _ -> release() }
+    }
+    measured(0)
   }
 
   /**
