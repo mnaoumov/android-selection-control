@@ -2151,9 +2151,32 @@ left the END on a block's first caret` and moved back onto `Body row 15`'s and `
 `Body row 31 alpha bravo charlie.` with its handle drawn there, and `← char`, `→ char` went
 `32 -> 31 -> 32`, 1 gesture each.
 
-**A margin taller than a page stalls.** Where nothing but margin lies between the previous block and the
-heading, every page lands in the same margin and moves back onto the same caret: on the rig's 720 px page
-the second `⇟ page` went `36 -> 36`. The pad stays sighted and says "didn't move". That is tracked on its own.
+**A margin taller than a page used to stall, so a step that started on the caret it would move back to
+goes INTO the block instead.** Where nothing but margin lies between the previous block and the heading,
+every page lands in the same margin, and moving back put the END on the same caret: on the rig's 720 px
+page the second `⇟ page` went `36 -> 36`, "didn't move", and `⤓ end` stopped there. Now, when the text
+before the block is the step's own node and the step started on its last caret, `intoTheBlock` moves the
+held pointer along the block's row to its end (a grow, `0..8` of `Encoding 1`), then slides back toward
+caret 1 (a shrink), and lets go. A slide that reaches `0..0` goes back to the row end. The slide lands on
+3, not 1, because the grow snapped to the word's end and Chrome's shrink keeps that lead. A page does
+not count characters, so that is left alone. The block's caret is read from the landing's own text
+node, not from the tree walk. The walk finds the `<h2>`, whose box was `(21, 1269 - 576, 1351)` against
+its text's `(576, 1269 - 720, 1351)`. A cold node is re-asked every 100 ms for up to 1 s, with the
+pointer held. The same move is taken where the text before the block refuses to measure, which used to
+end the press `HandleLost`. Measured 2026-10-14 on the rig, Chrome 143 force-stopped before each run, a
+served page of thirty one-line `<p>`s, each followed by an `<h2>` 720 px below it and indented 420 px.
+Long-press `charlie` in `Paragraph 1`, then:
+
+| press | before | after |
+|---|---|---|
+| `⇟ page` ×4, then `← char`, `→ char`, 4 runs | `35 -> 36`, then `36 -> 36` on every page | `35 -> 36` (`Paragraph 1`'s end), `36 -> 3` (into `Encoding 1`, 3 gestures, ~1.2-2.3 s), `3 -> 36` (`Paragraph 2`'s end), `36 -> 3` (`Encoding 2`); then `3 -> 2 -> 3`, 1 gesture each |
+| `⤓ end` | stopped on page 2 | 56 pages to `Encoding 29` in 134 s (the caret wait answered after 100 ms 8 times); an earlier build without the wait or the cold fallback ran 47 and 32 pages and ended on a cold node |
+| controls: the 80 px page above, `⇟ page` ×2, `← char`, `→ char`, 2 runs; the debug target's `TextView` from `bravo` | as before | `35 -> 26 -> 23 -> 22 -> 23`; `11 -> 12 -> 11`, `11 -> 19`, `⇟ page` `19 -> 30`, `30 -> 29 -> 30` |
+
+The `⤓ end` run stopped at `Encoding 29` on a page whose swipe from (180, 1138) scrolled 0 of 1011 px
+mid-document (`short, but the page can still scroll down, so not the edge`). The drag then went
+nowhere, and the `← char` after it grabbed a wrapped heading's handle on its last row and ended
+`HandleLost`. That is tracked on its own.
 
 **A page step mid-document can cross the anchor too, and there the landing's node says nothing by
 itself**, because it can be on either side of the anchor, and Chrome announces it as `0..focus` either
