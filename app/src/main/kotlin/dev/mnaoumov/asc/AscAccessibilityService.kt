@@ -404,10 +404,12 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     }
     touchedEdgeZone = true
     announcedAtEdgeDown = observer.announced
+    toolbarAtEdgeDown = toolbarShown()
+    edgeDownFollowed = false
     val zones = sideGestureZones()
     Diag.log(
       "  the touch-down at (${down.x}, ${down.y}) is in a side gesture zone " +
-        "(left ${zones.left} px, right ${zones.right} px)"
+        "(left ${zones.left} px, right ${zones.right} px), toolbar ${if (toolbarAtEdgeDown) "up" else "down"}"
     )
     if (!forceSwallowEdgeZone) return EdgeZoneDown.MADE
     Diag.log("  debug: swallowed it")
@@ -434,11 +436,67 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     return point.x < zones.left || point.x >= screenWidth() - zones.right
   }
 
-  /** Whether this press made a touch-down in a side zone and nothing has been announced since. */
-  private fun edgeZoneUnanswered(): Boolean = touchedEdgeZone && observer.announced === announcedAtEdgeDown
+  /**
+   * Whether this press made a touch-down in a side zone and nothing has answered it since: no
+   * announcement, and the target app has not been seen taking its toolbar down.
+   */
+  private fun edgeZoneUnanswered(): Boolean =
+    touchedEdgeZone && observer.announced === announcedAtEdgeDown && !edgeDownFollowed
 
   /** What had been announced at this press's last touch-down in a side gesture zone. */
   private var announcedAtEdgeDown: SelectionObserver.Snapshot? = null
+
+  /** Whether the target app's selection toolbar was up at this press's last zone touch-down. */
+  private var toolbarAtEdgeDown = false
+
+  /** Whether the target app took its toolbar down after this press's last zone touch-down. */
+  private var edgeDownFollowed = false
+
+  /**
+   * Runs [then] once the target app's toolbar is back, or after [EDGE_DOWN_TOOLBAR_WAIT_MS], when
+   * [down] is in a side zone; at once otherwise.
+   *
+   * [noteToolbarAfterEdgeDown] needs the toolbar up at the touch-down, and a touch-down straight after
+   * another drag finds it still down for that one. Measured 2026-10-14 on the rig: `⇥ word`'s row
+   * change lifted at the left margin, and the grow touched down in the zone with the toolbar down.
+   */
+  private fun awaitToolbarBeforeEdgeDown(down: PointF, waited: Long = 0, then: () -> Unit) {
+    if (!inSideZone(down) || toolbarShown() || waited >= EDGE_DOWN_TOOLBAR_WAIT_MS) {
+      if (waited > 0) Diag.log("  side gesture zone: waited ${waited}ms for the toolbar before touching down")
+      then()
+      return
+    }
+    handler.postDelayed({ awaitToolbarBeforeEdgeDown(down, waited + EDGE_DOWN_TOOLBAR_POLL_MS, then) }, EDGE_DOWN_TOOLBAR_POLL_MS)
+  }
+
+  private fun toolbarShown(): Boolean = locator.toolbarBounds(
+    windows = windows.orEmpty(),
+    packageName = observer.latest?.packageName,
+    screenWidth = screenWidth(),
+  ) != null
+
+  /**
+   * Looks for the one sign a SILENT zone touch-down reached the target app: its toolbar going down.
+   *
+   * Silence alone does not say the ROM took the touch. Chrome holds an edge on a word's START until
+   * the finger passes the word's middle, so a grab or a short grow from there announces nothing on
+   * stock Android too. Measured 2026-10-13 on the rig: the END on line 2's first caret, aimed at x 50
+   * inside the 60 px left zone, and `→ char` was read as swallowed, which refused every margin press
+   * of the connection after it. But the target app takes its toolbar down for the whole of a handle
+   * drag (and puts it back a little after the lift), while a touch-down the ROM swallowed never
+   * reaches it and leaves the toolbar up. So a toolbar that was up at the touch-down and is gone now
+   * means the app is following the pointer, and the silence is its own hold.
+   */
+  private fun noteToolbarAfterEdgeDown(at: String) {
+    if (!touchedEdgeZone || edgeDownFollowed || !toolbarAtEdgeDown) return
+    if (observer.announced !== announcedAtEdgeDown) return
+    if (toolbarShown()) {
+      Diag.log("  $at: the toolbar is still up after the zone touch-down")
+      return
+    }
+    Diag.log("  $at: the app took its toolbar down after the zone touch-down, so it is following the pointer — the silence is its own")
+    edgeDownFollowed = true
+  }
 
   /** Whether the held pointer was put down in a side gesture zone this press. */
   private var heldDownInEdgeZone = false
@@ -753,6 +811,15 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       lineTo(detour.x, detour.y)
       if (end.x != detour.x || end.y != detour.y) lineTo(end.x, end.y)
     }
+    awaitToolbarBeforeEdgeDownUnlessRefused(start) { dragNow(start, path, durationMs, onFinished) }
+  }
+
+  /** [awaitToolbarBeforeEdgeDown], skipped when [noteEdgeZone] is about to drop the touch-down anyway. */
+  private fun awaitToolbarBeforeEdgeDownUnlessRefused(down: PointF, then: () -> Unit) {
+    if (edgeZoneUnanswered() || forceSwallowEdgeZone) then() else awaitToolbarBeforeEdgeDown(down, then = then)
+  }
+
+  private fun dragNow(start: PointF, path: Path, durationMs: Long, onFinished: (Boolean) -> Unit) {
     // Not dispatched, and said so: a press that goes on escalating into a heads-up gets nowhere.
     if (noteForeignWindow(start)) {
       Diag.log("  the drag was not dispatched")
@@ -774,7 +841,13 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
         return
       }
     }
-    clearThePadFor(start) { dispatch(GestureDescription.StrokeDescription(path, 0, durationMs), onFinished) }
+    clearThePadFor(start) {
+      dispatch(GestureDescription.StrokeDescription(path, 0, durationMs)) { played ->
+        // Straight after the lift, while the app still has its toolbar down for the drag.
+        noteToolbarAfterEdgeDown("drag")
+        onFinished(played)
+      }
+    }
   }
 
   /**
@@ -840,6 +913,16 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     if (heldPointer.isHeld) heldPointer.releaseNow()
     // Not past [to]: the same bound [drag] uses, as far as [to] or one pixel past the slop.
     val shortDetour = if (pastTarget) null else ViewConfiguration.get(this).scaledTouchSlop + 1f
+    awaitToolbarBeforeEdgeDownUnlessRefused(onScreen(from)) { grabNow(from, to, detourBack, shortDetour, onGrabbed) }
+  }
+
+  private fun grabNow(
+    from: PointF,
+    to: PointF,
+    detourBack: Boolean,
+    shortDetour: Float?,
+    onGrabbed: (Boolean) -> Unit,
+  ) {
     if (noteForeignWindow(onScreen(from))) {
       Diag.log("  the grab was not dispatched")
       onGrabbed(false)
@@ -854,7 +937,12 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
         return
       }
     }
-    clearThePadFor(onScreen(from)) { heldPointer.grab(from, to, detourBack, shortDetour, onGrabbed) }
+    clearThePadFor(onScreen(from)) {
+      heldPointer.grab(from, to, detourBack, shortDetour) { grabbed ->
+        noteToolbarAfterEdgeDown("grab")
+        onGrabbed(grabbed)
+      }
+    }
   }
 
   /**
@@ -864,6 +952,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
    * right-margin grab went on into six snap-through pushes, about 1.6 s of a 2.0 s press.
    */
   override fun moveHeld(to: PointF): Boolean {
+    if (heldDownInEdgeZone && heldPointer.isHeld) noteToolbarAfterEdgeDown("held")
     if (heldDownInEdgeZone && heldPointer.isHeld && edgeZoneUnanswered()) {
       Diag.log("  held: the grab in a side gesture zone went unanswered — lifting rather than pushing on")
       edgeZoneSwallowsHere = true
@@ -991,5 +1080,13 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
      * causes, short enough that a dismissed selection does not leave a patch on screen.
      */
     const val MASK_LINGER_MS = 700L
+
+    /**
+     * How long a touch-down in a side gesture zone waits for the target app's toolbar to come back
+     * first: see [awaitToolbarBeforeEdgeDown]. The driver's own wait for it is 900 ms too.
+     */
+    const val EDGE_DOWN_TOOLBAR_WAIT_MS = 900L
+
+    const val EDGE_DOWN_TOOLBAR_POLL_MS = 25L
   }
 }
