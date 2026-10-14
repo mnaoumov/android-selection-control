@@ -411,7 +411,18 @@ class SelectionDriver(
   private fun inMovingFrame(snapshot: SelectionObserver.Snapshot): SelectionObserver.Snapshot {
     if (activeEdge != Edge.START) return endBeforeSeam(snapshot) ?: snapshot
     val inText = if (snapshot.holdsNoText()) rehomedOntoText(snapshot) ?: return snapshot else snapshot
-    if (nodeKey(inText) == anchorNodeKey) return snapshot
+    if (nodeKey(inText) == anchorNodeKey) {
+      /*
+       * Re-homed into the anchor's own node, the caret is that node's first and the anchor is the END
+       * there. Left as it arrived, the image's `0..0` reads as no selection: on the handset (2026-10-14)
+       * a START dragged off `Editors like ` with `like` long-pressed made every press after it say "the
+       * pad cannot see a selection".
+       */
+      if (inText === snapshot) return snapshot
+      val anchor = lastSeenInNode[anchorNodeKey]?.high()?.takeIf { it in 1..inText.sourceLength } ?: return snapshot
+      caretReadAsEdge = inText.atMs
+      return inText.copy(from = 0, to = anchor)
+    }
     if (inText.from != 0 || inText.to < 0 || inText.to >= inText.sourceLength) return snapshot
     if (inText.to == 0) caretReadAsEdge = inText.atMs
     return inText.copy(from = inText.to, to = inText.sourceLength)
@@ -813,9 +824,21 @@ class SelectionDriver(
     if (activeEdge != Edge.START) return null
     val textless = snapshot.rehomedFrom?.takeIf { it.holdsNoText() } ?: return null
     val image = textless.bounds?.takeUnless { it.isEmpty } ?: return null
+    val text = snapshot.bounds ?: return null
     val toolbar = toolbarBounds() ?: return null
-    if (toolbar.bottom > image.top) return null
-    Diag.log("  image: the toolbar $toolbar is wholly above the image $image — the START is on the caret before it, not on the text after it")
+    val why = when {
+      toolbar.bottom <= image.top -> "is wholly above the image $image"
+      /*
+       * Or below the text's first row although there is room for it above: Chrome puts the toolbar
+       * above a selection's start when it fits, so a START on the text would have it there. On the
+       * handset (2026-10-14) the selection from before the image put it below the caption, where the
+       * image's own top left no room.
+       */
+      toolbar.top >= text.top && text.top - toolbar.height() >= (contentBand(snapshot)?.visible?.top ?: Int.MAX_VALUE) ->
+        "is below the text's first row $text, with room for it above"
+      else -> return null
+    }
+    Diag.log("  image: the toolbar $toolbar $why — the START is on the caret before the image, not on the text after it")
     return image
   }
 
