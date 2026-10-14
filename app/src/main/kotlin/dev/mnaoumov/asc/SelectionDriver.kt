@@ -1107,44 +1107,90 @@ class SelectionDriver(
   ) {
     val origin = before.movingOffset()
     val wrapsAtSpace = !locator.hasOwnBox(before, minOf(origin, next))
+    val judge = fun(after: SelectionObserver.Snapshot?) {
+      Diag.log(
+        "  wrap: row change to (${base.x}, ${base.y}) -> " +
+          if (after == null) "nothing" else "${after.low()}..${after.high()}"
+      )
+      val growFromNext = {
+        syncBoundaryContext(after!!)
+        knownBoundaries += next
+        growOneUnit(command) { outcome ->
+          onDone(if (outcome is Outcome.Moved) Outcome.Moved(origin, outcome.toOffset) else outcome)
+        }
+      }
+      when {
+        after == null || !locator.grabbedAHandle(before, after) -> onDone(Outcome.HandleLost)
+        after.movingOffset() == next && wrapsAtSpace -> growFromNext()
+        /*
+         * Past the row's first character, which is the usual case: aimed at the next row's caret,
+         * the released drag landed on 31 rather than 29, measured. Shrinking along one row is
+         * exact, so walk back onto [next] and grow from there rather than from mid-word, where
+         * Chrome's grow does not stop at the word's end.
+         */
+        wrapsAtSpace && before.source == after.source && grownBy(next, after.movingOffset()) > 0 ->
+          walkBackTo(next, command, origin, { outcome ->
+            if (outcome is Outcome.Moved && outcome.toOffset == next) {
+              growFromNext()
+            } else {
+              onDone(outcome)
+            }
+          })
+        else -> {
+          Diag.log("  wrap: landed on ${after.movingOffset()}, not a known word start — taking it as the step")
+          onDone(Outcome.Moved(origin, after.movingOffset()))
+        }
+      }
+    }
     gestureCount++
+    if (before.isBlink) {
+      overTheWrapThenLift(before, handle, PointF(handle.x, base.y), base, onDone, judge)
+      return
+    }
     gestures.drag(handle, base, DRAG_MS) { completed ->
       if (!completed) {
         onDone(Outcome.HandleLost)
         return@drag
       }
-      awaitChange(before) { after ->
+      awaitChange(before) { judge(it) }
+    }
+  }
+
+  /**
+   * [changeRowThenGrow]'s row change on Blink, in [heldCharacterStep]'s two moves: grab and go
+   * straight onto the other row at the handle's column, then along it to [to] with the pointer still
+   * down, then lift and hand the settled selection to [judge]. One straight drag sweeps back along
+   * the first row, and Chrome stops following it once it passes the anchor's column. Measured
+   * 2026-10-13 on the rig, Chrome 143: `⇥ word` from `features` at the end of a wrapped line, with
+   * one straight released drag, left `40..40` and ended `HandleLost`.
+   */
+  private fun overTheWrapThenLift(
+    before: SelectionObserver.Snapshot,
+    handle: PointF,
+    corner: PointF,
+    to: PointF,
+    onDone: (Outcome) -> Unit,
+    judge: (SelectionObserver.Snapshot?) -> Unit,
+  ) {
+    gestures.grabAndHold(handle, corner, pastTarget = false) { grabbed ->
+      if (!grabbed) {
+        onDone(Outcome.HandleLost)
+        return@grabAndHold
+      }
+      awaitChange(before) { first ->
         Diag.log(
-          "  wrap: row change to (${base.x}, ${base.y}) -> " +
-            if (after == null) "nothing" else "${after.low()}..${after.high()}"
+          "  wrap: first move to (${corner.x}, ${corner.y}) -> " +
+            if (first == null) "nothing" else "${first.low()}..${first.high()}"
         )
-        val growFromNext = {
-          syncBoundaryContext(after!!)
-          knownBoundaries += next
-          growOneUnit(command) { outcome ->
-            onDone(if (outcome is Outcome.Moved) Outcome.Moved(origin, outcome.toOffset) else outcome)
-          }
+        gestureCount++
+        if (!gestures.moveHeld(to)) {
+          gestures.releaseHeld { onDone(Outcome.HandleLost) }
+          return@awaitChange
         }
-        when {
-          after == null || !locator.grabbedAHandle(before, after) -> onDone(Outcome.HandleLost)
-          after.movingOffset() == next && wrapsAtSpace -> growFromNext()
-          /*
-           * Past the row's first character, which is the usual case: aimed at the next row's caret,
-           * the released drag landed on 31 rather than 29, measured. Shrinking along one row is
-           * exact, so walk back onto [next] and grow from there rather than from mid-word, where
-           * Chrome's grow does not stop at the word's end.
-           */
-          wrapsAtSpace && before.source == after.source && grownBy(next, after.movingOffset()) > 0 ->
-            walkBackTo(next, command, origin, { outcome ->
-              if (outcome is Outcome.Moved && outcome.toOffset == next) {
-                growFromNext()
-              } else {
-                onDone(outcome)
-              }
-            })
-          else -> {
-            Diag.log("  wrap: landed on ${after.movingOffset()}, not a known word start — taking it as the step")
-            onDone(Outcome.Moved(origin, after.movingOffset()))
+        awaitChange(first ?: before) { second ->
+          gestures.releaseHeld {
+            val atLift = observer.latest ?: second ?: first
+            if (atLift == null) judge(null) else awaitQuiet(atLift, 0, onResult = judge)
           }
         }
       }
@@ -1381,6 +1427,22 @@ class SelectionDriver(
       ?: nodeChange?.let { if (it.growing) PointF(handle.x, it.aim.y) else PointF(it.aim.x, handle.y) }
       ?: inline?.let { PointF(handleX(it.geometry.caretX), handle.y) }
       ?: PointF(handle.x + reach, handle.y)
+    /*
+     * And across the wrap in TWO moves on Blink, in a block step's order: a grow goes straight onto
+     * the other row first and then along it onto the caret, a shrink along its own row first and then
+     * onto the other row. One straight line from a line's last caret to the next line's first sweeps
+     * back along the first line before it leaves it, and when it passes the anchor's column Chrome
+     * stops following the drag. Measured 2026-10-13 on the rig, Chrome 143, a served `As source code is
+     * text, editors have features for it.` that wraps after `features`: long-press `features`
+     * (`37..45`), `→ char`, and the grab from (678, 887) to (50, 925) landed on `37..40`, and six held
+     * pushes along line 2 announced nothing (`Moved(45, 40)` in 8 gestures, 2 runs of 2). The same
+     * line by hand (`input motionevent`) left `37..40` too, and a hand drag straight down and then
+     * left landed on `37..46`. Going down first grows the edge to the other row's end, and the slide
+     * back along that row is a shrink, which is character-granular.
+     */
+    val corner = rowChange?.takeIf { before.isBlink }?.let {
+      if (growsSelection(command)) PointF(handle.x, it.y) else PointF(it.x, handle.y)
+    }
 
     /*
      * On Blink the grab's detour stops just past the touch slop, not 60 px out.
@@ -1402,13 +1464,13 @@ class SelectionDriver(
      * shrink ([heldSnapThrough]'s note); its outward detour is what moves it one character there.
      */
     gestureCount++
-    gestures.grabAndHold(handle, to, pastTarget = !before.isBlink) { grabbed ->
+    gestures.grabAndHold(handle, corner ?: to, pastTarget = !before.isBlink) { grabbed ->
       if (!grabbed) {
         Diag.log("  held: the grab was refused — falling back to the released path")
         releasedCharacterStep(command, onDone)
         return@grabAndHold
       }
-      awaitChange(before) { after ->
+      val judge = fun(after: SelectionObserver.Snapshot?) {
         Diag.log(
           "  held grab: handle=(${handle.x}, ${handle.y}) to=(${to.x}, ${to.y}) -> " +
             if (after == null) "nothing" else "${after.low()}..${after.high()} ${describeNode(after)}"
@@ -1486,12 +1548,12 @@ class SelectionDriver(
             // The edge held on the seam it started from: push on into the neighbour.
             if (inline != null && !crossedNodes(before, after) && after.movingOffset() == start) {
               throughTheNeighbour(BlockStep(to, growing = true, neighbour = inline), before, start, command, onDone)
-              return@awaitChange
+              return
             }
             // A landing past the inline neighbour, in a node further on, is moved back onto it first.
             if (inline != null && crossedNodes(before, after) && !inline.holds(after)) {
               intoTheNeighbour(BlockStep(to, growing = true, neighbour = inline), before, after, gestures.heldAt() ?: to, start, command, onDone)
-              return@awaitChange
+              return
             }
             /*
              * A landing IN the inline neighbour is judged as [throughTheNeighbour]'s push is, because
@@ -1504,13 +1566,30 @@ class SelectionDriver(
              */
             if (inline != null && crossedNodes(before, after)) {
               backFromTheSnap(before, after, gestures.heldAt() ?: to, start, command, onDone)
-              return@awaitChange
+              return
             }
             // Still re-key: a landing across a node makes the old node's offsets meaningless.
             syncBoundaryContext(after)
             heldCorrect(targetOffset(before, after, command, start), start, command, onDone, frame = after)
           }
         }
+      }
+      if (corner == null) {
+        awaitChange(before) { judge(it) }
+        return@grabAndHold
+      }
+      awaitChange(before) { first ->
+        Diag.log(
+          "  wrap: first move to (${corner.x}, ${corner.y}) -> " +
+            if (first == null) "nothing" else "${first.low()}..${first.high()} ${describeNode(first)}"
+        )
+        gestureCount++
+        if (!gestures.moveHeld(to)) {
+          Diag.log("  held: the move onto the other row's caret was refused")
+          gestures.releaseHeld { onDone(Outcome.HandleLost) }
+          return@awaitChange
+        }
+        awaitChange(first ?: before) { second -> judge(second ?: first) }
       }
     }
   }
