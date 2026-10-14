@@ -2383,6 +2383,33 @@ row change's lift needed 75 ms. Measured 2026-10-14 on the rig, Chrome force-sto
 The rig cannot show the phone's own shape: a grab that IS dispatched and that OxygenOS's strip takes.
 Whether Chrome keeps its toolbar up then, which is what the check relies on, needs the phone.
 
+**The phone confirms the fix, and it settles the ambiguous press above (2026-10-14, OnePlus 15,
+Chrome 154.0.8037.127, `en.wikipedia.org/wiki/Text_editor`).** Chrome announced selections the old way
+(`seeded from a fresh selection`), so the extended-selection trial was not active. Long-press `for`
+(`49..52`) at the end of `… specifically intended for`, then `→ char` across the wrap onto 53, the
+first caret of `editing` at the left margin, then `→ char` again. The service was rebound before each
+run. A rebind drops the pad's view of the selection, so it cannot be done between the two presses, and
+the crossing's own zone grab (`toolbar is still up`, then answered by the move) teaches the verdict
+`false` first. That does not matter here: an unanswered zone touch-down in the press itself ends the
+press whatever the verdict is.
+
+| press, 3 runs of 3 | result |
+|---|---|
+| `→ char` from `for` | `52 -> 53` in 2 gestures, 1.10-1.14 s |
+| `→ char` from 53 | grab at (87.5, 1534) `rising 42.0 px first`, then `the app took its toolbar down after the zone touch-down, so it is following the pointer — the silence is its own`; the grab and the first push were silent, the second push landed on 60, and the walk back reached 54: `Moved(53, 54)` in 4 gestures and 1.30-1.35 s; the screenshot showed `for e` selected |
+
+Before the fix this press lifted after its silent grab and ended `InEdgeZone` (the `lifting rather than
+pushing on` entry above). Its silence was Chrome's own hold on a word's start, not OxygenOS.
+
+**No phone case is known in which the swallow guard fires.** With a fresh verdict before each run, the
+item's two other cases were answered, 2 runs of 2 each. The END at the right margin (`for`), `← char` ×2
+went `52 -> 51 -> 50`, 1 gesture each and 0.59 s. The START at the left margin (`allows` after `⇄ swap`)
+went `→ char`, `← char` `6 -> 7 -> 6`, 1 gesture each and 0.57-0.73 s. Every one of those zone grabs
+rose 42 px first (*every stroke that touches down in a side zone rises straight up first*), and none
+logged `toolbar is still up` or ended `InEdgeZone`. So whether Chrome keeps its toolbar up for a touch
+that OxygenOS takes is still unmeasured, and the guard is shown only by the rig's
+`force-swallow-edge-zone` marker.
+
 **A grow from the document's first or last caret has nowhere to go. Unless it touches nothing, its
 silence teaches the verdict wrong.** Measured 2026-10-13 on the rig (Chrome 143, no marker, so the zone
 takes the grab): with the START on `0..22` of a served page's first row, `← char` grabbed at x 14,
