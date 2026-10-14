@@ -3128,6 +3128,10 @@ class SelectionDriver(
         return@grabAndHold
       }
       awaitChange(scrolled, maxMs = MAX_PAGE_SETTLE_MS) { landed ->
+        if (landed != null && endOnBlocksFirstCaret(landed)) {
+          backOntoPreviousText(landed, ended, report)
+          return@awaitChange
+        }
         // The landing as it arrived: the START frame reads a text-less caret in the text after it.
         val textless = landed?.let { it.rehomedFrom ?: it }?.takeIf { it.holdsNoText() } ?: run {
           gestures.releaseHeld { awaitQuiet(observer.latest ?: return@releaseHeld report(landed), 0, report) }
@@ -3154,6 +3158,58 @@ class SelectionDriver(
           gestures.releaseHeld { awaitQuiet(observer.latest ?: return@releaseHeld report(null), 0, report) }
         }
       }
+    }
+  }
+
+  /**
+   * Whether a page drag left the END on a block's first caret: `0..0` in a text node without the
+   * anchor, which [endBeforeSeam] left alone because the text before it is on another row.
+   */
+  private fun endOnBlocksFirstCaret(landed: SelectionObserver.Snapshot): Boolean =
+    activeEdge == Edge.END && landed.from == 0 && landed.to == 0 && landed.rehomedFrom == null &&
+      !landed.holdsNoText() && nodeKey(landed) != anchorNodeKey
+
+  /**
+   * A page drag that left the END on a block's first caret: move the held pointer back onto the last
+   * caret of the text before it, then let go.
+   *
+   * Chrome announces that caret `0..0` in the block's frame, which reads as no selection. Measured
+   * 2026-10-14 on the handset (Chrome 154, Wikipedia's `Plain_text`): the third `⇟ page`'s drag to
+   * (300.5, 2033) put the END on the first caret of a collapsed section heading, the press ended
+   * `HandleLost`, and the next `→ char` said "the pad cannot see a selection" while Chrome showed the
+   * selection running to the heading's start. The rig reproduces it with a served page whose drag ends
+   * in the margin above an indented `<h2>`: Chrome puts the END on the heading's first caret.
+   *
+   * The caret is the one where the previous block ends, but that block's last character is on
+   * another row, so [endBeforeSeam] cannot re-read it there: the handle is drawn on the heading's own
+   * row. Moving the pointer onto the previous block's last caret is a shrink, which is
+   * character-granular, so it lands there, and that frame has a range: `0..length`. The page gives
+   * up the one character, which a page step does not count.
+   */
+  private fun backOntoPreviousText(
+    landed: SelectionObserver.Snapshot,
+    ended: (Outcome) -> Unit,
+    report: (SelectionObserver.Snapshot?) -> Unit,
+  ) {
+    val caret = locator.adjacentNodeCaret(landed, forward = false, oneIn = false)
+    if (caret == null) {
+      Diag.log("  page: the drag left the END on a block's first caret, and no text before it measures")
+      gestures.releaseHeld { report(observer.latest) }
+      return
+    }
+    val aim = PointF(handleX(caret.geometry.caretX), caret.geometry.lineBottom + locator.handleDrop)
+    Diag.log(
+      "  page: the drag left the END on a block's first caret (${describeNode(landed)}) — " +
+        "moving back onto the last caret of the text before it at (${aim.x}, ${aim.y})"
+    )
+    gestureCount++
+    if (!gestures.moveHeld(aim)) {
+      Diag.log("  held: the move back onto the text was refused")
+      gestures.releaseHeld { ended(Outcome.HandleLost) }
+      return
+    }
+    awaitChange(landed) { _ ->
+      gestures.releaseHeld { awaitQuiet(observer.latest ?: return@releaseHeld report(null), 0, report) }
     }
   }
 

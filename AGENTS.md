@@ -2002,6 +2002,37 @@ It moved on to the `Plain text` heading's first caret, `Moved(41, 0, crossedNode
 On `Plain_text` the third `⇟ page` landed the END on a collapsed section heading's first caret. That
 was announced `0..0` and ended `HandleLost`, and the pad was blind after it. That is tracked on its own.
 
+**A page drag that ends in the margin above a block can leave the END on that block's first caret,
+and Chrome announces it `0..0`, so it moves back onto the end of the text before it.** Measured on the
+phone (2026-10-14, Wikipedia's `Plain_text`): the third `⇟ page` put the END on a collapsed section
+heading's first caret, logged `an END announced 0..0 … the text before it is not on its row`, ended
+`HandleLost`, and every press after it said "the pad cannot see a selection". `endBeforeSeam` leaves
+such a `0..0` alone on purpose, because the handle is drawn on the block's own row. The rig reproduces
+it with a served page whose drag lands in the margin left of an indented `<h2>` (`padding-left: 420px`,
+`margin-top: 80px`): Chrome puts the END on the heading's caret 0. Now `holdOntoText` sees such a
+landing with the pointer still down (`endOnBlocksFirstCaret`) and moves it onto the previous text
+leaf's last caret (`backOntoPreviousText`, `adjacentNodeCaret(forward = false, oneIn = false)`). That
+move is a shrink, so it lands on the caret, and the page gives up that one character. Measured
+2026-10-14 on the rig, Chrome 143 force-stopped before each run:
+
+| page, press | old build | new build |
+|---|---|---|
+| a 720 px margin above `Encoding 1`, `⇟ page` from `charlie`, then `← char`, `→ char`, 3 runs | `HandleLost` in 1.7 s, then `the pad cannot see a selection` | `27 -> 36` (the paragraph's end) in 2.0 s and 3 gestures; `36 -> 35 -> 36`, 1 gesture each |
+| an 80 px margin above `Encoding 8` after 21 rows, `⇟ page` ×2, `← char`, 2 runs | not measured | the second page moved back onto `Body row 7`'s end, `26 -> 31` (a whole band), then `31 -> 30` |
+| controls: one-line rows `⇟ page` ×2 and `⤓ end`; the debug target's `TextView` `⇟ page`, `← char`, `→ char` | as before | as before (`11 -> 30 -> 29 -> 30`); the `end` stop on a cold wrapped node is the open defect below |
+
+**The phone confirms it (2026-10-14, OnePlus 15, Chrome 154).** Chrome announced selections the old way
+(`seeded from a fresh selection`), so the extended-selection trial was not active. On the same served
+80 px page, long-press `alpha` in `Paragraph 1`, then `⇟ page` ×3. Pages 2 and 3 each logged `the drag
+left the END on a block's first caret` and moved back onto `Body row 15`'s and `Body row 31`'s end
+(`Moved(25, 32, crossedNode=true)` in 2.0 s and 3 gestures). The screenshot showed the selection up to
+`Body row 31 alpha bravo charlie.` with its handle drawn there, and `← char`, `→ char` went
+`32 -> 31 -> 32`, 1 gesture each.
+
+**A margin taller than a page stalls.** Where nothing but margin lies between the previous block and the
+heading, every page lands in the same margin and moves back onto the same caret: on the rig's 720 px page
+the second `⇟ page` went `36 -> 36`. The pad stays sighted and says "didn't move". That is tracked on its own.
+
 **A page step mid-document can cross the anchor too, and there the landing's node says nothing by
 itself**, because it can be on either side of the anchor, and Chrome announces it as `0..focus` either
 way. That `end` run's FIRST page step already carried the START past the anchor, and the edge kept its
