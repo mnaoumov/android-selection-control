@@ -239,6 +239,22 @@ grab is silent. That silence used to be read as a swallowed touch-down. The pres
 toolbar instead (*A silent zone touch-down is answered when the toolbar went down*, under the edge-zone
 entries below): `→ char` from 46 goes `46 -> 47`, and `⇥ word` from `features` goes `45 -> 49`.
 
+**The phone confirms the two-move row change (2026-10-14, OnePlus 15, Chrome 154.0.8037.127).** Chrome
+announced selections the old way (`seeded from a fresh selection`), so the extended-selection trial was
+not active. The page was served with `body{margin:0 40px; padding-top:300px; font:20px sans-serif}`, so
+every line starts at x 140, outside OxygenOS's 84 px strip. `As source code is text, editors have
+features for it.` wraps after `editors`, and the next paragraph wraps after `shown`. Chrome was
+force-stopped before each run. Long-press the line's last word, then:
+
+| press | result |
+|---|---|
+| `→ char` from `editors` (`24..31`), 3 runs of 3 | `wrap: first move to (1098.5, 1600.0) -> 24..53` (straight down, the other row's end), then along it to `24..32`, `Moved(31, 32)` in 2 gestures and 0.96-1.12 s |
+| `← char` back | first move along line 2's row (`24..53`), then up onto line 1, `Moved(32, 31)` in 2 gestures and 0.82-0.86 s |
+| `⇥ word` from 31 | row change to 32, grow try 1 silent, try 2 onto 36 (the end of `have`), 4 gestures, 1.57-1.60 s |
+| the same from `shown` (`23..28`), 1 run | `28 -> 29 -> 28`, 2 gestures each; `⇥ word` `28 -> 33` (the end of `here`) |
+
+The screenshot after `⇥ word` showed `editors have` selected.
+
 **The grow escalation stops at the screen's edge.** Each reach is clamped to the screen, and the press
 ends once the previous reach was already off it. Measured `word →` from the end of a paragraph's last
 line: six tries, the last clamped to x 719, instead of the escalation running on to a 360 px reach.
