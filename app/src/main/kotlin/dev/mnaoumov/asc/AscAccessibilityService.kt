@@ -288,6 +288,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     touchedEdgeZone = false
     heldDownInEdgeZone = false
     touchedForeignWindow = false
+    locator.aimedByAverage = false
     val edgeBefore = driver.activeEdge
     driver.perform(command) { outcome ->
       if (padCleared) pad?.setTransparentToTouch(false)
@@ -479,6 +480,16 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       !edgeZoneUnanswered() -> false
       outcome == Outcome.InEdgeZone || isStuck(outcome) -> true
       else -> return
+    }
+    /*
+     * A grab aimed by a box's average can miss the handle outright, and a miss is as silent as a
+     * swallowed touch-down. Measured 2026-10-13 on the rig (stock Android, which takes such a grab): a
+     * cold Chromium `<p>`'s END placed by its block box at x 706, 186 px right of the handle, announced
+     * nothing, and every margin grab after it was refused for the rest of the connection.
+     */
+    if (verdict && locator.aimedByAverage) {
+      Diag.log("  side gesture zones: not learning from this press — its aim was a box's average, which can simply miss")
+      return
     }
     if (verdict != edgeZoneSwallowsHere) {
       Diag.log("  side gesture zones: ${if (verdict) "this ROM swallows a touch-down there" else "a touch-down there was answered"}")

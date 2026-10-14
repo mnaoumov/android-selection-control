@@ -841,15 +841,19 @@ function Start-Target {
 
   The pad appears by itself the moment the service connects, and it logs its rectangles then — so a
   rebind is both the way to make it appear and the way to make it say where it is. That is the lever
-  used here when the log holds nothing, rather than the launcher's own "Show the pad" button, whose
-  position is not logged anywhere and so could only be pressed by guessing at a coordinate — the one
-  thing this script exists to avoid.
+  used here, rather than the launcher's own "Show the pad" button, whose position is not logged
+  anywhere and so could only be pressed by guessing at a coordinate — the one thing this script
+  exists to avoid.
+
+  It rebinds EVERY time, not only when the log holds no rectangles. The pad's rectangles are per
+  foreground app and only a relayout logs new ones, so rectangles already in the log can be the last
+  app's. And a rebind is what clears what the service keeps for its connection, such as whether this
+  ROM swallows a touch-down in a side gesture zone. On 2026-10-13 a run that called `pad` between cold
+  measurements kept that verdict from an earlier run, because the log already held rectangles and
+  nothing was rebound. Later lines win in Get-LoggedRects, so the fresh rectangles replace the old.
 #>
 function Show-Pad {
     Assert-RigAttached
-
-    $buttons = @(Get-PadButtons)
-    if ($buttons.Count -gt 0) { return $buttons }
 
     Restore-ServiceBinding
     Start-Sleep -Seconds 2
