@@ -1525,6 +1525,20 @@ handle sat near the band's bottom), `⇞ page` then `→ char`:
 | 19, 23, 13 px on the START edge | not measured | no swipe; `→ char` / `← char` `0 -> 1 -> 0` |
 | 33 px, and `page ↓` ×2 (348, 768 px) | swiped as before | swiped as before (`scrolled 16 of 33`), `← char` after it exact |
 
+**The phone confirms it (2026-10-14, OnePlus 15, Chrome 154, `en.wikipedia.org/wiki/Text_editor`, the
+page scrolled ~600 px by hand).** Chrome announced selections the old way, so the extended-selection
+trial was not active. On the phone the slop is about 28 px, so the threshold logged as `56.0 px`. The
+band was `Rect(0, 337 - 1272, 2180)`, and `⇞ page`'s near end was y 2033, so a word on the line whose
+box ends at y 2013 (handle at 2062) plans a 29 px scroll. Every run below logged `a scroll of … is under
+56.0 px, inside the touch slop — no swipe`, and the press then moved in 1 gesture:
+
+| press | result |
+|---|---|
+| `⇞ page` on the START from `onto` (`1..5`), 2 runs | `scroll=29.0`, no swipe, the drag passed the image and was re-homed onto the hatnote, `Moved(1, 11)` in 0.57-0.63 s; `→ char` `11 -> 12`, 1 gesture |
+| `⇄ swap`, `⇞ page` on the END from `onto` | `scroll=29.0`, no swipe, crossed the anchor, now the START, `Moved(5, 15)` in 0.62 s; `→ char` `15 -> 16` |
+| `⇟ page` on the START from `use` on the hatnote's first line (handle at y 473 against a near end of 442) | `scroll=31.0`, no swipe, crossed the anchor, now the END, `Moved(8, 9)` in 0.62 s; `← char` `9 -> 8` |
+| control: `⇞ page` from `onto` one line lower | `scroll=148.0`, swiped from (954, 361.5), `scrolled 119 of 148` |
+
 **On the handset, the toolbar used to end a page run after one or two pages.** Measured 2026-10-05 on the
 OnePlus 15 (portrait, Chrome 154 with the extended-selection flag Disabled) against
 `en.m.wikipedia.org/wiki/Text_editor`. The band is `[0,337][1272,2180]`.
