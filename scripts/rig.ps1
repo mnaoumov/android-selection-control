@@ -100,6 +100,8 @@ $RigSerial = if ($Serial) { $Serial } else { "emulator-$RigConsolePort" }
 
 $AppId = 'dev.mnaoumov.asc'
 $ServiceComponent = "$AppId/$AppId.AscAccessibilityService"
+# The service's label, which is how `dumpsys accessibility` names a bound service.
+$ServiceLabel = 'Selection Pad'
 $TargetActivity = "$AppId/.TargetActivity"
 $LogTag = 'ASC'
 
@@ -657,22 +659,83 @@ function Set-EnabledServices([string[]] $Services) {
   exactly like a broken build. Rewriting the string — take ours out, put it back — is what makes the
   system rebind. Everything else in the list is preserved on both halves, because this setting is
   shared with whatever else the machine relies on.
+
+  The two halves are paced by the system, not by a clock. The first version waited a fixed 400 ms
+  after each write, which is enough on the rig, and on the OnePlus 15 (2026-10-12) the re-add did not
+  stick: the list came back with only the owner's password manager in it, and a plain
+  `pad.ps1 on` straight after put the service back. So the removal now waits until the system has
+  actually unbound the service, the re-add until it is bound again, and an add the device drops is
+  retried once after a longer gap before giving up.
 #>
 function Restore-ServiceBinding {
     Assert-RigAttached
 
     $others = @(Get-EnabledServices | Where-Object -FilterScript { $_ -ne $ServiceComponent })
     Set-EnabledServices $others
-    Set-EnabledServices (@($others) + @($ServiceComponent))
+    if (-not (Wait-ServiceBound -Bound $false -TimeoutSeconds 10)) {
+        # Either the dump has no readable "Bound services" line here, or the unbind is slow. A gap
+        # well past the old 400 ms costs nothing either way.
+        Write-Host -Object 'Could not see the service unbind; waiting 2 s before re-adding it.'
+        Start-Sleep -Seconds 2
+    }
 
-    $now = Get-EnabledServices
-    if ($now -notcontains $ServiceComponent) {
-        throw "The device did not keep the service in the enabled list. Now enabled: $($now -join ', ')"
+    $attempts = 2
+    for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+        Set-EnabledServices (@($others) + @($ServiceComponent))
+        $bound = Wait-ServiceBound -Bound $true -TimeoutSeconds 10
+        # Read the list AFTER the bind wait: a drop made by the system lands after the write, so a
+        # readback in the same breath as the write would still show the service.
+        $now = Get-EnabledServices
+        if ($now -contains $ServiceComponent) {
+            if ($null -eq $bound -or $bound) {
+                Write-Host -Object 'Service rebound; the pad appears as soon as it connects.'
+            } else {
+                Write-Host -Object 'Service is in the enabled list but not yet bound; the pad appears as soon as it connects.'
+            }
+            if ($others.Count -gt 0) {
+                Write-Host -Object "Left alone: $($others -join ', ')"
+            }
+            return
+        }
+        if ($attempt -lt $attempts) {
+            Write-Host -Object "The device dropped the service from the enabled list (now: $($now -join ', ')); re-adding it in 3 s."
+            Start-Sleep -Seconds 3
+        }
     }
-    Write-Host -Object 'Service rebound; the pad appears as soon as it connects.'
-    if ($others.Count -gt 0) {
-        Write-Host -Object "Left alone: $($others -join ', ')"
-    }
+
+    throw ("The device did not keep the service in the enabled list after $attempts adds. Now enabled: " +
+        "$($now -join ', '). Put it back with `".\scripts\pad.ps1 on -Serial $RigSerial`".")
+}
+
+<#
+  Wait until the service is (or is no longer) among the system's bound accessibility services.
+
+  Answers $true when the state was reached, $false on timeout, and $null when `dumpsys accessibility`
+  has no "Bound services" line to read, so the caller can tell "not yet" from "cannot see". The line
+  names services by label, not by component.
+#>
+function Wait-ServiceBound {
+    [OutputType([System.Nullable[bool]])]
+    param(
+        [bool] $Bound,
+        [int] $TimeoutSeconds
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $sawLine = $false
+    do {
+        $dump = Invoke-AdbBounded -Arguments @('-s', $RigSerial, 'shell', 'dumpsys', 'accessibility') -TimeoutSeconds 10
+        $line = @($dump | Where-Object -FilterScript { $_ -match 'Bound services:' }) | Select-Object -First 1
+        if ($null -ne $line) {
+            $sawLine = $true
+            $isBound = $line -match [regex]::Escape("label=$ServiceLabel,")
+            if ($isBound -eq $Bound) { return $true }
+        }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+
+    if (-not $sawLine) { return $null }
+    return $false
 }
 
 # --------------------------------------------------------------------------------------------------
