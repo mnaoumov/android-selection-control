@@ -2702,7 +2702,21 @@ rig, Chrome 143 force-stopped before each run, long-press `charlie` in paragraph
 | control: the debug target's `TextView` from `bravo` | `11 -> 12 -> 11`, `11 -> 19` |
 
 Both re-anchoring runs ended the sweep with a last page that scrolled 0-2 px. So did runs that did not
-re-anchor, so that shape does not decide it. What does is not known. The phone has not run the change.
+re-anchor, so that shape does not decide it. What does is not known.
+
+**The phone runs the `AnchorMoved` path with the marker (2026-10-14, OnePlus 15, Chrome 154.0.8037.127).**
+Chrome announced selections the old way (`seeded from a fresh selection`), so the extended-selection
+trial was not active. The page was a served page of one-line `<p>Row 0NN has alpha bravo here</p>` rows
+(20 px, `margin: 0 40px`, `padding-top: 300px`). Long-press `here` on row 002 (`24..28`), then a hand
+drag (`input swipe`) of the END into row 003, which announced `0..13` there, a node away from the
+anchor. Then `← char`:
+
+| run | result |
+|---|---|
+| marker on, 3 runs of 3 | `debug: announcing 0..12 as re-anchored on 11`, `the app moved the anchor too: 0..13 -> 11..12 in the same node`, `AnchorMoved` in 323-331 ms and 1 gesture; the status line read `the app moved the other end too — check the selection`, and the pad stayed up |
+| control, marker removed and the service rebound, `← char` then `→ char` | `13 -> 12` in 1 gesture and 0.58 s; `12 -> 13` in 3 gestures and 1.16 s, because 12 is the start of `alpha` and Chrome holds a grow there (the held snap-through, then a walk back) |
+
+Chrome itself did not re-anchor in any of these runs, so the phone has shown the path only through the marker.
 
 **A page step can leave the END on a block at the screen's bottom, below the gesture-bar floor, so
 the step scrolls the page until the handle is back in reach.** A drag that ends in the margin above a
