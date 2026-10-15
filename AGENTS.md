@@ -966,7 +966,22 @@ box is never used again. Chrome force-stopped before each run:
 | START mirror: `Go far now` indented above `Para 1 is short.`, START on its 0, `← char`, `→ char`, `← char` | not measured | `0 -> 15 -> 0 -> 15`, 2 gestures each. The move up lands on `0..16`, not empty, so the new path does not fire |
 | controls: one-line rows `here` `→ char`, `← char`, `⇥ word`; the debug target's `TextView` from `bravo` | as before | `28 -> 1 -> 28`, `28 -> 4`; `11 -> 12 -> 11`, `11 -> 19` |
 
-The phone has not run the fix.
+**The phone confirms it (2026-10-14, OnePlus 15, Chrome 154).** Chrome announced selections the old way
+(`seeded from a fresh selection`), so the extended-selection trial was not active. The rig's page zooms
+out on the phone, and there the heading's text starts left of the paragraph's end. So the page was
+reshaped: `<p>Para N has charlie.</p>`, each followed by an `<h2>Encoding N</h2>` with
+`padding-left: 210px` (26 px bold, `margin-top: 160px`). The paragraph ends at about x 607 and
+`Encoding` starts at about x 795, and `1` wraps onto a second line. Chrome was force-stopped and the
+service rebound before each run. Long-press `charlie` (`11..18`), then:
+
+| press, 3 runs of 3 | result |
+|---|---|
+| `→ char` | `18 -> 19`, 1 gesture, 0.73-0.74 s |
+| `→ char` | `the move onto its row left the edge on the neighbour's near caret — on along its row to (1248.0, 2186.0) first, then back`, then `along the row -> 0..8, then back to (874.5, 2186.0) -> 0..1`, `Moved(19, 1, crossedNode=true)` in 3 gestures and 1.21 s; the screenshot showed `charlie.` and the heading's `E` selected |
+| `→ char`, `← char`, `← char` | `1 -> 2 -> 1`, 1 gesture each, then `1 -> 19` back into the paragraph, 2 gestures, 0.91-0.95 s |
+| control: one-line rows, `here` on row 002, `→ char`, `← char`, `⇥ word`, 1 run | `28 -> 1 -> 28`, 2 gestures each; `28 -> 4` in 6 gestures, with no move along the row |
+
+No press ended `HandleLost` or said `cannot see a selection`.
 
 **On a cold Chrome the tree walk places that heading's first caret by its PADDING box, so the move
 lands on its second line, and the landing is read as the heading's text by its length and rows.** The
