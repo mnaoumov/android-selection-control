@@ -3047,7 +3047,32 @@ Long-press `use`, `⇄ swap`, `⇤ word` ×2 to `0..11`, then:
 | `← char` ×2, `→ char` with `force-refuse-character-rects` | not measured | `NeighbourUnmeasured` in ~1 s (the caret wait) and then 2 ms, 0 gestures; then `0 -> 1`, 2 runs of 2 |
 | controls: one-line rows, the START `0 -> 27 -> 0` across rows 002/001, the END `28 -> 1 -> 28` across rows 004/005; the debug target's `TextView` from `bravo` | as before | the same; `11 -> 12 -> 11`, `11 -> 19`, and after `⇄ swap` `6 -> 5 -> 0`, then `AtDocumentEdge` |
 
-The phone has not run the fix.
+**The phone confirms the step up on Wikipedia, but on the rig's page the step back DOWN lands in the
+clipped label (2026-10-14, OnePlus 15, Chrome 154.0.8037.127).** Chrome announced selections the old way
+(`seeded from a fresh selection`), so the extended-selection trial was not active. Chrome was
+force-stopped and the service rebound before each run. On `en.wikipedia.org/wiki/Text_editor` at its
+top, the page-tools label is clipped at the right edge (`12 chars at Rect(1176, 963 - 1272, 1033)`).
+Long-press `For` in the hatnote (`0..3` of 48), `⇄ swap`, then:
+
+| press, 3 runs of 3 | result |
+|---|---|
+| the first `← char` | on a cold Chrome (runs 1 and 2) `the previous node (12 chars …) is wrapped and will not measure`, `NeighbourUnmeasured` in 5-8 ms, 0 gestures, nothing on screen; the walk after the press then logged `passing over a node … beyond the screen's edge`. In run 3 the label was already measured, and this press stepped as below |
+| `← char` again | `passing over a node … beyond the screen's edge`, the block step into the `Talk` tab: the move onto its row landed in `Article`, slid onto `Talk`, and walked back released to `0 -> 3` (`k` selected), 4 gestures, 1.6-1.8 s; the zone grab at x 45.5 was answered, and no magnifier was left |
+| `→ char` back, `← char` | `3 -> 0` of the hatnote (2 gestures, 0.8 s), then `0 -> 3` again (4 gestures) |
+
+The rig's page served over `adb reverse` shows the label cut off after `Dow`, and the long-press on `use`
+selects `the` (`4..7` of a 28-character `For the use of editors, see `). `⇄ swap`, `⇤ word` to `0..7`,
+then, 2 runs of 2:
+
+| press | result |
+|---|---|
+| `← char` | `passing over a node (12 chars at Rect(1135, 1314 - 1272, 1398)) …`, `0 -> 10` of `Text editor`, 2 gestures, 1.0 s |
+| `→ char` | `adjacent: the next node (12 chars at Rect(822, 1314 - 1272, 1398))`, the label, NOT passed over; the slide landed on the label's `0..12`, `Moved(10, 0)` in 0.8 s, and the screenshot showed the selection starting at `PDF` |
+| `← char`, `→ char` after it | `HandleLost` (0.5 s, 1 gesture) and `HandleLost` (4.8 s, 8 gestures), the selection intact |
+
+On the way down the label's box read `Rect(822, …)` with the selection over it, against `Rect(1135, …)`
+before, and the off-screen test did not fire. That is tracked on its own. A second `⇤ word` from the
+hatnote's 0 passed over the label and went into the heading, `0 -> 4`, 9 gestures, 2 runs of 2.
 
 **A heads-up notification is another app's window above the target, and a touch-down on it goes to the
 notification.** An upward page swipe starts a quarter of a drop below the band's top: y 361 on the phone,
