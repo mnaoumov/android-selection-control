@@ -108,6 +108,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       },
       contentBand = ::contentBand,
       foreignWindowAt = ::foreignWindowAt,
+      windowRoots = { packageName ->
+        windows.orEmpty().mapNotNull { window -> window.root?.takeIf { it.packageName?.toString() == packageName } }
+      },
     )
     // And for a page scroll that falls short mid-document, which the rig's Chrome never does by itself.
     driver.forceShortScroll = debuggable && java.io.File(filesDir, FORCE_SHORT_SCROLL).exists()
@@ -115,6 +118,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     // And for the handset's silent move onto a node's last caret below the document's last text.
     driver.forceSilentNodeEnd = debuggable && java.io.File(filesDir, FORCE_SILENT_NODE_END).exists()
     if (driver.forceSilentNodeEnd) Diag.log("debug: the move onto a node's last caret after a page drag stays in the empty space")
+    // And for the handset's moving node that stops answering refresh() while still drawn.
+    driver.forceStaleSource = debuggable && java.io.File(filesDir, FORCE_STALE_SOURCE).exists()
+    if (driver.forceStaleSource) Diag.log("debug: the moving edge's node refuses refresh() once per announcement")
 
     pad = Pad(
       context = this,
@@ -1115,6 +1121,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
     /** The debug marker file that announces a leaf's selection in its container's frame: see `SelectionObserver.forceContainerFrame`. */
     const val FORCE_CONTAINER_FRAME = "force-container-frame"
+
+    /** The debug marker file that makes the moving edge's node refuse `refresh()`: see `SelectionDriver.forceStaleSource`. */
+    const val FORCE_STALE_SOURCE = "force-stale-source"
 
     /** The status line for a press the side gesture zone stopped. */
     const val EDGE_ZONE_STATUS = "the handle is in the screen edge's swipe zone"
