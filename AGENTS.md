@@ -2572,8 +2572,35 @@ force-stopped and the service rebound before each run. Long-press `charlie` (`11
 | `⤓ end` | 10 page steps, four of them into a heading (`along the row -> 0..10, then onto caret 1 -> 0..1`). The ninth logged `the drag announced nothing past the END's node (in TextView srcLen=11 …) — moving onto its last caret at (1151.5, 326.0)` and landed on `0..11`. The tenth found the edge, and the sweep ended `Moved(18, 11, crossedNode=true)` in 20-21 s and 32 gestures; the screenshot showed all of `Encoding 30` selected |
 | `← char`, `→ char` | `11 -> 10 -> 11`, 1 gesture each, 0.56-0.73 s |
 
-No press ended `HandleLost`. Where the last heading wraps, the move is aimed at the pointer's row and stops
-a line short; that is tracked on its own.
+No press ended `HandleLost`.
+
+**Where the last heading wraps, the phone's move onto its last caret is not announced, so the pointer
+moves onto the caret before it and back.** On the phone (2026-10-14, Chrome 154, the 530 px page with
+`padding-left: 190px`) `Encoding 30` wraps after `Encoding`, and `⤓ end` ended `Moved(18, 9)` in 3 runs
+of 3. The last page's drag announced nothing, and the move went to `(871.5, 2026.0)`, while the node's
+box read `Rect(56, 172 - 1218, 389)`. The aim was right, though. The box was the snapshot's from before
+the drag, and the per-character rectangle is live. In the screenshot after the press, the heading had
+moved down to about y 1750..1970, with `30` selected and the END handle drawn under it at about y 1995.
+So during the drag Chrome scrolled the page and put the END on 11, and it announced neither the drag nor
+the move onto the caret. The pad kept 9, the line break. The rig's Chrome 143 and Chromium 157 do not
+scroll there, and on a wrapping copy of the page (`padding-left: 190px` at 30 px) the move was announced
+`8 -> 11`. Now, when the move is not announced as the node's last caret, `ontoTheNodesEnd` moves the held
+pointer onto caret `length - 1` and then back onto `length`. Each move changes the offset, so Chrome
+announces both, whatever it had before. `adb shell run-as dev.mnaoumov.asc touch files/force-silent-node-end`,
+then `rig.ps1 rebind`, keeps the first move inside the empty space on a debuggable build, so it is not
+announced, as on the phone. It logs `debug: moving within the empty space`. `rm` it and rebind to undo.
+Measured 2026-10-14 on the rig, Chrome 143 force-stopped before each run, a served page of three
+paragraphs and headings ending in a wrapping `Encoding 30` over a 1500 px `<div>`, long-press `charlie`,
+then `⤓ end`, `← char`, `→ char`:
+
+| run | result |
+|---|---|
+| marker on, 9 runs | the last page's drag announced nothing in 4 (in the other 5 it was announced `11` itself). In each of the 4: `the move onto the last caret announced nothing — moving onto caret 10 … then back onto 11`, `onto caret 10 -> 0..10`, then `Moved(35, 11)` in 16 gestures and 15.5-15.9 s; `11 -> 10 -> 11`, 1 gesture each |
+| marker off, 2 runs | `Moved(35, 11)` in 13 gestures; `11 -> 10 -> 11` |
+| control: the debug target's `TextView` from `bravo` | `11 -> 12 -> 11`, `⇟ page` `12 -> 30` |
+
+In one marker run whose drag was announced, the `← char` after the sweep ended `HandleLost`, with the
+heading's first line under the omnibox (`9..10`). That is not this path, and it is tracked on its own.
 
 **A page step can leave the END on a block at the screen's bottom, below the gesture-bar floor, so
 the step scrolls the page until the handle is back in reach.** A drag that ends in the margin above a

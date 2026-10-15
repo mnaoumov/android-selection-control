@@ -3713,6 +3713,13 @@ class SelectionDriver(
   var forceShortScroll = false
 
   /**
+   * Debug only: [ontoTheNodesEnd]'s first move stays in the empty space the page drag left the
+   * pointer in, so it announces nothing, which is the handset's Chrome 154 shape. Set from a marker
+   * file by `AscAccessibilityService`.
+   */
+  var forceSilentNodeEnd = false
+
+  /**
    * Set by [intoTheBlockAt] when the block a page step meant to enter has its text beyond the screen's
    * side, so the step went back to where it began. A page step that made no progress for that reason
    * reports `stopped at the screen's edge` rather than `didn't move`. Cleared by every page step.
@@ -3776,7 +3783,7 @@ class SelectionDriver(
           return@awaitChange
         }
         if (landed == null && forward && pastTheNodesEnd(scrolled, to)) {
-          ontoTheNodesEnd(scrolled, report)
+          ontoTheNodesEnd(scrolled, to, report)
           return@awaitChange
         }
         // The landing as it arrived: the START frame reads a text-less caret in the text after it.
@@ -3836,35 +3843,84 @@ class SelectionDriver(
    * the END, but it moves the selection's focus from the empty block into the text, and Chrome
    * announces that. The caret is asked again every [CARET_WARM_POLL_MS] for up to [CARET_WARM_MS], as
    * [intoTheBlock] does, because the drag may have made the node wrap.
+   *
+   * **On the handset that move can go unannounced too, so a silent one is followed by two that are
+   * not.** Measured 2026-10-14 on the phone (Chrome 154), a wrapped `Encoding 30`: during the drag
+   * Chrome scrolled the page so the heading sat under the pointer and put the END on 11, and the move
+   * onto caret 11 changed nothing, so it announced nothing, and the sweep reported the line break, 9.
+   * So when the move is not announced as the node's last caret, the pointer goes onto caret
+   * `length - 1` and back onto `length`. Each move changes the offset, so each is announced, whatever
+   * Chrome had before. [forceSilentNodeEnd] reproduces the silence on the rig.
    */
   private fun ontoTheNodesEnd(
     scrolled: SelectionObserver.Snapshot,
+    pointer: PointF,
     report: (SelectionObserver.Snapshot?) -> Unit,
   ) {
+    val length = scrolled.sourceLength
     fun release() = gestures.releaseHeld { awaitQuiet(observer.latest ?: return@releaseHeld report(null), 0, report) }
+    fun caretAim(at: Int): PointF? =
+      locator.characterGeometry(scrolled, Edge.END, Crossing.RIGHTWARD, at = at, quiet = true)
+        ?.let { PointF(handleX(it.caretX), it.lineBottom + locator.handleDrop) }
+    fun onTheEnd(landed: SelectionObserver.Snapshot?): Boolean =
+      landed != null && sameNode(scrolled, landed) && landed.movingOffset() == length
+    // Onto caret `length - 1`, then back onto `length`: two moves that each change the offset, so
+    // Chrome announces each, wherever it had the END before them.
+    fun backAndForth() {
+      val back = if (length >= 2) caretAim(length - 1) else null
+      val forth = caretAim(length)
+      if (back == null || forth == null) {
+        Diag.log("  page: the move onto the last caret announced nothing, and the caret before it will not measure")
+        release()
+        return
+      }
+      Diag.log(
+        "  page: the move onto the last caret announced nothing — moving onto caret ${length - 1} at " +
+          "(${back.x}, ${back.y}), then back onto $length at (${forth.x}, ${forth.y})"
+      )
+      gestureCount++
+      if (!gestures.moveHeld(back)) {
+        Diag.log("  held: the move onto caret ${length - 1} was refused")
+        release()
+        return
+      }
+      awaitChange(scrolled) { stepped ->
+        Diag.log("  page: onto caret ${length - 1} -> ${stepped?.let { "${it.low()}..${it.high()}" } ?: "nothing"}")
+        gestureCount++
+        if (!gestures.moveHeld(forth)) {
+          Diag.log("  held: the move back onto the last caret was refused")
+          release()
+          return@awaitChange
+        }
+        awaitChange(stepped ?: scrolled) { _ -> release() }
+      }
+    }
     fun measured(waited: Long) {
-      val end = locator.characterGeometry(scrolled, Edge.END, Crossing.RIGHTWARD, at = scrolled.sourceLength, quiet = true)
-      if (end == null && waited < CARET_WARM_MS && !stopRequested) {
+      val aim = caretAim(length)
+      if (aim == null && waited < CARET_WARM_MS && !stopRequested) {
         handler.postDelayed({ measured(waited + CARET_WARM_POLL_MS) }, CARET_WARM_POLL_MS)
         return
       }
-      if (end == null) {
+      if (aim == null) {
         Diag.log("  page: the drag announced nothing past the END's node, and its last caret will not measure after ${waited}ms")
         release()
         return
       }
-      val aim = PointF(handleX(end.caretX), end.lineBottom + locator.handleDrop)
       Diag.log(
         "  page: the drag announced nothing past the END's node (${describeNode(scrolled)}) — " +
           "moving onto its last caret at (${aim.x}, ${aim.y})"
       )
+      // The debug marker stands in for the handset, whose move is not announced, by keeping the
+      // pointer in the empty space the drag left it in, where the rig's Chrome announces nothing.
+      val move = if (forceSilentNodeEnd) PointF(pointer.x + 4f, pointer.y - 4f) else aim
+      if (forceSilentNodeEnd) Diag.log("  debug: moving within the empty space to (${move.x}, ${move.y}) instead")
       gestureCount++
-      if (!gestures.moveHeld(aim)) {
+      if (!gestures.moveHeld(move)) {
         Diag.log("  held: the move onto the node's last caret was refused")
         release()
         return
       }
-      awaitChange(scrolled) { _ -> release() }
+      awaitChange(scrolled) { landed -> if (onTheEnd(landed)) release() else backAndForth() }
     }
     measured(0)
   }
