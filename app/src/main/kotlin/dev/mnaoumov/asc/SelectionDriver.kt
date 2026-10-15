@@ -3901,6 +3901,14 @@ class SelectionDriver(
           ontoTheNodesEnd(scrolled, to, report)
           return@awaitChange
         }
+        if (landed != null && forward && pastTheNodesEnd(landed, to, clearance = 2 * locator.handleDrop)) {
+          Diag.log(
+            "  page: the drag was last announced on ${landed.movingOffset()} of ${landed.sourceLength}, " +
+              "and it ended below that node — Chrome may have the END on its last caret without saying so"
+          )
+          ontoTheNodesEnd(landed, to, report)
+          return@awaitChange
+        }
         // The landing as it arrived: the START frame reads a text-less caret in the text after it.
         val textless = landed?.let { it.rehomedFrom ?: it }?.takeIf { it.holdsNoText() } ?: run {
           gestures.releaseHeld { awaitQuiet(observer.latest ?: return@releaseHeld report(landed), 0, report) }
@@ -3934,10 +3942,14 @@ class SelectionDriver(
    * Whether a silent page drag went down past the END's node into space with no text after it: the
    * END is short of its node's last caret, and the drag ended below the node's box.
    */
-  private fun pastTheNodesEnd(scrolled: SelectionObserver.Snapshot, to: PointF): Boolean {
+  private fun pastTheNodesEnd(
+    scrolled: SelectionObserver.Snapshot,
+    to: PointF,
+    clearance: Float = locator.handleDrop,
+  ): Boolean {
     val bounds = scrolled.bounds ?: return false
     return activeEdge == Edge.END && scrolled.isBlink && !scrolled.isEmpty() &&
-      scrolled.high() < scrolled.sourceLength && to.y > bounds.bottom + locator.handleDrop
+      scrolled.high() < scrolled.sourceLength && to.y > bounds.bottom + clearance
   }
 
   /**
@@ -3966,6 +3978,15 @@ class SelectionDriver(
    * So when the move is not announced as the node's last caret, the pointer goes onto caret
    * `length - 1` and back onto `length`. Each move changes the offset, so each is announced, whatever
    * Chrome had before. [forceSilentNodeEnd] reproduces the silence on the rig.
+   *
+   * **That reading was one page late: the drag BEFORE it had already put the END on 11, and was
+   * announced on 9.** Measured 2026-10-14 on the phone, a cut of the same page: the page step into
+   * `Encoding 30` reported `Moved(1, 9)`, and the screenshot taken straight after it showed all 11
+   * characters selected with the handle under `30`. Chrome announced the line break on the way down and
+   * nothing once the pointer was below the text. The next page then grabbed at caret 9's spot, missed the
+   * handle, and its drag scrolled the page instead, which is the silence and the scroll recorded above.
+   * So a drag whose last announcement is short of its node's end, and which ended a whole handle drop
+   * below that node, comes here too, with the landing in place of the snapshot.
    */
   private fun ontoTheNodesEnd(
     scrolled: SelectionObserver.Snapshot,

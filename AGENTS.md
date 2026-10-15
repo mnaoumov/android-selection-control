@@ -2692,7 +2692,29 @@ the service rebound before each run. Long-press `charlie` in `Para 1` (`11..18`)
 
 So after that drag Chrome follows none of the held pointer's moves, not only the move onto the node's
 end. The pad keeps 9, and every press after the sweep misses. Where the last heading fits on one line,
-the move onto its last caret is announced (the entry before this one). This is tracked on its own.
+the move onto its last caret is announced (the entry before this one).
+
+**That reading was one page late. The page BEFORE the last one had already put the END on 11, but
+was announced on 9, so the moves onto the node's end now follow that drag too.** The pad itself caused
+the scroll in the run above. The last page grabbed at caret 9's spot, 120 px left of the drawn handle,
+and missed it. Its drag down then scrolled the page, which moved the heading from y 172 to about 1730.
+With nothing held, none of the moves after it could be announced. The phone shows the earlier miss on a
+cut of the page: `Para 1`, `Encoding 1`, `Para 2`, `Encoding 30` and the 1500 px `<div>`. The page step
+into `Encoding 30` reported `moved 1 → 9`, and the screenshot taken straight after it showed all 11
+characters selected, with the handle under `30`. On the way down Chrome announced the line break, and
+once the pointer was below the text it announced nothing. Now `holdOntoText` also hands a drag to
+`ontoTheNodesEnd` when its last announcement is short of that node's end and the drag ended more than
+two handle drops below the node's box. The move onto the last caret is then silent, because Chrome
+already has the END there, so the move onto caret 10 and back gets it announced. Measured 2026-10-14 on
+the phone (OnePlus 15, Chrome 154.0.8037.127, the old announcement in effect), Chrome force-stopped and
+the service rebound before each run. Long-press `charlie` in `Para 1` (`11..18`), then:
+
+| page, presses | before | after |
+|---|---|---|
+| the cut page, `⤓ end`, `← char`, `→ char` | `Moved(18, 9)` in 13 s, 1 run | `the drag was last announced on 9 of 11, and it ended below that node`, then the move onto 11 and back, `Moved(18, 11)` in 12.6-12.8 s and 19 gestures; `11 -> 10 -> 11`, 1 gesture each, 4 runs of 4. In a 5th run Chrome announced 11 during the drag itself |
+| the 530 px page, the same presses, 3 runs | `Moved(18, 9)` (above) | the same branch on the last heading, `Moved(18, 11)` in 130.6-131.3 s and 215 gestures; `11 -> 10 -> 11`, 1 gesture each; the screenshot showed `Encoding 30` selected and `moved 10 → 11` |
+| rig (Chrome 143): the 720 px page cut to four headings, the same presses, 4 runs | `Moved(35, 11)` | unchanged in 3, through the silent-drag branch. The 4th stopped on `Encoding 30`'s 3, because its swipe from (180, 1138) found no toolbar and scrolled 0 px. That is the swipe, not this change |
+| rig: one-line rows, `⇟ page` ×2, `← char`, `→ char` | one band each | the same, `17 -> 16 -> 17` |
 
 **Chrome can re-anchor a selection when a handle drag starts, so a grab that changes both edges in one
 node is reported as `AnchorMoved`, not read as a step.** On the page above, after `⤓ end`, the anchor is
