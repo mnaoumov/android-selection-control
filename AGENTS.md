@@ -3826,6 +3826,12 @@ tail after the filter; re-checked the same day by flooding the guest with 3000 f
 which `-t 80` found 0 pad lines and `buttons` still listed all twelve. An ad-hoc adb read by hand
 falls into the same hole, so drop the `-t` there too.
 
+**On the OnePlus 15, Play Protect's check of adb installs is off (owner, 2026-10-15).** With
+`verifier_verify_adb_installs` at `1`, every `adb install` of a debug build raised "Send app for a security
+check?", and the install waited until someone answered it. A dialog left open stalled a run on
+2026-10-14. If the dialog appears again, read `adb shell settings get global verifier_verify_adb_installs`
+and set it back to `0`. To restore the default, run `adb shell settings put global verifier_verify_adb_installs 1`.
+
 **On the OnePlus 15, OxygenOS's logd can stop passing a long-lived process's `ASC` lines.** It sets
 `persist.logd.flowctrl.on=1`, with a quota of 300 rows and 12 KB. On 2026-10-14 a service process that
 had run for about 12 minutes logged nothing for a long-press, a `⇄ swap` and a press, while `log -t ASC`
