@@ -2569,6 +2569,25 @@ its last caret, a block's-first-caret announcement since the scroll is taken as 
 (`flappedOntoBlocksFirstCaret`). The rig's settles went quiet in every run above, so that branch has not
 fired.
 
+**The phone confirms the move to the screen's side (2026-10-14, OnePlus 15, Chrome 154.0.8037.127).**
+Chrome announced selections the old way (`seeded from a fresh selection`), so the extended-selection
+trial was not active. The pages were the ones that failed before, `padding-left: 420px` `<h2>`s 720 CSS px
+below one-line `<p>`s: a four-paragraph cut ending in a 1500 px `<div>`, and the thirty-paragraph page.
+In this sitting Chrome did not zoom either page out. Each heading's box read `Rect(36, … - 1009, …)`,
+with `Encoding` drawn from about x 1010 past the screen's right edge and the number wrapping onto a
+second line. Chrome was force-stopped and the service rebound before each run. Long-press `charlie` in
+`Paragraph 1` (`28..35`), then:
+
+| page, presses, 3 runs of 3 each | result |
+|---|---|
+| the four-paragraph cut, `⤓ end`, `← char`, `→ char` | page 1 moved back onto the paragraph's end (`35 -> 36`). Every later step into a heading logged `the block's box ends at 1009, short of its caret 1 (1072.5) — growing along its row to the screen's edge instead`, then `along the row -> 0..8, then onto caret 1 -> 0..2`. The sweep ran 10 page steps to `Encoding 30`'s end, `Moved(35, 11, crossedNode=true)` in 21.9-22.0 s and 33 gestures, and the screenshot showed all of `Encoding 30` selected. Then `11 -> 10 -> 11`, 1-2 gestures each |
+| the thirty-paragraph page, `⇟ page` ×4, `← char`, `→ char` | `35 -> 36 -> 2 -> 36 -> 2`, each step into a heading through the same screen's-side move, 4 gestures and 2.2 s; then `2 -> 1 -> 2`, 1 gesture each; the screenshot showed `En` of `Encoding 2` selected |
+
+Before the fix, the four-paragraph sweep ended `Moved(35, 36)` at page 2, 3 runs of 3. No press ended
+`HandleLost` or said `cannot see a selection`. No settle logged `never went quiet`, so
+`flappedOntoBlocksFirstCaret` still has not fired anywhere, and `stopped at the screen's edge` did not
+fire either.
+
 **Below the document's last text a page drag moves the END, but Chrome announces nothing, so the
 pointer is moved back onto the last caret before it lets go.** The gap page ends with a 1500 px empty
 `<div>`. The last page's drag from `Encoding 30`'s offset 3 down into it logged no selection event at
