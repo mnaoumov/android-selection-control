@@ -2588,6 +2588,28 @@ Before the fix, the four-paragraph sweep ended `Moved(35, 36)` at page 2, 3 runs
 `flappedOntoBlocksFirstCaret` still has not fired anywhere, and `stopped at the screen's edge` did not
 fire either.
 
+**The flap is between the heading's `0..0` and its own line break, so a settle that never goes quiet
+takes the block's first caret wherever it ended.** On the phone (2026-10-14, Chrome 154, the 720 px page
+with `padding-left: 420px` headings) a `⤓ end` sweep ended `HandleLost` on page 24 in 1 run of 2. The
+settle logged `never went quiet`, but neither the block's-first-caret move nor the paragraph-frame test
+fired, and the log did not say what the settle ended on. Now the `never went quiet` line names it, and a
+flapping page drag logs every distinct shape it passed over. The next handset run showed the shape: 18
+announcements alternating `0..0` and `0..9` of `Encoding NN` (11 characters, wrapped after `Encoding `),
+ending on `0..9`. So `flappedOntoBlocksFirstCaret` now takes the last block's-first-caret announcement
+since the scroll whenever the settle never went quiet, not only when it ended on the step's own node.
+Measured 2026-10-14 on the phone (OnePlus 15, Chrome 154.0.8037.127, the old announcement in effect),
+Chrome force-stopped and the service rebound before each run, long-press `charlie` in `Paragraph 1`,
+then `⤓ end`, `← char`, `→ char`:
+
+| runs | result |
+|---|---|
+| 7 sweeps | every one 62 page steps to `Encoding 30`'s end, `Moved(35, 11, crossedNode=true)` in 131-134 s and 215 gestures; then `11 -> 10 -> 11` |
+| the flap to `0..9` | in 2 of 7 (one page each): `the settle never went quiet and ended elsewhere … — taking that`, then `into the block instead`, `along the row -> 0..6, then onto caret 1 -> 0..1`, the step `Moved(37, 1)` |
+| a flap that ended on `0..0` itself | 5 settles in 4 of 7, taken by the existing block's-first-caret move |
+
+The rig still never flaps: on the 720 px page `⇟ page` ×4, `← char`, `→ char` logged no `never went
+quiet`.
+
 **Below the document's last text a page drag moves the END, but Chrome announces nothing, so the
 pointer is moved back onto the last caret before it lets go.** The gap page ends with a 1500 px empty
 `<div>`. The last page's drag from `Encoding 30`'s offset 3 down into it logged no selection event at
