@@ -1822,6 +1822,25 @@ In 2 of the 6 cold runs the block step into the heading read its caret from the 
 on the second line (`growing into the next one at (94.5, 1019.0)`), landed on `0..9`, and never
 reached the walk. That is older than this change and tracked on its own.
 
+**The phone confirms it (2026-10-14, OnePlus 15, Chrome 154.0.8037.127).** Chrome announced selections
+the old way (`seeded from a fresh selection`), so the extended-selection trial was not active. The rig's
+indented `<h2>` does not keep its shape on the phone, so the page was `<p>Para N has charlie.</p>`, each
+followed by `<h2>Encoding<br>N</h2>` with `text-align: right` and `margin: 100px -16px 0 0` (26 px bold).
+`Encoding` then ends at x 1272, the screen's right edge. Chrome was force-stopped and the service rebound
+before each run. Long-press `charlie` (`11..18`), then:
+
+| press, 3 runs of 3 | result |
+|---|---|
+| `⇥ word` ×2 | `18 -> 19`, then the block step onto `0..2` and the walk `0..3` … `0..7`; `the next caret is at x 1272.0, where its handle would be drawn off the screen — stopping on 7`, `Moved(19, 7, crossedNode=true, stoppedAtScreenEdge=true)` in 3.3-3.4 s and 10 gestures; the status line read `stopped at the screen's edge`, and the screenshot showed `Encodin` selected |
+| then `→ char`, `⇥ word` | `PastScreenEdge` in 4-14 ms, 0 gestures; the next press read `boundaries=[]` |
+| then `← char`, `→ char` | `7 -> 6 -> 7`, 1 gesture each, 0.57-0.74 s. Both grabs (x 1245.5 and 1193.5) were in OxygenOS's right strip, rose 42 px first, and were answered |
+
+A first try of the page kept `Encoding 1` on one line (`white-space: nowrap`, `html{overflow-x:hidden}`),
+so the `g` ran past the screen's edge. There Chrome scrolled the page sideways under the walk: the heading's
+box went from x 56 to 7. The walk went on to `0..8`, then jumped to `0..10`, the heading's end
+(`Moved(19, 10)`), and `stoppedAtScreenEdge` never fired. Where the content can scroll sideways, the word
+is not at the screen's edge.
+
 **The same hold catches a released `word →` from a word's end: one character on is the next word's
 START, not a step.** Measured 2026-09-24 on the served seven-line paragraph, Chrome force-stopped:
 from 43, the end of `of`, a 1.5-glyph reach landed on 44, the start of `selecting`, and the pad used to
