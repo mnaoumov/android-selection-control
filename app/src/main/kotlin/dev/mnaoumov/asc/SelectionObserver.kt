@@ -149,7 +149,28 @@ class SelectionObserver {
   var frame: ((Snapshot) -> Snapshot)? = null
 
   val latest: Snapshot?
-    get() = announced?.let { snapshot -> frame?.invoke(snapshot) ?: snapshot }
+    get() = announced?.let(::withLiveSource)?.let { snapshot -> frame?.invoke(snapshot) ?: snapshot }
+
+  /**
+   * A live node standing in for the last announcement's source after that source stopped answering
+   * `refresh()`: see `SelectionDriver.relocatedStaleSource`. Keyed on the stale node's identity, so
+   * the next announcement, which carries a node of its own, drops it by itself.
+   */
+  @Volatile
+  private var liveSource: Pair<AccessibilityNodeInfo, AccessibilityNodeInfo>? = null
+
+  /**
+   * Reads [stale] as [live] in every snapshot from now until the next announcement. [announced] is
+   * left as it is, because an unchanged reference is what says nothing has been announced since.
+   */
+  fun substituteSource(stale: AccessibilityNodeInfo, live: AccessibilityNodeInfo) {
+    liveSource = stale to live
+  }
+
+  private fun withLiveSource(snapshot: Snapshot): Snapshot {
+    val (stale, live) = liveSource ?: return snapshot
+    return if (snapshot.source === stale) snapshot.copy(source = live) else snapshot
+  }
 
   /** The last [RECENT_KEPT] announcements as they arrived, oldest first: see [announcedSince]. */
   private val recent = ArrayDeque<Snapshot>()
@@ -160,7 +181,8 @@ class SelectionObserver {
    * a settle ends on is chance; this lets a reader ask whether the other was announced too.
    */
   fun announcedSince(atMs: Long): List<Snapshot> =
-    synchronized(recent) { recent.filter { it.atMs > atMs } }.map { snapshot -> frame?.invoke(snapshot) ?: snapshot }
+    synchronized(recent) { recent.filter { it.atMs > atMs } }.map(::withLiveSource)
+      .map { snapshot -> frame?.invoke(snapshot) ?: snapshot }
 
   private fun remember(snapshot: Snapshot) {
     synchronized(recent) {
@@ -209,6 +231,7 @@ class SelectionObserver {
     val range = container?.let { inTextLeaf(it.node, it.from, it.to) } ?: extended
     val source = range?.node ?: announcer
     val bounds = Rect().also { source.getBoundsInScreen(it) }
+    liveSource = null
     announced = Snapshot(
       from = range?.from ?: event.fromIndex,
       to = range?.to ?: event.toIndex,
@@ -256,6 +279,7 @@ class SelectionObserver {
 
   fun forget() {
     announced = null
+    liveSource = null
     chromeHidesSelection = false
   }
 

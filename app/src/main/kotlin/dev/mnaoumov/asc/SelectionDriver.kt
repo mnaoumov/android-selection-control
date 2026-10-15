@@ -279,6 +279,8 @@ class SelectionDriver(
    * most often, or null when the target (or the pad) owns it. See [Outcome.Obstructed].
    */
   private val foreignWindowAt: (PointF) -> Rect?,
+  /** The roots of the windows a package owns, for finding a node again: see [relocatedStaleSource]. */
+  private val windowRoots: (String?) -> List<AccessibilityNodeInfo> = { emptyList() },
 ) {
 
   /** The floating toolbar's horizontal centre, which tracks the selection's. */
@@ -1167,15 +1169,85 @@ class SelectionDriver(
    * handle under the pad is reachable.
    */
   private fun movingNodeOffScreen(snapshot: SelectionObserver.Snapshot): String? {
-    val source = snapshot.source ?: return null
-    if (!runCatching { source.refresh() }.getOrDefault(false)) {
-      return "the moving edge's node cannot be re-read, so where it is now is unknown"
+    var source = snapshot.source ?: return null
+    val refused = forceStaleSource && snapshot.atMs != staleForcedFor
+    if (refused) {
+      staleForcedFor = snapshot.atMs
+      Diag.log("  debug: treating the moving edge's node as one refresh() refuses")
+    }
+    if (refused || !runCatching { source.refresh() }.getOrDefault(false)) {
+      source = relocatedStaleSource(snapshot)
+        ?: return "the moving edge's node cannot be re-read, so where it is now is unknown"
     }
     val bounds = Rect().also { source.getBoundsInScreen(it) }
     if (bounds.isEmpty) return "the moving edge's node has no box on screen ($bounds)"
     val drawn = contentBand(snapshot.copy(bounds = bounds))?.drawn ?: return null
     if (Rect.intersects(bounds, drawn)) return null
     return "the moving edge's node is at $bounds, outside the page's view $drawn"
+  }
+
+  /**
+   * A live node that is the moving edge's node again, after the announced one stopped answering
+   * `refresh()` while still drawn, or null.
+   *
+   * On the handset (2026-10-14, Chrome 154, a zoomed-out page) a page step moved the END back onto a
+   * paragraph's end at `Rect(36, 367 - 803, 422)`, on screen, and from then on every press refused
+   * because `refresh()` on that node returned false, with no announcement to replace it. The omnibox
+   * hid during that page's scroll (the band went 337 -> 141), so Chrome may have rebuilt its tree with
+   * the selection unchanged. The rig never reproduced it. So the live tree is searched for a node of
+   * the same class and text length at exactly the announced box, and one such node is read as the
+   * same node from then on ([SelectionObserver.substituteSource]). None, or more than one, refuses as
+   * before. Either way the log names the stale node, its parent and what was found, which is what the
+   * phone has to say before this branch counts as proven. On the rig (Chrome 143) the walk never
+   * reaches a `<p>`'s inline text node, because the `<p>` lists no children, so for page text the
+   * re-homing can only fire where the tree does list the node: the log says which shape the phone has.
+   */
+  private fun relocatedStaleSource(snapshot: SelectionObserver.Snapshot): AccessibilityNodeInfo? {
+    val stale = snapshot.source ?: return null
+    val box = snapshot.bounds?.takeUnless { it.isEmpty } ?: return null
+    val className = runCatching { stale.className?.toString() }.getOrNull()
+    Diag.log("  stale: refresh() refused on ${describeNode(snapshot)} — searching the live tree for it")
+    val parent = runCatching { stale.parent }.getOrNull()
+    Diag.log(
+      "  stale: its parent ${if (parent == null) "cannot be read" else
+        "is ${runCatching { parent.className }.getOrNull()} len=${parent.text?.length ?: -1} " +
+          "${Rect().also(parent::getBoundsInScreen)} childCount=${parent.childCount}"}"
+    )
+    // A length, not the characters, as everywhere else.
+    fun sameKind(node: AccessibilityNodeInfo) =
+      runCatching { node.className?.toString() }.getOrNull() == className && (node.text?.length ?: -1) == snapshot.sourceLength
+    val atBox = mutableListOf<AccessibilityNodeInfo>()
+    // A `<p>` lists none of its inline text nodes (the block step's gotcha), so a walk down never
+    // reaches the announced node itself. What it reaches is the `<p>` standing for it: the same text
+    // length, its box the block's, holding the announced one. Logged for the phone, never used.
+    val standIns = mutableListOf<Rect>()
+    val pending = ArrayDeque(windowRoots(snapshot.packageName))
+    var visited = 0
+    while (pending.isNotEmpty() && visited < STALE_SEARCH_BUDGET) {
+      val node = pending.removeFirst()
+      visited++
+      val bounds = Rect().also { node.getBoundsInScreen(it) }
+      if (bounds == box) atBox += node
+      else if (bounds.contains(box) && (node.text?.length ?: -1) == snapshot.sourceLength) standIns += bounds
+      // A web tree's ancestors hold their descendants' boxes, so only those are worth descending.
+      if (!bounds.contains(box)) continue
+      for (i in 0 until node.childCount) runCatching { node.getChild(i) }.getOrNull()?.let(pending::add)
+    }
+    val matches = atBox.filter(::sameKind)
+    val others = atBox.size - matches.size
+    Diag.log(
+      "  stale: $visited node(s) visited, ${matches.size} of the same class and length at $box, $others other(s) " +
+        "there, ${standIns.size} of the same length holding it $standIns"
+    )
+    val live = matches.singleOrNull() ?: return null
+    observer.substituteSource(stale, live)
+    // The frame may read the announcement in another node, which this substitution does not reach.
+    if (observer.latest?.source !== live) {
+      Diag.log("  stale: the announcement is read in another node, which the substitution does not reach")
+      return null
+    }
+    Diag.log("  stale: reading the live node as the moving edge's node from now on")
+    return live
   }
 
   /**
@@ -3720,6 +3792,16 @@ class SelectionDriver(
   var forceSilentNodeEnd = false
 
   /**
+   * Debug only: [movingNodeOffScreen] takes the moving edge's node as one `refresh()` refuses, once
+   * per announcement, so [relocatedStaleSource] runs. That is the handset's shape after a page step on
+   * a zoomed-out page, which the rig never showed. Set from a marker file by `AscAccessibilityService`.
+   */
+  var forceStaleSource = false
+
+  /** The announcement [forceStaleSource] last refused on, so each one is refused once. */
+  private var staleForcedFor = -1L
+
+  /**
    * Set by [intoTheBlockAt] when the block a page step meant to enter has its text beyond the screen's
    * side, so the step went back to where it began. A page step that made no progress for that reason
    * reports `stopped at the screen's edge` rather than `didn't move`. Cleared by every page step.
@@ -5110,6 +5192,9 @@ class SelectionDriver(
     /** How long [awaitCaretMeasured] gives a cold node to measure, and how often it asks. */
     const val CARET_WARM_MS = 1000L
     const val CARET_WARM_POLL_MS = 100L
+
+    /** How many nodes [relocatedStaleSource] looks at before it gives up. */
+    const val STALE_SEARCH_BUDGET = 2000
 
     /**
      * Measured: a successful step completes in ~170 ms *including* its 150 ms drag, so the

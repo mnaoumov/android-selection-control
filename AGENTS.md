@@ -3231,6 +3231,32 @@ the box squashed onto the web contents' top, `Rect(378, 337 - 721, 337)`:
 The item's scroll-back swipe started at y 600, and that is where Chrome put the floating toolbar after the
 scroll, so it scrolled nothing. Start such a swipe clear of the toolbar.
 
+**A node still on screen can stop answering `refresh()` too, and a walk down the live tree cannot find
+Chrome's page text again.** On the handset (2026-10-14, Chrome 154, a zoomed-out page of one-line `<p>`s
+with indented `<h2>`s 720 px below), a page step moved the END back onto `Paragraph 1`'s end at
+`Rect(36, 367 - 803, 422)`, on screen. Every press after it refused with `the moving edge's node cannot be
+re-read`, and nothing was announced to replace the node. The omnibox hid during that page's scroll (band
+337 -> 141), so Chrome may have rebuilt its tree. The `handset` profile did not reproduce it. Now, when
+`refresh()` fails, `SelectionDriver.relocatedStaleSource` logs the stale node (`stale: refresh() refused on
+…`) and its parent, then walks the target's windows from their roots. It logs the nodes at the announced
+box and the same-length nodes holding it. Where exactly one node of the same class and text length sits
+at the announced box, `SelectionObserver.substituteSource` reads it as the source until the next
+announcement. Anything else refuses as before. **On Chrome page text the walk never reaches the
+announced node**, because the `<p>` lists no children (the block step's gotcha). On the rig the walk
+visited 80 nodes and found only the `<p>` holding the text (`1 of the same length holding it [Rect(21, 667 -
+454, 699)]`), and the stale node's parent was that `<p>`. So for page text the re-homing is unproven, and
+the next phone occurrence's log says which shape the phone has.
+
+`adb shell run-as dev.mnaoumov.asc touch files/force-stale-source`, then `rig.ps1 rebind`, makes the moving
+edge's node refuse `refresh()` once per announcement, on a debuggable build (it logs `debug: treating the
+moving edge's node as one refresh() refuses`). `rm` it and rebind to undo. Measured 2026-10-14 on the rig:
+
+| target, presses | result |
+|---|---|
+| marker on, the debug target's `TextView`, `bravo`, then `→ char`, `← char`, `⇥ word` | `1 of the same class and length at Rect(32, 496 - 513, 545)`, `reading the live node`, then `11 -> 12 -> 11`, `11 -> 19` |
+| marker on, Chrome 143, `charlie` on the served page above, `← char` | `0 of the same class and length`, refused as before (`OffScreen`, 0 gestures); the `→ char` after it, the marker already spent on that announcement, went `35 -> 36` |
+| control, marker off, the same page: `→ char`, `← char`, `⇟ page` ×2 | `35 -> 36 -> 35`, `35 -> 36`, then into `Encoding 1` (`36 -> 3`); no `stale:` line |
+
 **A scroll that falls short means the document's edge, and the last drag then goes to the SCREEN's
 corner.** The band's corner is not enough, because a document's last rows scroll no higher than the
 viewport's bottom, which the docked pad covers: `end` stopped on row 394 of 400 until the target
