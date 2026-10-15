@@ -3719,12 +3719,21 @@ class SelectionDriver(
      * measurement.
      */
     if (quietFor >= QUIET_MS || totalMs >= MAX_QUIET_WAIT_MS) {
-      if (totalMs >= MAX_QUIET_WAIT_MS) Diag.log("  settle: never went quiet in ${totalMs}ms; taking the last")
+      settleNeverQuiet = totalMs >= MAX_QUIET_WAIT_MS
+      if (settleNeverQuiet) {
+        Diag.log(
+          "  settle: never went quiet in ${totalMs}ms; taking the last, ${last.from}..${last.to} " +
+            "(moving ${last.movingOffset()}) ${describeNode(last)}"
+        )
+      }
       onResult(last)
       return
     }
     handler.postDelayed({ awaitQuiet(last, quietFor + POLL_MS, onResult, totalMs + POLL_MS) }, POLL_MS)
   }
+
+  /** Whether the last [awaitQuiet] ended on its total cap rather than on a quiet spell. */
+  private var settleNeverQuiet = false
 
   /**
    * A word step in the shrinking direction. The app offers no such step — shrinking moves one
@@ -4042,15 +4051,33 @@ class SelectionDriver(
    * paragraph's own end. So [endOnBlocksFirstCaret] never fired, the lift took the `0..0`, the press
    * ended `HandleLost`, and the pad was blind after it. Where the settle ends on the step's node at its
    * last caret, an announcement of the block's first caret since the scroll is taken as the landing.
+   *
+   * **A settle that never went quiet takes it wherever it ended.** Measured 2026-10-14 on the handset
+   * (the same page, page 24 of a `⤓ end` sweep): the heading's `0..0` was announced nine times in
+   * 600 ms, the settle ended on a snapshot that was neither that nor the paragraph's last caret, the
+   * press ended `HandleLost`, and the pad was blind. What it ended on was not logged, so a flapping
+   * settle now logs every distinct shape it passed over, and the `never went quiet` line names the last.
    */
   private fun flappedOntoBlocksFirstCaret(
     scrolled: SelectionObserver.Snapshot,
     settled: SelectionObserver.Snapshot,
   ): SelectionObserver.Snapshot? {
     if (activeEdge != Edge.END || endOnBlocksFirstCaret(settled)) return null
-    if (!sameNode(scrolled, settled) || settled.movingOffset() != settled.sourceLength) return null
-    val block = observer.announcedSince(scrolled.atMs).lastOrNull { endOnBlocksFirstCaret(it) } ?: return null
-    Diag.log("  page: the settle ended on the node's last caret, and the same caret was announced as a block's first (${describeNode(block)})")
+    val since = observer.announcedSince(scrolled.atMs)
+    if (settleNeverQuiet) {
+      val shapes = since.map { "${it.from}..${it.to} (moving ${it.movingOffset()}) ${describeNode(it)}" }.distinct()
+      Diag.log("  page: the settle flapped over ${since.size} announcement(s): ${shapes.joinToString("; ")}")
+    }
+    val onLastCaret = sameNode(scrolled, settled) && settled.movingOffset() == settled.sourceLength
+    if (!onLastCaret && !settleNeverQuiet) return null
+    val block = since.lastOrNull { endOnBlocksFirstCaret(it) } ?: return null
+    Diag.log(
+      if (onLastCaret) {
+        "  page: the settle ended on the node's last caret, and the same caret was announced as a block's first (${describeNode(block)})"
+      } else {
+        "  page: the settle never went quiet and ended elsewhere, and a block's first caret was announced during it (${describeNode(block)}) — taking that"
+      }
+    )
     return block
   }
 
