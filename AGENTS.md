@@ -2723,6 +2723,29 @@ Measured 2026-10-14 on the rig, Chrome 143 force-stopped before each run:
 `backToGrab` fired twice in the sweeps of a build without the box re-read, and both times Chrome
 announced nothing, so the pad was blind. With the re-read it did not fire again, so it is unproven.
 
+**The phone confirms the reach scroll (2026-10-14, OnePlus 15, Chrome 154.0.8037.127).** Chrome announced
+selections the old way (`seeded from a fresh selection`), so the extended-selection trial was not active.
+The pages were one-line `<p>`s, each followed by an `<h2>` 720 CSS px below it, indented 190 px
+(`gap190`), 150 px (`gap150`) or 420 px with a 1440 px margin (`gap`, the case where the heading's box
+ends short of its text). Chrome was force-stopped and the service rebound before each run. On the phone
+the first page's scroll hides the omnibox, and every step into a heading left its handle at y 2821 or
+2822, below the 2772 px screen:
+
+| page, presses | result |
+|---|---|
+| `gap190`, long-press `charlie`, `⇟ page` ×2, `← char`, `→ char`, `⇟ page`, 3 runs of 3 | each page went into the next heading (`along the row -> 0..10, then onto caret 1 -> 0..1`), then `reach: the step left the handle at (804.5, 2821.0), out of reach (below y 2660) — scrolling 788.0`, the node now at `Rect(56, 1912 - 1218, 2020)`, 3.3-3.4 s and 5 gestures; `← char` `BeyondOffScreen` in 13-17 ms, 0 gestures; `→ char` `1 -> 2`, 1 gesture |
+| `gap150`, long-press `has`, `⇟ page`, `← char`, `→ char`, 3 runs of 3 | the same: into `Encoding 1`, scrolled 788 px back into reach; `BeyondOffScreen`, then `1 -> 2` |
+| `gap`, long-press `charlie`, `⇟ page`, 3 runs, one with `← char`, `→ char` after it | `the block's box ends at 1009, short of its caret 1 (1072.5) — growing along its row to the screen's edge instead`, onto `0..2` or `0..3`, then the reach scroll (789 px); `3 -> 2 -> 3`, 1 gesture each |
+| `gap190`, `⤓ end` from `charlie`, then `← char`, `→ char`, 2 runs of 2 | 32 page steps in 105 s, 30 of them scrolled back into reach, to `Encoding 30`; no `InGestureBar` |
+| control: Wikipedia's `Text_editor`, `interactive`, `⇟ page` ×2, `← char`, `→ char`, 2 runs of 2 | one band each (`scrolled 899-903 of 934`, `1760-1764 of 1792`), no reach scroll; `16 -> 15 -> 16`, 1 gesture each |
+
+No press ended `InGestureBar`, `HandleLost` before the sweep's end, or said `cannot see a selection`. On
+`gap` the screen's-edge move enters the heading, so the `not past its caret 1 — moving back` guard
+was not reached on the phone and remains unmeasured. The `⤓ end` sweep ended `Moved(18, 9)` on
+`Encoding 30`, which wraps there. Chrome selected all 11 characters, but the move onto the last caret and
+the one onto caret 10 were both unannounced, so the pad kept 9. The `← char` after it ended `HandleLost`
+and `→ char` "didn't move", 2 runs of 2. That is the wrapped-last-heading defect, tracked on its own.
+
 **A page step mid-document can cross the anchor too, and there the landing's node says nothing by
 itself**, because it can be on either side of the anchor, and Chrome announces it as `0..focus` either
 way. That `end` run's FIRST page step already carried the START past the anchor, and the edge kept its
