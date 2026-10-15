@@ -121,6 +121,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     // And for the handset's moving node that stops answering refresh() while still drawn.
     driver.forceStaleSource = debuggable && java.io.File(filesDir, FORCE_STALE_SOURCE).exists()
     if (driver.forceStaleSource) Diag.log("debug: the moving edge's node refuses refresh() once per announcement")
+    // And for Chrome re-anchoring a selection at the start of a handle drag.
+    driver.forceReanchor = debuggable && java.io.File(filesDir, FORCE_REANCHOR).exists()
+    if (driver.forceReanchor) Diag.log("debug: a held char grab's landing reads as re-anchored")
 
     pad = Pad(
       context = this,
@@ -364,7 +367,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   private fun madeProgress(outcome: Outcome): Boolean = when (outcome) {
     is Outcome.Moved -> outcome.madeProgress()
     is Outcome.Degraded -> true
-    Outcome.NoSelection, Outcome.HandleLost, Outcome.RowUnknown, Outcome.ColumnUnknown, Outcome.HandleCovered,
+    Outcome.NoSelection, Outcome.HandleLost, Outcome.AnchorMoved, Outcome.RowUnknown, Outcome.ColumnUnknown, Outcome.HandleCovered,
     Outcome.AtFloor, Outcome.AtDocumentEdge, Outcome.EdgeUnknown, Outcome.Obstructed, Outcome.InEdgeZone, Outcome.InGestureBar,
     Outcome.OffScreen, Outcome.BeyondOffScreen, Outcome.NeighbourUnmeasured, Outcome.PastScreenEdge -> false
   }
@@ -779,6 +782,8 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       else -> "tap elsewhere, then long-press to re-select"
     }
     Outcome.HandleLost -> "lost the handle — reselect"
+    // The app moved the other end as well; the selection on screen is what the pad steps from now.
+    Outcome.AnchorMoved -> "the app moved the other end too — check the selection"
     // Deliberately NOT "reselect": nothing was lost and nothing was touched, and the same long-press
     // on the same wrapped paragraph refuses again. Selecting inside ONE line is the thing that works.
     Outcome.RowUnknown -> "this block wraps — select within one line"
@@ -1124,6 +1129,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
     /** The debug marker file that makes the moving edge's node refuse `refresh()`: see `SelectionDriver.forceStaleSource`. */
     const val FORCE_STALE_SOURCE = "force-stale-source"
+
+    /** The debug marker file that reads a held char grab's landing as re-anchored: see `SelectionDriver.forceReanchor`. */
+    const val FORCE_REANCHOR = "force-reanchor"
 
     /** The status line for a press the side gesture zone stopped. */
     const val EDGE_ZONE_STATUS = "the handle is in the screen edge's swipe zone"

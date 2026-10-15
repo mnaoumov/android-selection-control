@@ -2600,7 +2600,40 @@ then `⤓ end`, `← char`, `→ char`:
 | control: the debug target's `TextView` from `bravo` | `11 -> 12 -> 11`, `⇟ page` `12 -> 30` |
 
 In one marker run whose drag was announced, the `← char` after the sweep ended `HandleLost`, with the
-heading's first line under the omnibox (`9..10`). That is not this path, and it is tracked on its own.
+heading's first line under the omnibox (`9..10`). That is not this path. It is Chrome re-anchoring the
+selection (the next entry).
+
+**Chrome can re-anchor a selection when a handle drag starts, so a grab that changes both edges in one
+node is reported as `AnchorMoved`, not read as a step.** On the page above, after `⤓ end`, the anchor is
+two blocks up and the END is on `Encoding 30`'s 11. `← char`'s held grab from (500, 373) to (464, 373)
+was announced `9..10` in the heading's frame, where an anchor outside the node gives `0..10`. That was not
+a misreading. The screenshot showed only `3` selected, with the START handle drawn under it, and the
+`→ char` after it went `9..11`. Chromium's `TouchSelectionController::OnDragBegin` calls
+`SelectBetweenCoordinates(base, extent)`, with the FIXED handle's last reported point as the base. It
+checks neither that the point is current nor that the handle is visible. So an anchor far off screen can
+be re-selected wherever that point lands, and here it landed on `30`'s line. The pad cannot see that point
+and cannot undo the move. So reading `9..10` as the END on 10 would report a step on a selection the user
+no longer has. `SelectionDriver.lostOrReanchored` tells a re-anchor from a miss. A miss collapses the
+selection. A re-anchor leaves it non-empty in the same node with both edges changed
+(`HandleLocator.reanchored`). The press ends `AnchorMoved` ("the app moved the other end too — check the
+selection"), and the pad takes the anchor as it now stands, in this node. It covers the held char grab, the
+wrap's row change and the walk-back, which used to end `HandleLost` there.
+
+`adb shell run-as dev.mnaoumov.asc touch files/force-reanchor`, then `rig.ps1 rebind`, makes a held char
+grab's landing read as re-anchored one character behind the moving edge, on a debuggable build (it logs
+`debug: announcing <a>..<b> as re-anchored on <n>`). `rm` it and rebind to undo. Measured 2026-10-14 on the
+rig, Chrome 143 force-stopped before each run, long-press `charlie` in paragraph 1, then `⤓ end` and
+`← char`:
+
+| run | result |
+|---|---|
+| the build before the change, 21 runs over two sittings | `11 -> 10` in 20, `9..10` and `HandleLost` in 1 (the screenshot as above) |
+| the new build, marker on, 3 runs | in the first, Chrome re-anchored by itself: `9..10`, `the app moved the anchor too: 0..11 -> 9..10`, `AnchorMoved` in 417 ms; the screenshot showed `3` selected and that status line. In the other two the marker made it, `AnchorMoved` in 374-453 ms |
+| the new build, no marker, 3 runs, then `→ char` | `11 -> 10 -> 11`, 1 gesture each |
+| control: the debug target's `TextView` from `bravo` | `11 -> 12 -> 11`, `11 -> 19` |
+
+Both re-anchoring runs ended the sweep with a last page that scrolled 0-2 px. So did runs that did not
+re-anchor, so that shape does not decide it. What does is not known. The phone has not run the change.
 
 **A page step can leave the END on a block at the screen's bottom, below the gesture-bar floor, so
 the step scrolls the page until the handle is back in reach.** A drag that ends in the margin above a

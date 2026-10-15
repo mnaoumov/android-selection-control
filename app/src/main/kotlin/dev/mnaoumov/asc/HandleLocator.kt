@@ -1144,6 +1144,15 @@ class HandleLocator(private val density: () -> Float) {
     return after.low() == before.low() || after.high() == before.high()
   }
 
+  /**
+   * Whether that drag left a selection in the same node with BOTH edges changed: not a miss, which
+   * collapses it, and not a grab, which holds one edge, but the app re-anchoring it under the grab.
+   */
+  fun reanchored(before: SelectionObserver.Snapshot?, after: SelectionObserver.Snapshot): Boolean =
+    before != null && after.packageName == before.packageName && !after.isEmpty() &&
+      (if (before.source != null && after.source != null) before.source == after.source else after.sourceLength == before.sourceLength) &&
+      after.low() != before.low() && after.high() != before.high()
+
   companion object {
     /**
      * The class Chrome reports for an image. Its text is no text to step through: Chrome names an

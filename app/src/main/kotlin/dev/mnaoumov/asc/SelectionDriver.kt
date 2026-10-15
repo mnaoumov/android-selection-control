@@ -39,6 +39,12 @@ sealed interface Outcome {
   data object HandleLost : Outcome
 
   /**
+   * The grab moved the edge, and the app moved the ANCHOR too: the selection is still there, but it
+   * is no longer the one the user made. See `SelectionDriver.lostOrReanchored`.
+   */
+  data object AnchorMoved : Outcome
+
+  /**
    * The selection is intact and visible, and its row still cannot be established — so nothing was
    * touched at all.
    *
@@ -1518,7 +1524,7 @@ class SelectionDriver(
         }
       }
       when {
-        after == null || !locator.grabbedAHandle(before, after) -> onDone(Outcome.HandleLost)
+        after == null || !locator.grabbedAHandle(before, after) -> onDone(lostOrReanchored(before, after))
         after.movingOffset() == next && wrapsAtSpace -> growFromNext()
         /*
          * Past the row's first character, which is the usual case: aimed at the next row's caret,
@@ -1868,7 +1874,17 @@ class SelectionDriver(
         releasedCharacterStep(command, onDone)
         return@grabAndHold
       }
-      val judge = fun(after: SelectionObserver.Snapshot?) {
+      val judge = fun(landed: SelectionObserver.Snapshot?) {
+        val after = if (forceReanchor && landed != null && locator.grabbedAHandle(before, landed) &&
+          nodeChange == null && !crossedNodes(before, landed)
+        ) {
+          val moving = landed.movingOffset()
+          val anchor = if (activeEdge == Edge.END) moving - 1 else moving + 1
+          Diag.log("  debug: announcing ${landed.low()}..${landed.high()} as re-anchored on $anchor")
+          landed.copy(from = anchor, to = moving)
+        } else {
+          landed
+        }
         Diag.log(
           "  held grab: handle=(${handle.x}, ${handle.y}) to=(${to.x}, ${to.y}) -> " +
             if (after == null) "nothing" else "${after.low()}..${after.high()} ${describeNode(after)}"
@@ -1923,7 +1939,7 @@ class SelectionDriver(
           }
           !locator.grabbedAHandle(before, after) -> {
             gestures.releaseHeld()
-            onDone(Outcome.HandleLost)
+            onDone(lostOrReanchored(before, after))
           }
           else -> {
             /*
@@ -2882,7 +2898,7 @@ class SelectionDriver(
             } else {
               onDone(Outcome.Moved(origin, current))
             }
-          !locator.grabbedAHandle(before, after) -> onDone(Outcome.HandleLost)
+          !locator.grabbedAHandle(before, after) -> onDone(lostOrReanchored(before, after))
           /*
            * An announcement that leaves the edge where it was is as silent as none. Chrome re-announces
            * the selection during a drag and settles back, so the walk used to reset its probe count
@@ -3797,6 +3813,14 @@ class SelectionDriver(
    * a zoomed-out page, which the rig never showed. Set from a marker file by `AscAccessibilityService`.
    */
   var forceStaleSource = false
+
+  /**
+   * Debug only: the held character step's grab reads its landing as Chrome re-anchoring the selection
+   * one character behind the moving edge, so [lostOrReanchored] runs. That is the rig's 1-in-11 shape
+   * after `⤓ end` onto a heading whose first line is under the omnibox. Set from a marker file by
+   * `AscAccessibilityService`.
+   */
+  var forceReanchor = false
 
   /** The announcement [forceStaleSource] last refused on, so each one is refused once. */
   private var staleForcedFor = -1L
@@ -5063,6 +5087,32 @@ class SelectionDriver(
    * Offsets stay valid across a long-press within the same node, so a second one adds to the set
    * rather than replacing it; [syncBoundaryContext] clears only when the node itself changes.
    */
+  /**
+   * What a grab that did not hold one edge did: [Outcome.HandleLost] when it missed, and
+   * [Outcome.AnchorMoved] when the app re-anchored the selection under it.
+   *
+   * Chrome re-selects at the start of every handle drag: its `TouchSelectionController::OnDragBegin`
+   * calls `SelectBetweenCoordinates` with the FIXED handle's last reported point as the base, and
+   * checks neither that the point is current nor that the handle is visible. An anchor far above the
+   * screen usually survives that, but not always. Measured 2026-10-14 on the rig (Chrome 143), after
+   * `⤓ end` onto a wrapped `<h2>Encoding 30</h2>` with its first line under the omnibox and the anchor
+   * two blocks up: `← char`'s grab from 11 was announced `9..10` in the heading's frame, 1 run of 11.
+   * The screenshot showed the START handle drawn under `3`, so the selection really was `3`, and the
+   * `→ char` after it went `9..11`. Reading `9..10` as the END on 10 would report a step over a
+   * selection the user no longer has. So the press says the anchor moved, and the pad takes the new
+   * one as it stands: it is in this node now, and its offsets are this node's.
+   */
+  private fun lostOrReanchored(before: SelectionObserver.Snapshot, after: SelectionObserver.Snapshot?): Outcome {
+    if (after == null || !locator.reanchored(before, after)) return Outcome.HandleLost
+    Diag.log("  the app moved the anchor too: ${before.low()}..${before.high()} -> ${after.low()}..${after.high()} in the same node")
+    activeEdgeAnnounced = true
+    syncBoundaryContext(after)
+    anchorNodeKey = nodeKey(after)
+    lastSeenInNode.clear()
+    lastSeenInNode[nodeKey(after)] = after
+    return Outcome.AnchorMoved
+  }
+
   fun noteSelectionEvent(before: SelectionObserver.Snapshot?) {
     val now = observer.latest ?: return
     if (now.isEmpty()) return
