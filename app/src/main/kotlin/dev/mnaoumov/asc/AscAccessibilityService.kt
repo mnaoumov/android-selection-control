@@ -115,6 +115,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     // And for a page scroll that falls short mid-document, which the rig's Chrome never does by itself.
     driver.forceShortScroll = debuggable && java.io.File(filesDir, FORCE_SHORT_SCROLL).exists()
     if (driver.forceShortScroll) Diag.log("debug: every page scroll swipes a quarter of its distance")
+    // And for a page swipe that scrolls nothing mid-document, which the rig's Chrome does only now and then.
+    driver.forceDeadSwipe = debuggable && java.io.File(filesDir, FORCE_DEAD_SWIPE).exists()
+    if (driver.forceDeadSwipe) Diag.log("debug: a page step's first scroll swipe is not dispatched")
     // And for the handset's silent move onto a node's last caret below the document's last text.
     driver.forceSilentNodeEnd = debuggable && java.io.File(filesDir, FORCE_SILENT_NODE_END).exists()
     if (driver.forceSilentNodeEnd) Diag.log("debug: the move onto a node's last caret after a page drag stays in the empty space")
@@ -1120,6 +1123,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
     /** The debug marker file that cuts every page scroll short: see `SelectionDriver.forceShortScroll`. */
     const val FORCE_SHORT_SCROLL = "force-short-scroll"
+
+    /** The debug marker file that drops a page step's first scroll swipe: see `SelectionDriver.forceDeadSwipe`. */
+    const val FORCE_DEAD_SWIPE = "force-dead-swipe"
 
     /** The debug marker file that keeps the move onto a node's last caret silent: see `SelectionDriver.forceSilentNodeEnd`. */
     const val FORCE_SILENT_NODE_END = "force-silent-node-end"
