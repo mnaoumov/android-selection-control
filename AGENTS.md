@@ -2656,6 +2656,22 @@ In one marker run whose drag was announced, the `← char` after the sweep ended
 heading's first line under the omnibox (`9..10`). That is not this path. It is Chrome re-anchoring the
 selection (the next entry).
 
+**On the phone the fallback fires, and the move onto caret 10 is not announced either, so the sweep
+still ends on 9 (2026-10-14, OnePlus 15, Chrome 154.0.8037.127).** Chrome announced selections the old
+way (`seeded from a fresh selection`), so the extended-selection trial was not active. The page was the
+original failure's, the 530 px page with `padding-left: 190px` headings, and Chrome was force-stopped and
+the service rebound before each run. Long-press `charlie` in `Para 1` (`11..18`), then:
+
+| press, 3 runs of 3 | result |
+|---|---|
+| `⤓ end` | 62 page steps, 30 of them into a heading. The last page's grab at (752.5, 438) announced nothing, then `moving onto its last caret at (871.5, 2020..2030)`, then `the move onto the last caret announced nothing — moving onto caret 10 at (804.5, 1994..2010), then back onto 11`, and `onto caret 10 -> nothing`. The sweep ended `Moved(18, 9)` in 130-132 s and 217 gestures. The screenshot showed all of `Encoding 30` selected, with the END handle under `30` at about (875, 1975) |
+| `← char` | `edge=END at 0..9`, grabbed at (752.5, 1982), where caret 9 would be, 120 px left of the drawn handle; `HandleLost` in 5.9 s and 10 gestures, the selection intact |
+| `→ char` | `Moved(9, 9)` in 2.0 s and 7 gestures |
+
+So after that drag Chrome follows none of the held pointer's moves, not only the move onto the node's
+end. The pad keeps 9, and every press after the sweep misses. Where the last heading fits on one line,
+the move onto its last caret is announced (the entry before this one). This is tracked on its own.
+
 **Chrome can re-anchor a selection when a handle drag starts, so a grab that changes both edges in one
 node is reported as `AnchorMoved`, not read as a step.** On the page above, after `⤓ end`, the anchor is
 two blocks up and the END is on `Encoding 30`'s 11. `← char`'s held grab from (500, 373) to (464, 373)
