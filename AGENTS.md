@@ -3177,8 +3177,31 @@ then, 2 runs of 2:
 | `← char`, `→ char` after it | `HandleLost` (0.5 s, 1 gesture) and `HandleLost` (4.8 s, 8 gestures), the selection intact |
 
 On the way down the label's box read `Rect(822, …)` with the selection over it, against `Rect(1135, …)`
-before, and the off-screen test did not fire. That is tracked on its own. A second `⇤ word` from the
-hatnote's 0 passed over the label and went into the heading, `0 -> 4`, 9 gestures, 2 runs of 2.
+before, and the off-screen test did not fire. A second `⇤ word` from the hatnote's 0 passed over the label
+and went into the heading, `0 -> 4`, 9 gestures, 2 runs of 2.
+
+**A selection that passes over the label makes the phone's Chrome scroll the link's overflow, so the
+text's box moves and the screen's edge no longer cuts it. The walk now also passes over text that its
+PARENT's box cuts off.** A temporary probe on the walk, on the phone (2026-10-14, Chrome 154.0.8037.127,
+the old announcement in effect), read the label before and after the step up. Before, the text's box was
+`(1135, 1314 - 1272, 1398)`, the link's own box. Its rectangles were `1135..1186`, `1182..1226`,
+`1223..1272`, then nine of zero width at 1272. After, the text's box was `(822, 1314 - 1272, 1398)`, with
+rectangles from `822..872` to `1233..1272`, all of real width. The parent link (`chromeRole=link`,
+`cssDisplay=inline-block`) was still `(1135, 1314 - 1272, 1432)`. So the label's first nine characters are
+laid out left of the link and hidden by its `overflow: hidden`, and Chrome reports them where they are laid
+out. The screenshot showed `PDF`. `HandleLocator.clippedByParent` passes over a text leaf whose box runs past
+its parent's on a side when the character at that end lies wholly outside the parent's box. It asks twice,
+like the screen test, and asks nothing of a leaf inside its parent's box. Long-press `the`, `⇄ swap`,
+`⇤ word` to `0..7`, then the presses below. Chrome was force-stopped before each run:
+
+| press | before | after, phone, 3 runs of 3 |
+|---|---|---|
+| `← char` | `0 -> 10` of `Text editor`, 2 gestures | the same, ~1.0 s |
+| `→ char` | onto the label's `0..12`, `Moved(10, 0)`, then `HandleLost` twice | `passing over a node (12 chars at Rect(822, …)) whose first character is outside its parent's box Rect(1135, 1314 - 1272, 1432)`, `10 -> 0` of the hatnote, 2 gestures, 0.82 s; the screenshot showed `For the` selected and `PDF` not |
+| `← char`, `→ char`, `→ char` | not reached | `0 -> 10 -> 0 -> 1`; the step up passed over the scrolled label the same way |
+| control: Wikipedia's hatnote `For`, `⇄ swap`, `← char`, `→ char`, `← char`, 1 run | `0 -> 3 -> 0 -> 3` through `Talk` | the same; the page-tools label stays inside its parent and goes by the screen test |
+| control: one-line rows, `here` on row 001, `→ char` ×2, `← char` ×2, 1 run | as before | `28 -> 1 -> 2 -> 1 -> 28` |
+| control: the rig (Chrome 143), the same page and presses, 2 runs | `0 -> 10 -> 0 -> 10 -> 0 -> 1` | the same. The rig's Chrome never scrolls the label (its box stayed `(642, 831 - 720, 877)`), so the new test does not fire there |
 
 **A heads-up notification is another app's window above the target, and a touch-down on it goes to the
 notification.** An upward page swipe starts a quarter of a drop below the band's top: y 361 on the phone,
