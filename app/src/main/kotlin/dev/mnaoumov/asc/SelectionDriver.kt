@@ -3810,6 +3810,13 @@ class SelectionDriver(
   var forceShortScroll = false
 
   /**
+   * Debug only: a page step's first scroll swipe is not dispatched, so it scrolls nothing, as the rig's
+   * Chrome did in 1 `end` sweep of 4 on 2026-10-15 (see `judgeAndDrag`). Set from a marker file by
+   * `AscAccessibilityService`.
+   */
+  var forceDeadSwipe = false
+
+  /**
    * Debug only: [ontoTheNodesEnd]'s first move stays in the empty space the page drag left the
    * pointer in, so it announces nothing, which is the handset's Chrome 154 shape. Set from a marker
    * file by `AscAccessibilityService`.
@@ -4656,7 +4663,9 @@ class SelectionDriver(
      * list), so a shortfall is believed only when the scroller has also stopped listing the way the
      * step goes. Where it lists none, the shortfall decides alone, as before.
      */
-    fun judgeAndDrag(scrolled: SelectionObserver.Snapshot) {
+    lateinit var scrollFrom: (PointF, Boolean) -> Unit
+
+    fun judgeAndDrag(scrolled: SelectionObserver.Snapshot, swipe: PointF, retried: Boolean) {
       val travelled = (before.bounds?.top ?: 0) - (scrolled.bounds?.top ?: 0)
       val contentNow = contentBand(scrolled)
       val bandNow = contentNow?.visible
@@ -4665,6 +4674,26 @@ class SelectionDriver(
       val shortfall = kotlin.math.abs(scrollBy) - kotlin.math.abs(travelled)
       val short = shortfall > line + bandMoved
       val canStillScroll = if (short) contentNow?.scrollability?.let { if (forward) it.second else it.first } else null
+      /*
+       * **A swipe that scrolled NOTHING mid-document is swiped again, once, from somewhere else.** The
+       * drag after it has nowhere to go, so the step reports no progress and a sweep ends there.
+       * Measured 2026-10-15 on the rig (Chrome 143, a served page of 720 px margins and indented
+       * headings): in 1 `⤓ end` sweep of 4 the swipe from (180, 1138), the same start every other page
+       * used, logged `no toolbar after the scroll` and `scrolled 0 of 1009`, and the sweep ended on
+       * `Encoding 30`'s 3. The selection was intact. What took the touch was not seen. A second swipe
+       * costs one gesture, and its start keeps a handle's reach from the first.
+       */
+      if (short && canStillScroll == true && !retried && kotlin.math.abs(travelled) < gestures.touchSlop()) {
+        awaitSelectionOnScreen { _ ->
+          val again = swipeStart(band, handle, forward, scrollBy, avoid = swipe).point
+          Diag.log(
+            "  page: the swipe scrolled $travelled of $scrollBy and the page can still scroll — " +
+              if (again == null) "nowhere else clear to swipe from" else "swiping again from (${again.x}, ${again.y})"
+          )
+          if (again == null) judgeAndDrag(scrolled, swipe, retried = true) else scrollFrom(again, true)
+        }
+        return
+      }
       val atEdge = short && canStillScroll != true
       val note = when {
         atEdge -> " — the document's edge"
@@ -4676,20 +4705,21 @@ class SelectionDriver(
       dragAcross(scrolled, atEdge, bandNow)
     }
 
-    fun scrollFrom(swipe: PointF) {
-      Diag.log("  page: scroll swipe from (${swipe.x}, ${swipe.y})")
+    scrollFrom = fun(swipe: PointF, retried: Boolean) {
+      Diag.log("  page: scroll swipe from (${swipe.x}, ${swipe.y}), toolbar=${toolbarBounds()}")
       gestureCount++
       val swipeBy = if (forceShortScroll) scrollBy / 4 else scrollBy
       if (forceShortScroll) Diag.log("  debug: swiping $swipeBy of $scrollBy")
-      gestures.dragAndHold(
-        swipe,
-        PointF(swipe.x, swipe.y - swipeBy),
-        PAGE_SCROLL_MS,
-        PAGE_SCROLL_HOLD_MS,
-      ) { completed ->
+      val dispatch: ((Boolean) -> Unit) -> Unit = if (forceDeadSwipe && !retried) { done ->
+        Diag.log("  debug: not dispatching the swipe")
+        handler.postDelayed({ done(true) }, (PAGE_SCROLL_MS + PAGE_SCROLL_HOLD_MS).toLong())
+      } else { done ->
+        gestures.dragAndHold(swipe, PointF(swipe.x, swipe.y - swipeBy), PAGE_SCROLL_MS, PAGE_SCROLL_HOLD_MS, done)
+      }
+      dispatch { completed ->
         if (!completed) {
           ended(Outcome.HandleLost)
-          return@dragAndHold
+          return@dispatch
         }
         awaitBoundsSettled { scrolled ->
           if (scrolled == null || scrolled.atMs != before.atMs) {
@@ -4727,10 +4757,10 @@ class SelectionDriver(
                */
               val fresh = observer.latestWithFreshBounds() ?: scrolled
               if (fresh.bounds == scrolled.bounds) {
-                judgeAndDrag(fresh)
+                judgeAndDrag(fresh, swipe, retried)
               } else {
                 Diag.log("  page: the page moved after the scroll settled (${scrolled.bounds} -> ${fresh.bounds}); settling again")
-                awaitBoundsSettled { again -> judgeAndDrag(again ?: fresh) }
+                awaitBoundsSettled { again -> judgeAndDrag(again ?: fresh, swipe, retried) }
               }
             }, HANDLE_FADE_IN_MS)
           }
@@ -4753,7 +4783,7 @@ class SelectionDriver(
         Diag.log("  page: nowhere clear to start a scroll")
         ended(swipe.refusal ?: Outcome.HandleCovered)
       } else {
-        scrollFrom(swipe.point)
+        scrollFrom(swipe.point, false)
       }
     }
   }
@@ -4842,7 +4872,7 @@ class SelectionDriver(
    * was in the foreground straight after a `⤒ start`. On the rig a Messages heads-up is the window
    * `(32,0)-(688,399)`, over the swipe's y 327.
    */
-  private fun swipeStart(band: Rect, handle: PointF, forward: Boolean, scrollBy: Float): SwipeStart {
+  private fun swipeStart(band: Rect, handle: PointF, forward: Boolean, scrollBy: Float, avoid: PointF? = null): SwipeStart {
     val margin = locator.handleDrop / 2
     // Never within reach of the screen's own edges, where a swipe opens the notification shade from
     // the top and goes home from the bottom. A floating pad leaves the band running to either edge.
@@ -4878,6 +4908,8 @@ class SelectionDriver(
     fun clear(point: PointF): Boolean {
       if (onToolbarRow(point.y)) return false
       if (hypot(point.x - handle.x, point.y - handle.y) <= handleReach) return false
+      // A start that has just scrolled nothing is not tried again.
+      if (avoid != null && hypot(point.x - avoid.x, point.y - avoid.y) <= handleReach) return false
       val foreign = foreignWindowAt(point) ?: return true
       foreignSeen = foreign
       return false

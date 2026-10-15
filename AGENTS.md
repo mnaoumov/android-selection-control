@@ -2114,6 +2114,29 @@ No page logged `no toolbar after the scroll` or `scrolled 0 of`. Control on the 
 went one band each (`17 -> 56`, then the column kept), the third through the toolbar-row start, then
 `← char` `56 -> 55` and `→ char` `55 -> 56`, 1 gesture each.
 
+**A swipe that scrolls NOTHING mid-document is swiped again, once, from somewhere else.** On the rig
+(2026-10-15, Chrome 143, a served page of 720 px margins and indented `<h2>`s ending in `Encoding 30`
+over a 1500 px `<div>`), 1 `⤓ end` sweep of 4 stopped on `Encoding 30`'s 3. Its last swipe started at
+(180, 1138), the start every other page used, logged `no toolbar after the scroll` and `scrolled 0 of
+1009`, and the drag after it went nowhere. The selection was intact. What took the touch is not known:
+12 more runs of the same sweep, with the toolbar now logged on every swipe line (`toolbar=...`), were
+all clean. On those, the toolbar over a handle under the pad sat at `(205, 175)-(688, 271)`, nowhere
+near the swipe. Now `judgeAndDrag` swipes once more when the scroll travelled less than the touch slop
+and the scroller still lists the step's direction. The second start keeps a handle's reach from the
+first (`swipeStart`'s `avoid`) and logs `the swipe scrolled 0 of … and the page can still scroll —
+swiping again from (…)`. `adb shell run-as dev.mnaoumov.asc touch files/force-dead-swipe`, then
+`rig.ps1 rebind`, leaves every page step's first swipe undispatched on a debuggable build (it logs
+`debug: not dispatching the swipe`). `rm` it and rebind to undo. Measured 2026-10-15 on the rig, Chrome
+143 force-stopped before each run, long-press `charlie`, then `⤓ end`, `← char`, `→ char`:
+
+| run | result |
+|---|---|
+| marker on, 2 runs | every swipe retried from (540, 1138) (9 and 8 retries), `Moved(35, 11)` in 10 page steps, 29-31 s and 40-42 gestures; then `11 -> 10 -> 11` |
+| marker off, 2 runs | no retry, `Moved(35, 11)` in 22 s and 32 gestures; then `11 -> 10 -> 11` |
+| control: one-line rows, `⇟ page` ×2, `← char`, `→ char` | one band each (`scrolled 586 of 600`, `692 of 718`), then `17 -> 16 -> 17` |
+
+The undispatched swipe is not the rig's own failure, so the retry has not yet met a real zero scroll.
+
 **`start`'s last drag lands on the first node's offset 0, and Chrome announces that as `0..0`.**
 The node does not hold the anchor, so Chrome announces it as `0..focus`, and the focus is 0. The pad
 read that as an empty selection. The step ended `HandleLost`, and every press after it said "the pad
