@@ -3372,6 +3372,23 @@ moving edge's node as one refresh() refuses`). `rm` it and rebind to undo. Measu
 | marker on, Chrome 143, `charlie` on the served page above, `← char` | `0 of the same class and length`, refused as before (`OffScreen`, 0 gestures); the `→ char` after it, the marker already spent on that announcement, went `35 -> 36` |
 | control, marker off, the same page: `→ char`, `← char`, `⇟ page` ×2 | `35 -> 36 -> 35`, `35 -> 36`, then into `Encoding 1` (`36 -> 3`); no `stale:` line |
 
+**The phone did not reproduce it (2026-10-14, OnePlus 15, Chrome 154.0.8037.127).** Chrome announced
+selections the old way (`seeded from a fresh selection`), so the extended-selection trial was not active.
+The page and presses were the original failure's: the zoomed-out page of one-line `<p>`s with
+`padding-left: 420px` `<h2>`s 720 px below. Chrome was force-stopped and the service rebound before each
+run, then long-press `charlie` in `Paragraph 1` (`28..35`). On page 1 the omnibox hid every time (band
+`337 -> 143`), which was the candidate cause, and the step moved back onto `Paragraph 1`'s end as before.
+`refresh()` kept answering:
+
+| presses | result |
+|---|---|
+| `⇟ page` ×3 (1 run) or ×4 (3 runs), `← char`, `→ char` | `35 -> 36 -> 2 -> 36`, and `-> 2` on the fourth, then one character each way |
+| `⤓ end`, `← char`, `→ char`, 2 runs | one sweep of 62 page steps to `Encoding 30`'s end (`35 -> 11`) in 132 s, then `11 -> 10 -> 11`; the other ended `HandleLost` on page 24, on a seam flap that is tracked on its own |
+| `⤓ end` cut short by a tap, 3 runs | 5 page steps each, then one character each way |
+
+No run logged `stale:` or `cannot be re-read`. So the refusal is unreproduced, and the walk's logging stays
+in place for the next time it occurs.
+
 **A scroll that falls short means the document's edge, and the last drag then goes to the SCREEN's
 corner.** The band's corner is not enough, because a document's last rows scroll no higher than the
 viewport's bottom, which the docked pad covers: `end` stopped on row 394 of 400 until the target
