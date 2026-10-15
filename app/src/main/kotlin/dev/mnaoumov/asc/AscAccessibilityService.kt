@@ -112,6 +112,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     // And for a page scroll that falls short mid-document, which the rig's Chrome never does by itself.
     driver.forceShortScroll = debuggable && java.io.File(filesDir, FORCE_SHORT_SCROLL).exists()
     if (driver.forceShortScroll) Diag.log("debug: every page scroll swipes a quarter of its distance")
+    // And for the handset's silent move onto a node's last caret below the document's last text.
+    driver.forceSilentNodeEnd = debuggable && java.io.File(filesDir, FORCE_SILENT_NODE_END).exists()
+    if (driver.forceSilentNodeEnd) Diag.log("debug: the move onto a node's last caret after a page drag stays in the empty space")
 
     pad = Pad(
       context = this,
@@ -1106,6 +1109,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
     /** The debug marker file that cuts every page scroll short: see `SelectionDriver.forceShortScroll`. */
     const val FORCE_SHORT_SCROLL = "force-short-scroll"
+
+    /** The debug marker file that keeps the move onto a node's last caret silent: see `SelectionDriver.forceSilentNodeEnd`. */
+    const val FORCE_SILENT_NODE_END = "force-silent-node-end"
 
     /** The debug marker file that announces a leaf's selection in its container's frame: see `SelectionObserver.forceContainerFrame`. */
     const val FORCE_CONTAINER_FRAME = "force-container-frame"
