@@ -498,7 +498,7 @@ class HandleLocator(private val density: () -> Float) {
    * next sibling's first leaf, else the parent's next sibling's, and so on up. Visible nodes with
    * text only, since a node off screen has no handle to drag onto it, and never an image or a control,
    * whatever text Chrome gives it ([NOT_PAGE_TEXT_CLASSES]), nor a node whose text the screen's
-   * edge cuts off ([runsOffScreen]).
+   * edge or its parent's box cuts off ([runsOffScreen], [clippedByParent]).
    */
   private fun adjacentTextLeaf(source: AccessibilityNodeInfo, forward: Boolean): AccessibilityNodeInfo? {
     var node = source
@@ -575,6 +575,44 @@ class HandleLocator(private val density: () -> Float) {
         val atEdge = if (left) rect.right <= LIE_TOLERANCE else rect.left >= width - LIE_TOLERANCE
         if (atEdge) {
           Diag.log("  adjacent: passing over a node ($length chars at $bounds) whose ${if (left) "first" else "last"} character is beyond the screen's edge")
+          return true
+        }
+      }
+    }
+    return clippedByParent(node, bounds, length)
+  }
+
+  /**
+   * Whether [node]'s parent cuts its text off: the text's box runs past the parent's on a side, and the
+   * character at that end lies wholly outside the parent's box. An `overflow: hidden` element clips
+   * its text to its own box, and Chrome reports the text where it is laid out, not where it is drawn.
+   *
+   * Measured 2026-10-14 on the handset (Chrome 154), the served label of [runsOffScreen]. Before any
+   * selection reaches it, the text's box is the link's, `(1135, 1314 - 1272, 1398)`, and the screen's
+   * edge test passes over it. A selection that passes over the label makes Chrome scroll the link's
+   * overflow to its end: the text's box is then `(822, 1314 - 1272, 1398)`, its rectangles run
+   * `822..872` to `1233..1272`, all of real width, and the link's box is still `(1135, 1314 - 1272,
+   * 1432)`. So the screen's edge cut nothing, the walk took the label, and `→ char` from the heading's
+   * last caret slid onto the label's `0..12`; the screenshot showed the selection starting at `PDF`.
+   * Every press after it ended `HandleLost`. A cold node answers the first ask with its whole box, so
+   * it is asked twice. A node that sits inside its parent's box is never asked, which is every node
+   * measured so far but this one.
+   */
+  private fun clippedByParent(node: AccessibilityNodeInfo, bounds: Rect, length: Int): Boolean {
+    val parent = runCatching { node.parent }.getOrNull() ?: return false
+    val box = Rect().also { parent.getBoundsInScreen(it) }
+    if (box.isEmpty) return false
+    val sides = listOfNotNull(
+      true.takeIf { bounds.left < box.left - LIE_TOLERANCE },
+      false.takeIf { bounds.right > box.right + LIE_TOLERANCE },
+    )
+    for (left in sides) {
+      val index = if (left) 0 else length - 1
+      repeat(2) {
+        val rect = rawCharacterRect(node, index) ?: return@repeat
+        val outside = if (left) rect.right <= box.left + LIE_TOLERANCE else rect.left >= box.right - LIE_TOLERANCE
+        if (outside) {
+          Diag.log("  adjacent: passing over a node ($length chars at $bounds) whose ${if (left) "first" else "last"} character is outside its parent's box $box")
           return true
         }
       }
