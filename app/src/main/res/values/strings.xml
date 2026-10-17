@@ -19,6 +19,11 @@
     <string name="pad_shown">The pad is back on screen.</string>
     <string name="pad_not_running">Selection Pad is not running — enable it in Accessibility settings first.</string>
 
+    <string name="switched_off_body">Selection Pad was switched off. If you did not do that, your phone did: some phones turn off an accessibility service they consider unusual, without saying so. Turn it back on in Accessibility settings.</string>
+    <string name="switched_off_oplus">On this phone the setting that does it is “Block suspicious app activities”. Search for it in Settings and allow Selection Pad there first, or it may be switched off again.</string>
+    <string name="switched_off_settings">Open Accessibility settings</string>
+    <string name="switched_off_by_me">I switched it off myself</string>
+
     <string name="battery_body">Your phone\'s battery saver is allowed to stop Selection Pad. When it does, the service restarts on its own a little later, and anything the pad was doing is lost. To stop that, set Selection Pad to “Don\'t optimize” (or “Unrestricted”) in the list below. Some phones also have a switch of their own, such as “Allow background activity”.</string>
     <string name="battery_settings">Open battery optimization settings</string>
     <string name="battery_oem_help">How to do this on my phone (dontkillmyapp.com)</string>

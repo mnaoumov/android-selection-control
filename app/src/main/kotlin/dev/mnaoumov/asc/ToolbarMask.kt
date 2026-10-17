@@ -58,6 +58,18 @@ class ToolbarMask(
       hide()
       return
     }
+    /*
+     * A floor under every caller: never cover more than a toolbar could be. On the OnePlus 15
+     * (2026-10-17) a window taken for the toolbar was the whole screen, and OxygenOS's "Block
+     * suspicious app activities" read a full-screen accessibility overlay as abnormal device control
+     * and switched the service off. A mask that big is a misidentified window, never a toolbar.
+     */
+    val screen = windowManager.currentWindowMetrics.bounds
+    if (bounds.width().toLong() * bounds.height() > MAX_SCREEN_SHARE * screen.width().toLong() * screen.height()) {
+      Diag.log("mask: refusing to cover $bounds, more than a toolbar could be on a ${screen.width()}x${screen.height()} screen")
+      hide()
+      return
+    }
     val layoutParams = params ?: newLayoutParams().also { params = it }
     layoutParams.x = bounds.left
     layoutParams.y = bounds.top
@@ -121,5 +133,8 @@ class ToolbarMask(
   private companion object {
     /** For the rare theme that answers nothing: a neutral surface, never the pad's blue. */
     const val FALLBACK_COLOUR = 0xFFF1F1F4.toInt()
+
+    /** The most of the screen's area a mask may cover. A toolbar is a few percent of it. */
+    const val MAX_SCREEN_SHARE = 0.25
   }
 }

@@ -1,6 +1,7 @@
 package dev.mnaoumov.asc
 
 import android.app.Activity
+import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -94,6 +95,7 @@ class MainActivity : Activity() {
       }
     )
 
+    column.addView(switchedOffRow)
     column.addView(batteryRow)
 
     setContentView(ScrollView(this).apply { addView(column) })
@@ -146,11 +148,67 @@ class MainActivity : Activity() {
     }
   }
 
+  private val settings by lazy { PadSettings(getSharedPreferences(PadSettings.FILE, MODE_PRIVATE)) }
+
+  /**
+   * Says that the service was switched off, shown only when it has run before and is off now.
+   *
+   * **A ROM can turn the service off without telling the user.** Measured on a OnePlus 15
+   * (OxygenOS 16) on 2026-10-17: the pad's menu mask covered the whole screen for two seconds, and
+   * the ROM's "Block suspicious app activities" removed the service from the enabled list
+   * (`AccessibilityManagerServiceExtImpl: removeEnableService`). The pad simply vanished. The mask can
+   * no longer do that, but a protection that judges "abnormal device control" may judge something
+   * else next, so the screen says what happened and where the allowlist is. It cannot tell that ROM
+   * from the user turning the service off, hence the second button.
+   */
+  private val switchedOffRow: LinearLayout by lazy {
+    LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding(0, PADDING, 0, 0)
+      addView(
+        TextView(this@MainActivity).apply {
+          text = getString(R.string.switched_off_body) +
+            if (isOplus()) "\n\n" + getString(R.string.switched_off_oplus) else ""
+          textSize = 15f
+        }
+      )
+      addView(
+        Button(this@MainActivity).apply {
+          text = getString(R.string.switched_off_settings)
+          setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        }
+      )
+      addView(
+        Button(this@MainActivity).apply {
+          text = getString(R.string.switched_off_by_me)
+          setOnClickListener {
+            settings.serviceConnectedOnce = false
+            switchedOffRow.visibility = View.GONE
+          }
+        }
+      )
+    }
+  }
+
+  /** OnePlus, OPPO and realme share ColorOS's security centre, which is where the allowlist lives. */
+  private fun isOplus(): Boolean =
+    Build.MANUFACTURER.lowercase() in setOf("oneplus", "oppo", "realme")
+
+  /** Whether the service is in the system's enabled list, which is what a ROM edits when it revokes it. */
+  private fun serviceEnabled(): Boolean {
+    val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+      ?: return false
+    val ours = ComponentName(this, AscAccessibilityService::class.java)
+    return enabled.split(':').any { ComponentName.unflattenFromString(it) == ours }
+  }
+
   override fun onResume() {
     super.onResume()
     // Re-read on every return, so the row goes away once the user has granted the exemption.
     val exempt = getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
     batteryRow.visibility = if (exempt) View.GONE else View.VISIBLE
+    val switchedOff = settings.serviceConnectedOnce && !serviceEnabled()
+    switchedOffRow.visibility = if (switchedOff) View.VISIBLE else View.GONE
   }
 
   private companion object {
