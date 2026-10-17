@@ -1,10 +1,11 @@
 # Selection Pad — Privacy Policy
 
-*Effective 2026-09-23. Applies to the Android app **Selection Pad** (`dev.mnaoumov.asc`).*
+*Effective 2026-10-16. Applies to the Android app **Selection Pad** (`dev.mnaoumov.asc`).*
 
 ## The short version
 
-Selection Pad collects nothing, stores nothing and sends nothing. It cannot connect to the
+Selection Pad collects nothing and sends nothing, and the only thing it stores is its own pad
+settings. It cannot connect to the
 internet at all: the app requests **no Android permissions**, including no internet access, so the
 operating system itself prevents it from sending anything off the device.
 
@@ -29,8 +30,14 @@ text element and the *rectangles* its characters occupy, never the characters th
 
 ## What the app stores
 
-Nothing. It keeps the position of the current selection in memory only while it is working on
-it, and it has no files, database or settings that hold any of the above.
+Nothing of the above. It keeps the position of the current selection in memory only while it is
+working on it, and no file, database or setting holds any of it.
+
+The one thing it does store is **the pad's own settings**: whether you closed the pad, whether it
+is docked or floating, where you moved it, and whether the other app's selection menu is hidden.
+These sit in the app's private storage on your device, so that they survive Android restarting the
+service, and are removed when you uninstall the app. They say nothing about any text or any other
+app.
 
 The app writes diagnostic lines to the device's system log (logcat), as Android apps commonly do.
 Those lines contain only numbers — offsets, pixel positions and timings — never text, and the app
