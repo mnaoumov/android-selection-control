@@ -32,6 +32,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   private lateinit var driver: SelectionDriver
   private var pad: Pad? = null
   private var mask: ToolbarMask? = null
+  private var settings: PadSettings? = null
 
   /** Last rectangle the mask was told to cover, so the log records changes rather than every event. */
   private var maskedBounds: android.graphics.Rect? = null
@@ -128,6 +129,13 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
     driver.forceReanchor = debuggable && java.io.File(filesDir, FORCE_REANCHOR).exists()
     if (driver.forceReanchor) Diag.log("debug: a held char grab's landing reads as re-anchored")
 
+    val settings = PadSettings(getSharedPreferences(PadSettings.FILE, MODE_PRIVATE))
+    this.settings = settings
+
+    mask = ToolbarMask(this, getSystemService(WindowManager::class.java)).also {
+      if (settings.menuMasked) it.toggle()
+    }
+
     pad = Pad(
       context = this,
       windowManager = getSystemService(WindowManager::class.java),
@@ -138,12 +146,21 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       onToggleMenu = ::onToggleMenu,
       onClose = {
         repeating = null
+        settings.padVisible = false
         mask?.hide()
         pad?.hide()
       },
-    ).also { it.show() }
+      settings = settings,
+    ).also { it.setMenuMasked(settings.menuMasked) }
 
-    mask = ToolbarMask(this, getSystemService(WindowManager::class.java))
+    /*
+     * A connect is not always the user turning the service on. A ROM's battery manager can kill the
+     * process, and the accessibility manager then restarts the service (measured in [PadSettings]),
+     * so a pad the user closed has to stay closed here.
+     */
+    val visible = settings.padVisible
+    Diag.log("service connected (pad was ${if (visible) "visible" else "hidden"}, ${settings.mode})")
+    if (visible) pad?.show()
 
     connected = this
   }
@@ -232,6 +249,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
   private fun onToggleMenu() {
     val masked = mask?.toggle() ?: return
+    settings?.menuMasked = masked
     pad?.setMenuMasked(masked)
     refreshMask()
     pad?.showStatus(if (masked) "menu hidden" else "menu shown")
@@ -1098,7 +1116,9 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
     /** Puts the pad back after the user closed it. False when the service is not running. */
     fun showPad(): Boolean {
-      val pad = connected?.pad ?: return false
+      val service = connected ?: return false
+      val pad = service.pad ?: return false
+      service.settings?.padVisible = true
       pad.show()
       return true
     }

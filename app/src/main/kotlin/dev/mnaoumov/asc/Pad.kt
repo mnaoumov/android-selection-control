@@ -58,6 +58,8 @@ class Pad(
   private val onSwapEdge: () -> kotlin.Unit,
   private val onToggleMenu: () -> kotlin.Unit,
   private val onClose: () -> kotlin.Unit,
+  /** Where the mode and a floating pad's position are kept across a restart of the service. */
+  private val settings: PadSettings,
 ) {
 
   private var root: View? = null
@@ -88,7 +90,7 @@ class Pad(
     LinearLayout.LayoutParams.WRAP_CONTENT,
   )
 
-  var mode: PadMode = PadMode.DOCKED
+  var mode: PadMode = settings.mode
     private set
 
   val isShowing: Boolean get() = root != null
@@ -149,6 +151,7 @@ class Pad(
   fun toggleMode() {
     val previousStatus = statusView?.text?.toString()
     mode = if (mode == PadMode.DOCKED) PadMode.FLOATING else PadMode.DOCKED
+    settings.mode = mode
     hide()
     show()
     previousStatus?.let { showStatus(it) }
@@ -236,8 +239,10 @@ class Pad(
         width = WindowManager.LayoutParams.WRAP_CONTENT
         height = WindowManager.LayoutParams.WRAP_CONTENT
         gravity = Gravity.TOP or Gravity.START
-        x = FLOATING_X
-        y = FLOATING_Y
+        // Where the user last dragged it; clampToScreen pulls it back if the screen has changed since.
+        val (savedX, savedY) = settings.floatingPosition ?: (FLOATING_X to FLOATING_Y)
+        x = savedX
+        y = savedY
       }
     }
     type = WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
@@ -506,6 +511,10 @@ class Pad(
             // Clamped as it goes, or a drag past an edge banks travel the way back has to undo first.
             clampToScreen(layoutParams, viewProvider())
             runCatching { windowManager.updateViewLayout(viewProvider(), layoutParams) }
+            true
+          }
+          MotionEvent.ACTION_UP -> {
+            settings.floatingPosition = layoutParams.x to layoutParams.y
             true
           }
           else -> false

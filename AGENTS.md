@@ -4137,6 +4137,46 @@ pad** on the launcher screen puts it back — a direct call through
 `AscAccessibilityService.showPad`, which works because the activity and the service share one
 process.
 
+**The ROM restarts the service behind the user's back, so the pad's settings are stored, not held
+in memory.** On the OnePlus 15 (2026-10-16) the pad kept reappearing with nobody asking for it.
+Logcat showed six kill-and-restart cycles in 21 minutes. Each was `Athena: OplusClearSystemService: K
+[...dev.mnaoumov.asc..., reason: 72 o-kill(72) ... with powersavemode]`, then `Process
+dev.mnaoumov.asc has died`, then the accessibility manager restarting the service 1-80 s later. The
+app was not on the deviceidle allowlist. `onServiceConnected` used to show the pad every time, so a
+closed pad came back. `PadSettings` now keeps whether the pad is visible, docked or floating, a
+floating pad's position and the menu mask, in the private preferences file `pad`. The connect logs
+`service connected (pad was visible|hidden, DOCKED|FLOATING)`, so a restart shows in the log. A kill
+still drops the selection state, the boundary set and any run in progress.
+
+Measured 2026-10-16 on the rig, where `adb shell run-as dev.mnaoumov.asc kill -9 <pid>` stands in for
+the ROM's kill. The service was restarted within seconds each time:
+
+| state before the kill | after the restart |
+| --- | --- |
+| `✕` pressed | `pad was hidden, DOCKED`, no pad window, no button rectangles logged |
+| **Show the pad** pressed | `pad was visible, DOCKED`, the pad back |
+| `▤ menu` and `▣ float` pressed, the strip dragged | `pad was visible, FLOATING`, the pad where it was dragged, `menu off` |
+
+**So the rig's pad state now outlives `install` and `rebind`.** A measurement that expects the docked
+pad has to start from it. To reset, delete the file AND kill the process, because a live process
+keeps its preferences in memory: a `rebind` after a bare `rm` came back `FLOATING`.
+
+```powershell
+adb -s emulator-5570 shell run-as dev.mnaoumov.asc rm shared_prefs/pad.xml
+adb -s emulator-5570 shell run-as dev.mnaoumov.asc kill -9 (adb -s emulator-5570 shell pidof dev.mnaoumov.asc)
+```
+
+**The launcher screen asks for the battery-optimization exemption while the app lacks it.** The
+row checks `PowerManager.isIgnoringBatteryOptimizations` on every resume. It opens
+`ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS`, which needs no permission, and dontkillmyapp.com's
+page for `Build.MANUFACTURER`, because OnePlus has its own "Allow background activity" switch that
+the platform exemption does not cover. The direct `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`
+prompt was rejected. It needs the `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` permission, which would end
+the zero-permission property, and Play allows that permission only for apps whose core function
+fails without it. On the rig, both buttons opened their targets, and the row went away while
+`dumpsys deviceidle whitelist +dev.mnaoumov.asc` was in effect. The screen's bottom padding is 240 dp,
+so the last buttons scroll up clear of the docked pad, which covered them before.
+
 **A reinstall can leave the service listed in settings but with no accessibility connection** — it
 answers commands while `windows` reports 0 and the tree comes back empty. Rewrite the
 `enabled_accessibility_services` string (remove ours, put it back) to force a rebind.
