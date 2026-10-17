@@ -4166,6 +4166,24 @@ adb -s emulator-5570 shell run-as dev.mnaoumov.asc rm shared_prefs/pad.xml
 adb -s emulator-5570 shell run-as dev.mnaoumov.asc kill -9 (adb -s emulator-5570 shell pidof dev.mnaoumov.asc)
 ```
 
+**The phone confirms all three rows (2026-10-17, OnePlus 15, the debug build of `d116b53`).** Each
+kill was `run-as ... kill -9`, and the service came back about 1.2 s later in a new pid. `✕` wrote
+`padVisible=false`, and the restart logged `pad was hidden, DOCKED` and no button rectangles. **Show
+the pad** gave `pad was visible, DOCKED`. `▣ float`, a drag (`floatingX=240`, `floatingY=929`) and
+`▤ menu` gave `pad was visible, FLOATING`, with the buttons at the dragged position and the toggle
+reading `menu off`.
+
+**`adb shell am kill dev.mnaoumov.asc` does not kill it, so it cannot stand in for the ROM's kill.**
+OplusAthena logs `kill background ... called by android.uid.shell` and the pid stays the same,
+because a bound accessibility service is not a background process. Use `run-as ... kill -9`.
+
+**The phone keeps the kill history across reboots, in `dumpsys activity exit-info dev.mnaoumov.asc`.**
+The ROM's kills are listed there as `reason=13 (OTHER KILLS BY SYSTEM)` with `description=o-kill(72)`
+(the power-save kill) or `o-kill(322)`. A `run-as kill -9` is listed as `reason=2 (SIGNALED)`.
+logcat's 256 KiB ring holds minutes, so read the exit history, not logcat, to see whether kills
+happened while nobody was watching. Before the exemption it listed six `o-kill(72)` between
+17:31 and 17:51 on 2026-10-16, and `o-kill(322)` at 23:30 on 2026-10-15 and at 00:21 on 2026-10-17.
+
 **The launcher screen asks for the battery-optimization exemption while the app lacks it.** The
 row checks `PowerManager.isIgnoringBatteryOptimizations` on every resume. It opens
 `ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS`, which needs no permission, and dontkillmyapp.com's
@@ -4176,6 +4194,13 @@ the zero-permission property, and Play allows that permission only for apps whos
 fails without it. On the rig, both buttons opened their targets, and the row went away while
 `dumpsys deviceidle whitelist +dev.mnaoumov.asc` was in effect. The screen's bottom padding is 240 dp,
 so the last buttons scroll up clear of the docked pad, which covered them before.
+
+The phone confirms it (2026-10-17, OnePlus 15). The row showed while the app was not exempt. **Open
+battery optimization settings** opened `com.android.settings/.spa.SpaActivity`, which is "App battery
+usage", the list of all apps. The dontkillmyapp.com button sent a `VIEW` of
+`https://dontkillmyapp.com/...` to Chrome. After `cmd deviceidle whitelist +dev.mnaoumov.asc` and
+`appops set dev.mnaoumov.asc RUN_ANY_IN_BACKGROUND allow`, the row was gone. The phone was left
+exempt, so that it can show whether the ROM's kills stop.
 
 **A reinstall can leave the service listed in settings but with no accessibility connection** — it
 answers commands while `windows` reports 0 and the tree comes back empty. Rewrite the
