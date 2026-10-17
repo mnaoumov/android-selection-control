@@ -1058,6 +1058,12 @@ class HandleLocator(private val density: () -> Float) {
    * for the toolbar, and every step on a `TextView` ended `HandleCovered` with nothing touched. The
    * handle is a bare `View`, clickable nowhere; the toolbar is a row of buttons. Chrome draws its
    * handles inside the page, so there the toolbar was already the only candidate.
+   *
+   * **Nor does a window taller than [TOOLBAR_MAX_HEIGHT_DP].** An activity window that is opening is
+   * scaled down by its animation, so for a few frames it is narrower than the full-width test. On the
+   * OnePlus 15 (2026-10-17) the app's own launcher screen opened as `(15, -6 - 1260, 2671)`, 0.979 of
+   * the screen's width, and it has buttons. It was taken for the toolbar, the mask covered the whole
+   * screen, and OxygenOS's "Block suspicious app activities" switched the service off.
    */
   fun toolbarBounds(
     windows: List<AccessibilityWindowInfo>,
@@ -1072,6 +1078,7 @@ class HandleLocator(private val density: () -> Float) {
         if (root.packageName?.toString() != packageName) return@mapNotNull null
         val bounds = Rect().also { window.getBoundsInScreen(it) }
         if (bounds.width() <= 0 || bounds.width() >= FULL_SCREEN_FRACTION * screenWidth) return@mapNotNull null
+        if (bounds.height() > TOOLBAR_MAX_HEIGHT_DP * density()) return@mapNotNull null
         if (!hasClickableNode(root)) return@mapNotNull null
         bounds
       }
@@ -1280,6 +1287,9 @@ class HandleLocator(private val density: () -> Float) {
     const val SCAN_MAX_PROBES = 6
 
     private const val FULL_SCREEN_FRACTION = 0.98f
+
+    /** Far above a toolbar's height (48 dp on the rig, 44 on the phone), far below any screen's. */
+    private const val TOOLBAR_MAX_HEIGHT_DP = 320f
 
     /** A toolbar is a handful of buttons; a window with more nodes than this is not one worth walking. */
     private const val TOOLBAR_NODE_BUDGET = 64

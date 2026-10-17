@@ -131,6 +131,7 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
 
     val settings = PadSettings(getSharedPreferences(PadSettings.FILE, MODE_PRIVATE))
     this.settings = settings
+    settings.serviceConnectedOnce = true
 
     mask = ToolbarMask(this, getSystemService(WindowManager::class.java)).also {
       if (settings.menuMasked) it.toggle()

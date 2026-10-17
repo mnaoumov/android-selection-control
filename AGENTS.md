@@ -4202,6 +4202,39 @@ usage", the list of all apps. The dontkillmyapp.com button sent a `VIEW` of
 `appops set dev.mnaoumov.asc RUN_ANY_IN_BACKGROUND allow`, the row was gone. The phone was left
 exempt, so that it can show whether the ROM's kills stop.
 
+**OxygenOS switches the service OFF when an accessibility overlay covers the whole screen, and the
+menu mask once did.** On the OnePlus 15 (2026-10-17, 17:05) the owner opened the launcher screen with
+`menuMasked=true`. The log read `mask -> Rect(15, -6 - 1260, 2671)`, then `mask -> null` 2.1 s later,
+then `AccessibilityManagerServiceExtImpl: removeEnableService diffService=[dev.mnaoumov.asc/.AscAccessibilityService]`
+and `StartupManagerMaliciousPrevent: updateGrayIndustryRecord ... dev.mnaoumov.asc`. Settings listed it
+as "Abnormal device control - Blocked 1 time" under **Block suspicious app activities**. The process
+stayed alive, but `enabled_accessibility_services` no longer held the service. The phone gives no
+notice, and the pad simply vanishes.
+
+The mask had taken the app's own launcher window for the selection toolbar. While an activity opens,
+its animation scales the window down. `(15, -6 - 1260, 2671)` is 0.979 of the screen's width, just under
+`toolbarBounds`' full-width cutoff of 0.98, and the screen has buttons. So that window passed both tests.
+The rig reproduces the mask with the old build: 4 launcher opens of 4 logged a near full-screen mask
+(`Rect(14, 66 - 706, 1526)` on 720x1520). Stock Android does not revoke the service for it. Three
+changes:
+
+- **`toolbarBounds` refuses a window taller than 320 dp** (`TOOLBAR_MAX_HEIGHT_DP`). A toolbar is 44-48 dp.
+- **`ToolbarMask.update` refuses any rectangle over a quarter of the screen**, and logs `mask: refusing
+  to cover ...`. That is the floor under every caller.
+- **The launcher screen says when the service was switched off.** `PadSettings.serviceConnectedOnce`
+  is set on every connect. On resume, a service that has connected before and is not in
+  `enabled_accessibility_services` shows a row that says it was switched off. On OnePlus, OPPO and
+  realme the row also names "Block suspicious app activities". It offers a button to Accessibility
+  settings, and "I switched it off myself", which clears the flag.
+
+Measured 2026-10-17 on the rig with the new build and `menuMasked=true`: 4 launcher opens of 4 logged no
+`mask ->` line, and the debug target's toolbar was still masked (`mask -> Rect(80, 384 - 482, 480)`; the
+screenshot showed it covered). With the service list emptied, the launcher showed the row. The dismiss
+hid it, and the row stayed hidden once the service was back. The debug target is in this app's own
+package, so an "own package is never masked" rule was tried and dropped: it took the rig's only
+toolbar control with it. The owner has added Selection Pad to the phone's allowlist for that screen.
+Whether the allowlist alone stops the revocation has not been measured.
+
 **A reinstall can leave the service listed in settings but with no accessibility connection** — it
 answers commands while `windows` reports 0 and the tree comes back empty. Rewrite the
 `enabled_accessibility_services` string (remove ours, put it back) to force a rebind.

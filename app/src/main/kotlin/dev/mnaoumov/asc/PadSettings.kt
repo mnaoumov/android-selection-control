@@ -28,6 +28,17 @@ class PadSettings(private val preferences: SharedPreferences) {
     get() = preferences.getBoolean(KEY_MENU_MASKED, false)
     set(value) = preferences.edit().putBoolean(KEY_MENU_MASKED, value).apply()
 
+  /**
+   * Whether the service has connected since the user last acknowledged it being off.
+   *
+   * Set on every connect. The launcher screen reads it to tell "never turned on" from "was on and
+   * something switched it off", which OxygenOS's "Block suspicious app activities" does without a word
+   * to the user (2026-10-17). The user's "I turned it off myself" clears it.
+   */
+  var serviceConnectedOnce: Boolean
+    get() = preferences.getBoolean(KEY_SERVICE_CONNECTED_ONCE, false)
+    set(value) = preferences.edit().putBoolean(KEY_SERVICE_CONNECTED_ONCE, value).apply()
+
   /** Docked or floating. An unknown stored name, from some later build, falls back to docked. */
   var mode: PadMode
     get() = PadMode.entries.firstOrNull { it.name == preferences.getString(KEY_MODE, null) } ?: PadMode.DOCKED
@@ -57,6 +68,7 @@ class PadSettings(private val preferences: SharedPreferences) {
 
     private const val KEY_PAD_VISIBLE = "padVisible"
     private const val KEY_MENU_MASKED = "menuMasked"
+    private const val KEY_SERVICE_CONNECTED_ONCE = "serviceConnectedOnce"
     private const val KEY_MODE = "mode"
     private const val KEY_FLOATING_X = "floatingX"
     private const val KEY_FLOATING_Y = "floatingY"
