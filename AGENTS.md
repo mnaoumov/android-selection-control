@@ -4235,6 +4235,15 @@ package, so an "own package is never masked" rule was tried and dropped: it took
 toolbar control with it. The owner has added Selection Pad to the phone's allowlist for that screen.
 Whether the allowlist alone stops the revocation has not been measured.
 
+**The phone confirms the fix and the notice (2026-10-17, OnePlus 15, the debug build of `17e2c02`,
+`menuMasked=true`, the owner's allowlist entry in place).** The launcher screen was opened 4 times. None
+of them logged a `mask -> Rect` line or `removeEnableService`, and `enabled_accessibility_services` still
+listed the pad afterwards. Chrome's toolbar on `example.com` was still masked after a long-press on a word
+(`mask -> Rect(56, 869 - 1114, 1023)`, 154 px, about 44 dp). After `pad.ps1 off` the launcher screen showed
+the "switched off" row naming "Block suspicious app activities". "I switched it off myself" took it away.
+The allowlist entry was in place, so this run checks the mask, not whether OxygenOS would still revoke a
+full-screen overlay without it.
+
 **A reinstall can leave the service listed in settings but with no accessibility connection** — it
 answers commands while `windows` reports 0 and the tree comes back empty. Rewrite the
 `enabled_accessibility_services` string (remove ours, put it back) to force a rebind.
