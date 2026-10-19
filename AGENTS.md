@@ -4200,7 +4200,16 @@ battery optimization settings** opened `com.android.settings/.spa.SpaActivity`, 
 usage", the list of all apps. The dontkillmyapp.com button sent a `VIEW` of
 `https://dontkillmyapp.com/...` to Chrome. After `cmd deviceidle whitelist +dev.mnaoumov.asc` and
 `appops set dev.mnaoumov.asc RUN_ANY_IN_BACKGROUND allow`, the row was gone. The phone was left
-exempt, so that it can show whether the ROM's kills stop.
+exempt, so that it could show whether the ROM's kills stop.
+
+**The exemption stops the ROM's kills, the nightly one included, at least for a day.** The exemption
+was set at 16:18 on 2026-10-17, and the exit history was read 26 h later, at 18:37 on 2026-10-18. It
+listed no `reason=13 (OTHER KILLS BY SYSTEM)` exit since the exemption, so no `o-kill(72)` and no
+`o-kill(322)`. The only exits after it were two `reason=16 (PACKAGE UPDATED)`, at 19:16 and 19:18 on
+2026-10-17, which were debug installs. The kills from before the exemption were still listed:
+`o-kill(72)` at 17:31, 17:40, 17:42, 17:45, 17:48 and 17:51 on 2026-10-16, and `o-kill(322)` at 03:13
+and 23:30 on 2026-10-15 and at 00:21 on 2026-10-17. `dumpsys deviceidle whitelist` still listed
+`user,dev.mnaoumov.asc,10600`. So the battery row asks for what the service needs on OxygenOS.
 
 **OxygenOS switches the service OFF when an accessibility overlay covers the whole screen, and the
 menu mask once did.** On the OnePlus 15 (2026-10-17, 17:05) the owner opened the launcher screen with
