@@ -28,6 +28,9 @@ import android.view.WindowManager
  * 2. **It is driven by the window list, not by pixels.** The bounds come from the accessibility
  *    window list, the same source the handle locator uses; nothing reads the screen.
  */
+/** What [ToolbarMask.action] tells the service to do with the mask. */
+enum class MaskAction { COVER, REMOVE, KEEP }
+
 class ToolbarMask(
   private val context: Context,
   private val windowManager: WindowManager,
@@ -130,7 +133,29 @@ class ToolbarMask(
     }
   }
 
-  private companion object {
+  companion object {
+    /**
+     * What the mask should do after an event, given what the window list says.
+     *
+     * The pad has to be SHOWING for anything to be covered. Closing it with `✕` hid the mask once,
+     * but every later selection change put it back, so on the OnePlus 15 (2026-10-22) a closed pad
+     * left a blank block over Chrome's toolbar with nothing on screen to explain it or to turn it off.
+     */
+    fun action(enabled: Boolean, padShowing: Boolean, toolbarFound: Boolean, msSinceToolbarSeen: Long): MaskAction =
+      when {
+        !enabled || !padShowing -> MaskAction.REMOVE
+        toolbarFound -> MaskAction.COVER
+        // A missing toolbar is usually a blink, so the cover stays until it has been away long enough to believe.
+        msSinceToolbarSeen > LINGER_MS -> MaskAction.REMOVE
+        else -> MaskAction.KEEP
+      }
+
+    /**
+     * How long the toolbar must stay gone before the mask comes down. Longer than the blink a drag
+     * causes, short enough that a dismissed selection does not leave a patch on screen.
+     */
+    const val LINGER_MS = 700L
+
     /** For the rare theme that answers nothing: a neutral surface, never the pad's blue. */
     const val FALLBACK_COLOUR = 0xFFF1F1F4.toInt()
 

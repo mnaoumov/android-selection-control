@@ -208,12 +208,20 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
   /**
    * Repaints the mask over wherever the target app's selection toolbar is now.
    *
-   * Cheap enough to run per event only because it short-circuits when masking is off; the window
-   * list is not free to walk.
+   * Cheap enough to run per event only because it short-circuits when masking is off or the pad is
+   * closed; the window list is not free to walk.
    */
   private fun refreshMask() {
     val mask = mask ?: return
-    if (!mask.enabled) return
+    val padShowing = pad?.isShowing == true
+    if (!mask.enabled || !padShowing) {
+      if (maskedBounds != null) {
+        Diag.log("mask -> null (${if (mask.enabled) "the pad is closed" else "masking is off"})")
+        maskedBounds = null
+      }
+      mask.update(null)
+      return
+    }
 
     /*
      * Never mid-press.
@@ -235,16 +243,19 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
      */
     val now = android.os.SystemClock.uptimeMillis()
     if (bounds != null) toolbarLastSeenAtMs = now
-    val gone = bounds == null && now - toolbarLastSeenAtMs > MASK_LINGER_MS
-
-    if (bounds != maskedBounds && (bounds != null || gone)) {
-      Diag.log("mask -> $bounds")
-      maskedBounds = bounds
-    }
-    when {
-      bounds != null -> mask.update(bounds)
-      gone -> mask.update(null)
-      // else: leave the cover where it is until the toolbar has been away long enough to believe.
+    when (ToolbarMask.action(mask.enabled, padShowing, bounds != null, now - toolbarLastSeenAtMs)) {
+      MaskAction.COVER -> {
+        if (bounds != maskedBounds) Diag.log("mask -> $bounds")
+        maskedBounds = bounds
+        mask.update(bounds)
+      }
+      MaskAction.REMOVE -> {
+        if (maskedBounds != null) Diag.log("mask -> null")
+        maskedBounds = null
+        mask.update(null)
+      }
+      // Leave the cover where it is until the toolbar has been away long enough to believe.
+      MaskAction.KEEP -> Unit
     }
   }
 
@@ -1121,6 +1132,8 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
       val pad = service.pad ?: return false
       service.settings?.padVisible = true
       pad.show()
+      // The mask is off while the pad is closed, so a selection already up gets its cover back now.
+      service.refreshMask()
       return true
     }
 
@@ -1173,12 +1186,6 @@ class AscAccessibilityService : AccessibilityService(), GestureDispatcher {
      * mid-drag when the user has moved on.
      */
     const val RELEASE_IDLE_MS = 1500L
-
-    /**
-     * How long the toolbar must stay gone before the mask comes down. Longer than the blink a drag
-     * causes, short enough that a dismissed selection does not leave a patch on screen.
-     */
-    const val MASK_LINGER_MS = 700L
 
     /**
      * How long a touch-down in a side gesture zone waits for the target app's toolbar to come back
