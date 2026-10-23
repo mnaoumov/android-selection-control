@@ -128,6 +128,18 @@ $WatchdogPidPath = $ShotDir | Join-Path -ChildPath "watchdog$ProfileSuffix.pid"
 # which the heartbeat cannot see. `-IdleMinutes 0` on `up` or `go` starts no watchdog.
 $DefaultIdleMinutes = 60
 
+<#
+  An unattended session (a bulk item) is no sitting: once it ends, nobody will use the emulator, and
+  the bulk runner has already handed the run slots the emulator was priced for to someone else. On
+  2026-10-23 an item ended at 12:04 and its emulator and Gradle daemons held 5.5 GB until 13:03, on a
+  machine at 99 % CPU. So a heartbeat from such a session records its job directory, and the watchdog
+  takes the emulator down once that job's state is one of these, or the directory is gone. The idle
+  cap is for a session that dies before its state turns terminal.
+#>
+$UnattendedIdleMinutes = 15
+$FinishedJobStates = @('done', 'failed', 'stopped')
+$WatchdogLogPath = $ShotDir | Join-Path -ChildPath "watchdog$ProfileSuffix.log"
+
 # netsimd's log level. See Start-Rig for why this is the only lever there is.
 $NetsimLogFilter = 'error'
 
@@ -483,7 +495,35 @@ function Get-AnyEmulatorProcesses {
 
 function Update-Heartbeat {
     if (-not (Test-Path -Path $ShotDir)) { New-Item -ItemType Directory -Path $ShotDir | Out-Null }
-    Set-Content -Path $HeartbeatPath -Value (Get-Date -Format 'o') -NoNewline
+    $lines = @(Get-Date -Format 'o')
+    if ($env:CLAUDE_CODE_SESSION_ATTENDED -eq '0' -and $env:CLAUDE_JOB_DIR) { $lines += "job=$env:CLAUDE_JOB_DIR" }
+    Set-Content -Path $HeartbeatPath -Value ($lines -join "`n") -NoNewline
+}
+
+# The job directory the last rig command came from, when that was an unattended session.
+function Get-HeartbeatJob {
+    $text = "$(Get-Content -Path $HeartbeatPath -Raw -ErrorAction SilentlyContinue)"
+    $match = [regex]::Match($text, '(?m)^job=(.+)$')
+    if ($match.Success) { return $match.Groups[1].Value.Trim() }
+    return $null
+}
+
+# Why that job counts as over, or $null while it is still running.
+function Get-FinishedJobReason([string] $JobDir) {
+    if (-not (Test-Path -Path $JobDir)) { return "its job directory $JobDir is gone" }
+    $statePath = $JobDir | Join-Path -ChildPath 'state.json'
+    try {
+        $state = (Get-Content -Path $statePath -Raw -ErrorAction Stop | ConvertFrom-Json).state
+    } catch {
+        # Unreadable mid-write, or not there yet: say nothing and look again next minute.
+        return $null
+    }
+    if ($state -in $FinishedJobStates) { return "its session's state is '$state' ($statePath)" }
+    return $null
+}
+
+function Write-WatchdogLog([string] $Message) {
+    Add-Content -Path $WatchdogLogPath -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [pid $PID] $Message"
 }
 
 <#
@@ -530,17 +570,35 @@ function Get-WatchdogProcess {
 
 function Invoke-Watchdog {
     $minutes = if ($IdleMinutes -gt 0) { $IdleMinutes } else { $DefaultIdleMinutes }
+    Write-WatchdogLog -Message "watching $RigAvdName, idle limit $minutes min ($UnattendedIdleMinutes min after an unattended session)"
     while ($true) {
         Start-Sleep -Seconds 60
 
         # Superseded, or the emulator went away by other means: nothing left to watch.
-        if ("$(Get-Content -Path $WatchdogPidPath -Raw -ErrorAction SilentlyContinue)".Trim() -ne "$PID") { return }
-        if (@(Get-AvdProcesses).Count -eq 0) { break }
+        if ("$(Get-Content -Path $WatchdogPidPath -Raw -ErrorAction SilentlyContinue)".Trim() -ne "$PID") {
+            Write-WatchdogLog -Message 'superseded by another watchdog; exiting'
+            return
+        }
+        if (@(Get-AvdProcesses).Count -eq 0) {
+            Write-WatchdogLog -Message "$RigAvdName is gone; nothing left to watch"
+            break
+        }
 
+        # A heartbeat newer than the job check is a later rig command, so it is read on every pass.
+        $job = Get-HeartbeatJob
+        $reason = if ($job) { Get-FinishedJobReason -JobDir $job } else { $null }
+        if ($reason) {
+            Write-WatchdogLog -Message "the last rig command came from an unattended session, and $reason; taking $RigAvdName down"
+            Stop-Rig *>&1 | ForEach-Object -Process { Write-WatchdogLog -Message "$_" }
+            break
+        }
+
+        $limit = if ($job) { [Math]::Min($minutes, $UnattendedIdleMinutes) } else { $minutes }
         $lastUsed = (Get-Item -Path $HeartbeatPath -ErrorAction SilentlyContinue).LastWriteTime
-        if ($lastUsed -and ((Get-Date) - $lastUsed).TotalMinutes -lt $minutes) { continue }
+        if ($lastUsed -and ((Get-Date) - $lastUsed).TotalMinutes -lt $limit) { continue }
 
-        Stop-Rig
+        Write-WatchdogLog -Message "no rig command for $limit min; taking $RigAvdName down"
+        Stop-Rig *>&1 | ForEach-Object -Process { Write-WatchdogLog -Message "$_" }
         break
     }
     Remove-Item -Path $WatchdogPidPath -Force -ErrorAction SilentlyContinue
