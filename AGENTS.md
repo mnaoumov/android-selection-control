@@ -4137,6 +4137,18 @@ pad** on the launcher screen puts it back — a direct call through
 `AscAccessibilityService.showPad`, which works because the activity and the service share one
 process.
 
+**The mask shows only while the pad is showing.** `✕` used to take the mask down once and leave
+masking on, and `refreshMask` runs on every accessibility event. So the next selection put the mask
+back over the toolbar with no pad on screen. On the OnePlus 15 (2026-10-22) that left a blank gray block
+over Chrome's toolbar, which read as a bug. The round button beside it was Android's own accessibility
+shortcut, not the pad. `ToolbarMask.action` now removes the mask whenever the pad is not showing, and
+`showPad` refreshes it. Measured 2026-10-23 on the rig with `menuMasked=true`. The old build, with the
+pad closed after a restart, logged `mask -> Rect(80, 384 - 482, 480)` on a long-press of `charlie`, and
+the screenshot showed the blank block. The new build covered the toolbar with the pad open. After `✕`
+it logged `mask -> null (the pad is closed)`, and a new selection logged no mask and left the toolbar in
+view. That held after a restart with the pad closed too. **Show the pad** brought the mask back on the
+next selection.
+
 **The ROM restarts the service behind the user's back, so the pad's settings are stored, not held
 in memory.** On the OnePlus 15 (2026-10-16) the pad kept reappearing with nobody asking for it.
 Logcat showed six kill-and-restart cycles in 21 minutes. Each was `Athena: OplusClearSystemService: K
