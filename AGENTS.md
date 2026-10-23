@@ -3913,6 +3913,24 @@ environment, which is how the Obsidian integration harness capped the same flood
   and `-IdleMinutes 0` starts none. Adb run by hand does not stamp, so a long hand-driven sitting should
   touch the rig now and then (`rig.ps1 status`). Measured with `-IdleMinutes 2`: down after 2.1 min,
   netsimd gone, pid file removed.
+- **An unattended session's emulator goes down when that session ends, not 60 minutes later.** On
+  2026-10-23 a bulk item booted `asc_test` at 11:57 and ended at 12:04. The bulk runner then gave
+  away the run slots the emulator was priced for, and the emulator plus two Gradle/Kotlin
+  daemons held 5.5 GB until the watchdog's hour ran out at 13:03, on a machine at 99 % CPU. Now a
+  heartbeat from a session with `CLAUDE_CODE_SESSION_ATTENDED=0` also records its `CLAUDE_JOB_DIR`.
+  The watchdog takes the emulator down at its next minute once that job's `state.json` reads `done`,
+  `failed` or `stopped`, or the job directory is gone, so every way a session ends is covered. For a
+  session that dies before its state turns terminal, the idle limit after an unattended heartbeat is
+  15 min. The watchdog runs hidden, so it writes what it did to `build\rig\watchdog.log`. Measured
+  2026-10-23 with a fake job directory: down 46 s after its state turned `done`, and 62 s after the
+  directory was deleted, while `working` kept it up. An attended heartbeat records no job, and the
+  emulator stayed up. The 15 min cap has not been waited out.
+- **The build daemons idle out after 15 min too.** `gradle.properties` sets
+  `org.gradle.daemon.idletimeout=900000` (Gradle's default is 3 h), and the daemon logs
+  `idleTimeout=900000`. `kotlin.compiler.execution.strategy=in-process` compiles Kotlin inside the
+  Gradle daemon, so there is no Kotlin daemon beside it: after a `compileDebugKotlin --rerun` the
+  only JVM was the Gradle daemon. `down` does not run `gradlew --stop`, because that stops every
+  daemon of this Gradle version on the machine, other projects' builds included.
 - **`down` stops netsimd too**, but only when no emulator running an AVD is left on the machine,
   because the Obsidian suites' emulators share it. netsimd can outlive its emulator: in the incident,
   qemu restarted it at 11:37 after it was killed, with no `RUST_LOG`. Killing a guest leaves a short-lived
